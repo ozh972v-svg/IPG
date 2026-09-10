@@ -1,7 +1,7 @@
 FROM php:8.3-fpm-alpine
 
-RUN apk add --no-cache nginx postgresql-dev libpq \
-    && docker-php-ext-install pdo pdo_pgsql
+RUN apk add --no-cache nginx postgresql-dev libpq libzip-dev zip unzip \
+    && docker-php-ext-install pdo pdo_pgsql zip
 
 WORKDIR /app
 COPY . /app
