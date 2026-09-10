@@ -12,24 +12,38 @@ try {
     $pdo = get_db();
     echo "✅ Подключение к базе: OK\n\n";
 
-    // Читаем schema.sql из корня проекта
-    $schema_path = __DIR__ . '/../schema.sql';
-    if (!file_exists($schema_path)) {
-        throw new RuntimeException('Не найден файл schema.sql в корне проекта');
-    }
+    $sql = "
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    name VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-    $sql = file_get_contents($schema_path);
-    if ($sql === false || trim($sql) === '') {
-        throw new RuntimeException('schema.sql пустой');
-    }
+CREATE TABLE IF NOT EXISTS photos (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_type VARCHAR(10) NOT NULL,
+    key_value VARCHAR(255) NOT NULL,
+    photo_type VARCHAR(50) NOT NULL,
+    comment TEXT,
+    file_path VARCHAR(500) NOT NULL,
+    file_size INT,
+    mime_type VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-    // Выполняем все команды
+CREATE INDEX IF NOT EXISTS idx_photos_key ON photos(key_type, key_value);
+CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id);
+CREATE INDEX IF NOT EXISTS idx_photos_created ON photos(created_at DESC);
+";
+
     $pdo->exec($sql);
     echo "✅ Таблицы созданы:\n";
     echo "   - users\n";
     echo "   - photos\n\n";
 
-    // Проверяем, что таблицы реально есть
     $stmt = $pdo->query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename");
     $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
     echo "Таблицы в базе: " . implode(', ', $tables) . "\n\n";
@@ -37,7 +51,6 @@ try {
     echo "🎉 Установка завершена. УДАЛИ ЭТОТ ФАЙЛ (install.php) ПОСЛЕ УСПЕШНОГО ЗАПУСКА!\n";
 
 } catch (Throwable $e) {
-    http_response_code(500);
     echo "❌ Ошибка:\n";
     echo $e->getMessage() . "\n\n";
     echo "Стек:\n" . $e->getTraceAsString();
