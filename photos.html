@@ -26,6 +26,14 @@
   h1 { font-size: 22px; margin: 0 0 8px; }
   h2 { font-size: 18px; margin: 0 0 16px; }
   .subtitle { color: #666; font-size: 14px; margin: 0 0 16px; }
+  .top-link {
+    display: inline-block;
+    color: #2563eb;
+    font-size: 14px;
+    text-decoration: none;
+    margin-bottom: 10px;
+  }
+  .top-link:hover { text-decoration: underline; }
   .back-btn {
     background: transparent;
     border: none;
@@ -99,30 +107,6 @@
     resize: vertical;
     min-height: 60px;
   }
-
-  .tabs {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 16px;
-    border-bottom: 2px solid #e5e7eb;
-  }
-  .tab {
-    padding: 10px 16px;
-    border: none;
-    background: transparent;
-    font-size: 14px;
-    font-weight: 600;
-    color: #666;
-    cursor: pointer;
-    border-bottom: 3px solid transparent;
-    margin-bottom: -2px;
-    border-radius: 6px 6px 0 0;
-  }
-  .tab.active {
-    color: #2563eb;
-    border-bottom-color: #2563eb;
-  }
-  .tab:hover { background: #f9fafb; }
 
   .photo-grid {
     display: grid;
@@ -335,8 +319,8 @@ const PHOTO_TYPES = [
 
 let state = {
   screen: 'menu',
-  keyType: 'ra',        // 'ra' | 'vin'
-  currentKey: null,     // конкретный РА или VIN
+  keyType: 'ra',
+  currentKey: null,
   currentType: 'general',
   photosCache: []
 };
@@ -426,17 +410,8 @@ async function dbGetAll() {
 }
 
 async function dbGetByKey(keyType, keyValue) {
-  const database = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = database.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.getAll();
-    req.onsuccess = () => {
-      const all = req.result;
-      resolve(all.filter(p => p.keyType === keyType && p.keyValue === keyValue));
-    };
-    req.onerror = () => reject(req.error);
-  });
+  const all = await dbGetAll();
+  return all.filter(p => p.keyType === keyType && p.keyValue === keyValue);
 }
 
 async function dbGetAllGroups() {
@@ -512,9 +487,7 @@ function dataURLToBlob(dataURL) {
   while (n--) u8arr[n] = bstr.charCodeAt(n);
   return new Blob([u8arr], { type: mime });
 }
-</script>
-</body>
-</html>// ===================== ЛОГИКА =====================
+// ===================== ЛОГИКА =====================
 
 const app = document.getElementById('app');
 
@@ -537,6 +510,7 @@ async function renderMenu() {
 
   let html = `
     <div class="card">
+      <a href="index.html" class="top-link">← На рабочее место</a>
       <h1>📸 Фото по рекламационным актам</h1>
       <p class="subtitle">Фото дефектов, привязанные к РА или VIN</p>
       <div class="btn-row" style="margin-bottom:12px;">
@@ -622,11 +596,10 @@ async function renderMenu() {
     const zip = new JSZip();
     for (const p of all) {
       const blob = dataURLToBlob(p.dataURL);
-      const ext = 'jpg';
       const typeName = PHOTO_TYPES.find(t => t.id === p.type)?.name || p.type;
       const safeType = typeName.replace(/[\/\\:*?"<>|]/g, '_');
       const safeKey = (p.keyValue || 'unknown').replace(/[\/\\:*?"<>|]/g, '_');
-      const filename = `${p.keyType}-${safeKey}/${safeType}-${p.id}.${ext}`;
+      const filename = `${p.keyType}-${safeKey}/${safeType}-${p.id}.jpg`;
       zip.file(filename, blob);
     }
     const content = await zip.generateAsync({ type: 'blob' });
@@ -883,3 +856,6 @@ function showPhotoModal(photo) {
     app.innerHTML = `<div class="card"><h2>Ошибка</h2><p>Не удалось инициализировать базу. Возможно, вы в приватном режиме или браузер не поддерживает IndexedDB.</p></div>`;
   }
 })();
+</script>
+</body>
+</html>
