@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Фото по рекламационным актам</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    margin: 0;
+    padding: 16px;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  h2 { font-size: 18px; margin: 0 0 16px; }
+  .subtitle { color: #666; font-size: 14px; margin: 0 0 16px; }
+  .back-btn {
+    background: transparent;
+    border: none;
+    color: #2563eb;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 0;
+    margin-bottom: 12px;
+  }
+  .back-btn:hover { text-decoration: underline; }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #2563eb;
+    color: #fff;
+    transition: opacity 0.2s;
+  }
+  .btn:active { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary {
+    background: #fff;
+    color: #2563eb;
+    border: 1.5px solid #2563eb;
+  }
+  .btn-danger {
+    background: #fff;
+    color: #dc2626;
+    border: 1.5px solid #dc2626;
+  }
+  .btn-small {
+    padding: 8px 14px;
+    font-size: 14px;
+    width: auto;
+    display: inline-block;
+  }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+
+  .form-row { margin-bottom: 14px; }
+  .form-row label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 6px;
+  }
+  .form-row input,
+  .form-row select,
+  .form-row textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 15px;
+    background: #fff;
+    color: #1a1a1a;
+    font-family: inherit;
+  }
+  .form-row input:focus,
+  .form-row select:focus,
+  .form-row textarea:focus {
+    outline: none;
+    border-color: #2563eb;
+  }
+  .form-row textarea {
+    resize: vertical;
+    min-height: 60px;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #e5e7eb;
+  }
+  .tab {
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    border-radius: 6px 6px 0 0;
+  }
+  .tab.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+  }
+  .tab:hover { background: #f9fafb; }
+
+  .photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .photo-card {
+    background: #f9fafb;
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    border: 1.5px solid #e5e7eb;
+  }
+  .photo-card img {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    display: block;
+    background: #e5e7eb;
+  }
+  .photo-meta {
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #666;
+  }
+  .photo-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: #eff6ff;
+    color: #2563eb;
+    font-weight: 600;
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .photo-delete {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(255,255,255,0.9);
+    border: none;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    font-size: 16px;
+    color: #dc2626;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .photo-delete:hover { background: #dc2626; color: #fff; }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #888;
+    font-size: 14px;
+  }
+  .empty-state .big { font-size: 48px; margin-bottom: 12px; }
+
+  .list-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    background: #fff;
+    transition: all 0.15s;
+  }
+  .list-item:hover {
+    border-color: #2563eb;
+    background: #f8faff;
+  }
+  .list-item-info { flex: 1; }
+  .list-item-title { font-weight: 600; font-size: 15px; }
+  .list-item-sub {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+  }
+  .list-item-count {
+    font-size: 13px;
+    color: #2563eb;
+    background: #eff6ff;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    margin-left: 10px;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1f2937;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 14px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    max-width: 90%;
+    text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  .camera-input {
+    display: none;
+  }
+  .camera-label {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #16a34a;
+    color: #fff;
+    text-align: center;
+    transition: opacity 0.2s;
+  }
+  .camera-label:active { opacity: 0.85; }
+
+  .type-selector {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .type-option {
+    padding: 10px 12px;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    background: #fff;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .type-option:hover { border-color: #2563eb; }
+  .type-option.selected {
+    border-color: #2563eb;
+    background: #eff6ff;
+    color: #2563eb;
+    font-weight: 600;
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    padding: 16px;
+  }
+  .modal {
+    background: #fff;
+    border-radius: 14px;
+    padding: 20px;
+    max-width: 500px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal h3 { margin: 0 0 16px; font-size: 17px; }
+
+  .progress-info {
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===================== КОНСТАНТЫ =====================
+
+const DB_NAME = 'kamaz_photos_db';
+const DB_VERSION = 1;
+const STORE_NAME = 'photos';
+const MAX_WIDTH = 1600;
+const JPEG_QUALITY = 0.75;
+
+const PHOTO_TYPES = [
+  { id: 'general', name: 'Общий вид автотехники', desc: 'С госномером' },
+  { id: 'vin', name: 'VIN / Номер шасси', desc: 'Заводская табличка' },
+  { id: 'odometer', name: 'Одометр / Моточасы', desc: 'Показания счётчика' },
+  { id: 'before_dismount', name: 'Дефект до демонтажа', desc: 'В составе узла' },
+  { id: 'after_dismount', name: 'Дефект после демонтажа', desc: 'Общий вид изделия' },
+  { id: 'marking', name: 'Маркировка изделия', desc: 'Каталожный номер' },
+  { id: 'manifestation', name: 'Проявление дефекта', desc: 'С цветным стикером' },
+  { id: 'numbered_unit', name: 'Номерной агрегат', desc: 'С видимым номером' }
+];
+
+let state = {
+  screen: 'menu',
+  keyType: 'ra',        // 'ra' | 'vin'
+  currentKey: null,     // конкретный РА или VIN
+  currentType: 'general',
+  photosCache: []
+};
+
+// ===================== УТИЛИТЫ =====================
+
+function showToast(text) {
+  const t = document.getElementById('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function formatDate(ts) {
+  return new Date(ts).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' Б';
+  if (bytes < 1024*1024) return (bytes / 1024).toFixed(1) + ' КБ';
+  return (bytes / (1024*1024)).toFixed(1) + ' МБ';
+}
+
+// ===================== INDEXEDDB =====================
+
+let db = null;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    if (db) { resolve(db); return; }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const database = e.target.result;
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        const store = database.createObjectStore(STORE_NAME, {
+          keyPath: 'id',
+          autoIncrement: true
+        });
+        store.createIndex('keyType', 'keyType', { unique: false });
+        store.createIndex('keyValue', 'keyValue', { unique: false });
+        store.createIndex('type', 'type', { unique: false });
+        store.createIndex('createdAt', 'createdAt', { unique: false });
+      }
+    };
+    req.onsuccess = (e) => {
+      db = e.target.result;
+      resolve(db);
+    };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function dbAdd(photo) {
+  const database = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.add(photo);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbDelete(id) {
+  const database = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetAll() {
+  const database = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetByKey(keyType, keyValue) {
+  const database = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const all = req.result;
+      resolve(all.filter(p => p.keyType === keyType && p.keyValue === keyValue));
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetAllGroups() {
+  const all = await dbGetAll();
+  const groups = new Map();
+  all.forEach(p => {
+    const key = p.keyType + '::' + p.keyValue;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        keyType: p.keyType,
+        keyValue: p.keyValue,
+        photos: [],
+        latest: p.createdAt
+      });
+    }
+    const g = groups.get(key);
+    g.photos.push(p);
+    if (p.createdAt > g.latest) g.latest = p.createdAt;
+  });
+  return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
+}
+
+// ===================== СЖАТИЕ ФОТО =====================
+
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > MAX_WIDTH) {
+          height = Math.round(height * MAX_WIDTH / width);
+          width = MAX_WIDTH;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) { reject(new Error('Ошибка сжатия')); return; }
+            resolve(blob);
+          },
+          'image/jpeg',
+          JPEG_QUALITY
+        );
+      };
+      img.onerror = () => reject(new Error('Ошибка загрузки изображения'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function dataURLToBlob(dataURL) {
+  const parts = dataURL.split(',');
+  const mime = parts[0].match(/:(.*?);/)[1];
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new Blob([u8arr], { type: mime });
+}
+</script>
+</body>
+</html>// ===================== ЛОГИКА =====================
+
+const app = document.getElementById('app');
+
+function backBtn(text = '← В меню') {
+  return `<button class="back-btn" id="backBtn">${text}</button>`;
+}
+
+function bindBack(fn = renderMenu) {
+  const b = document.getElementById('backBtn');
+  if (b) b.onclick = fn;
+}
+
+// ===================== ГЛАВНОЕ МЕНЮ МОДУЛЯ =====================
+
+async function renderMenu() {
+  state.screen = 'menu';
+  const groups = await dbGetAllGroups();
+  const all = await dbGetAll();
+  const totalSize = all.reduce((s, p) => s + (p.size || 0), 0);
+
+  let html = `
+    <div class="card">
+      <h1>📸 Фото по рекламационным актам</h1>
+      <p class="subtitle">Фото дефектов, привязанные к РА или VIN</p>
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn btn-small ${state.keyType === 'ra' ? '' : 'btn-secondary'}" data-key="ra">По РА</button>
+        <button class="btn btn-small ${state.keyType === 'vin' ? '' : 'btn-secondary'}" data-key="vin">По VIN / шасси</button>
+      </div>
+      <button class="btn" id="newBtn">+ Добавить новый ${state.keyType === 'ra' ? 'РА' : 'VIN'}</button>
+    </div>
+  `;
+
+  html += `
+    <div class="card">
+      <h2>Все записи</h2>
+  `;
+
+  if (groups.length === 0) {
+    html += `
+      <div class="empty-state">
+        <div class="big">📷</div>
+        <div>Пока ничего не добавлено</div>
+        <div style="margin-top:6px;">Нажмите «Добавить», чтобы начать</div>
+      </div>
+    `;
+  } else {
+    groups.forEach(g => {
+      const label = g.keyType === 'ra' ? 'РА' : 'VIN';
+      html += `
+        <div class="list-item" data-key-type="${g.keyType}" data-key-value="${g.keyValue}">
+          <div class="list-item-info">
+            <div class="list-item-title">${label}: ${g.keyValue}</div>
+            <div class="list-item-sub">Обновлено: ${formatDate(g.latest)}</div>
+          </div>
+          <div class="list-item-count">${g.photos.length} 📷</div>
+        </div>
+      `;
+    });
+  }
+
+  html += `
+    </div>
+    <div class="card">
+      <div class="progress-info">
+        Всего фото: <b>${all.length}</b> · Размер: <b>${formatSize(totalSize)}</b>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" id="exportAll">📥 Скачать всё (ZIP)</button>
+        <button class="btn btn-danger" id="clearAll">🗑️ Очистить всё</button>
+      </div>
+    </div>
+  `;
+
+  app.innerHTML = html;
+
+  document.querySelectorAll('[data-key]').forEach(b => {
+    b.onclick = () => {
+      state.keyType = b.dataset.key;
+      renderMenu();
+    };
+  });
+
+  document.getElementById('newBtn').onclick = () => {
+    const label = state.keyType === 'ra' ? 'номер РА' : 'VIN или номер шасси';
+    const val = prompt(`Введите ${label}:`);
+    if (val && val.trim()) {
+      state.currentKey = val.trim();
+      renderGallery(state.keyType, state.currentKey);
+    }
+  };
+
+  document.querySelectorAll('[data-key-type]').forEach(el => {
+    el.onclick = () => {
+      renderGallery(el.dataset.keyType, el.dataset.keyValue);
+    };
+  });
+
+  document.getElementById('exportAll').onclick = async () => {
+    if (all.length === 0) { showToast('Нет фото для скачивания'); return; }
+    if (typeof JSZip === 'undefined') {
+      showToast('Библиотека ZIP не загружена');
+      return;
+    }
+    showToast('Готовим архив...');
+    const zip = new JSZip();
+    for (const p of all) {
+      const blob = dataURLToBlob(p.dataURL);
+      const ext = 'jpg';
+      const typeName = PHOTO_TYPES.find(t => t.id === p.type)?.name || p.type;
+      const safeType = typeName.replace(/[\/\\:*?"<>|]/g, '_');
+      const safeKey = (p.keyValue || 'unknown').replace(/[\/\\:*?"<>|]/g, '_');
+      const filename = `${p.keyType}-${safeKey}/${safeType}-${p.id}.${ext}`;
+      zip.file(filename, blob);
+    }
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `kamaz-photos-${Date.now()}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Архив скачан');
+  };
+
+  document.getElementById('clearAll').onclick = async () => {
+    if (!confirm('Удалить ВСЕ фото? Действие необратимо.')) return;
+    const database = await openDB();
+    const tx = database.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).clear();
+    tx.oncomplete = () => {
+      showToast('Все фото удалены');
+      renderMenu();
+    };
+  };
+}
+
+// ===================== ГАЛЕРЕЯ ПО КЛЮЧУ =====================
+
+async function renderGallery(keyType, keyValue) {
+  state.screen = 'gallery';
+  state.currentKey = keyValue;
+  state.keyType = keyType;
+
+  const photos = await dbGetByKey(keyType, keyValue);
+  photos.sort((a, b) => b.createdAt - a.createdAt);
+  state.photosCache = photos;
+
+  const label = keyType === 'ra' ? 'РА' : 'VIN';
+
+  let html = `
+    <div class="card">
+      <button class="back-btn" id="backBtn">← Все записи</button>
+      <h2>${label}: ${keyValue}</h2>
+      <p class="subtitle">Фото: ${photos.length}</p>
+      <div class="btn-row">
+        <button class="btn btn-small" id="exportKey">📥 Скачать ZIP по ${label}</button>
+        <button class="btn btn-small btn-danger" id="deleteKey">🗑️ Удалить все фото</button>
+      </div>
+    </div>
+  `;
+
+  html += `
+    <div class="card">
+      <h2>Добавить фото</h2>
+      <p style="font-size:14px;color:#666;margin-bottom:12px;">
+        Выберите тип, затем сделайте фото или выберите из галереи
+      </p>
+      <div class="type-selector" id="typeSelector">
+        ${PHOTO_TYPES.map(t => `
+          <div class="type-option ${state.currentType === t.id ? 'selected' : ''}" data-type="${t.id}">
+            ${t.name}
+          </div>
+        `).join('')}
+      </div>
+      <div class="form-row">
+        <label>Комментарий (необязательно)</label>
+        <textarea id="photoComment" placeholder="Например: течь ОЖ в районе патрубка"></textarea>
+      </div>
+      <input type="file" accept="image/*" capture="environment" id="cameraInput" class="camera-input">
+      <label for="cameraInput" class="camera-label">📷 Сделать фото / Выбрать</label>
+    </div>
+  `;
+
+  html += `<div class="card"><h2>Фотографии</h2>`;
+
+  if (photos.length === 0) {
+    html += `
+      <div class="empty-state">
+        <div class="big">📷</div>
+        <div>Пока нет фото</div>
+      </div>
+    `;
+  } else {
+    html += `<div class="photo-grid">`;
+    photos.forEach(p => {
+      const t = PHOTO_TYPES.find(x => x.id === p.type);
+      html += `
+        <div class="photo-card" data-photo-id="${p.id}">
+          <img src="${p.dataURL}" alt="${t?.name || p.type}">
+          <button class="photo-delete" data-delete="${p.id}">✕</button>
+          <div class="photo-meta">
+            <div class="photo-type">${t?.name || p.type}</div>
+            <div>${formatDate(p.createdAt)}</div>
+            ${p.comment ? `<div style="margin-top:4px;color:#333;">${p.comment}</div>` : ''}
+            <div style="margin-top:4px;">${formatSize(p.size || 0)}</div>
+          </div>
+        </div>
+      `;
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  app.innerHTML = html;
+
+  bindBack(renderMenu);
+
+  document.querySelectorAll('[data-type]').forEach(el => {
+    el.onclick = () => {
+      state.currentType = el.dataset.type;
+      document.querySelectorAll('.type-option').forEach(x => x.classList.remove('selected'));
+      el.classList.add('selected');
+    };
+  });
+
+  document.getElementById('cameraInput').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      showToast('Обрабатываем фото...');
+      const blob = await compressImage(file);
+      const dataURL = await blobToDataURL(blob);
+      const comment = (document.getElementById('photoComment').value || '').trim();
+
+      await dbAdd({
+        keyType: state.keyType,
+        keyValue: state.currentKey,
+        type: state.currentType,
+        dataURL,
+        size: blob.size,
+        comment,
+        createdAt: Date.now()
+      });
+
+      showToast('Фото добавлено');
+      renderGallery(state.keyType, state.currentKey);
+    } catch (err) {
+      console.error(err);
+      showToast('Ошибка: ' + err.message);
+    }
+    e.target.value = '';
+  };
+
+  document.querySelectorAll('[data-delete]').forEach(b => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const id = parseInt(b.dataset.delete);
+      if (!confirm('Удалить это фото?')) return;
+      await dbDelete(id);
+      showToast('Фото удалено');
+      renderGallery(state.keyType, state.currentKey);
+    };
+  });
+
+  document.querySelectorAll('.photo-card').forEach(card => {
+    card.onclick = (e) => {
+      if (e.target.closest('.photo-delete')) return;
+      const id = parseInt(card.dataset.photoId);
+      const photo = photos.find(p => p.id === id);
+      if (photo) showPhotoModal(photo);
+    };
+  });
+
+  document.getElementById('exportKey').onclick = async () => {
+    if (photos.length === 0) { showToast('Нет фото'); return; }
+    if (typeof JSZip === 'undefined') { showToast('JSZip не загружен'); return; }
+    showToast('Готовим архив...');
+    const zip = new JSZip();
+    for (const p of photos) {
+      const blob = dataURLToBlob(p.dataURL);
+      const typeName = PHOTO_TYPES.find(t => t.id === p.type)?.name || p.type;
+      const safeType = typeName.replace(/[\/\\:*?"<>|]/g, '_');
+      const safeKey = (p.keyValue || 'unknown').replace(/[\/\\:*?"<>|]/g, '_');
+      const filename = `${safeKey}-${safeType}-${p.id}.jpg`;
+      zip.file(filename, blob);
+    }
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${label}-${state.currentKey}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Архив скачан');
+  };
+
+  document.getElementById('deleteKey').onclick = async () => {
+    if (photos.length === 0) { showToast('Нет фото'); return; }
+    if (!confirm(`Удалить все ${photos.length} фото по ${label} ${state.currentKey}?`)) return;
+    for (const p of photos) {
+      await dbDelete(p.id);
+    }
+    showToast('Все фото по записи удалены');
+    renderMenu();
+  };
+}
+
+// ===================== МОДАЛЬНОЕ ОКНО ПРОСМОТРА =====================
+
+function showPhotoModal(photo) {
+  const t = PHOTO_TYPES.find(x => x.id === photo.type);
+  const label = photo.keyType === 'ra' ? 'РА' : 'VIN';
+
+  const html = `
+    <div class="modal-overlay" id="overlay">
+      <div class="modal">
+        <h3>${t?.name || photo.type}</h3>
+        <img src="${photo.dataURL}" style="width:100%;border-radius:10px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;margin-bottom:6px;">
+          <b>${label}:</b> ${photo.keyValue}
+        </div>
+        <div style="font-size:13px;color:#666;margin-bottom:6px;">
+          <b>Дата:</b> ${formatDate(photo.createdAt)}
+        </div>
+        ${photo.comment ? `<div style="font-size:13px;color:#333;margin-bottom:12px;"><b>Комментарий:</b> ${photo.comment}</div>` : ''}
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="modalDownload">📥 Скачать</button>
+          <button class="btn" id="modalClose">Закрыть</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+
+  document.getElementById('modalClose').onclick = () => {
+    document.getElementById('overlay').remove();
+  };
+  document.getElementById('overlay').onclick = (e) => {
+    if (e.target.id === 'overlay') {
+      document.getElementById('overlay').remove();
+    }
+  };
+  document.getElementById('modalDownload').onclick = () => {
+    const blob = dataURLToBlob(photo.dataURL);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const typeName = PHOTO_TYPES.find(t => t.id === photo.type)?.name || photo.type;
+    a.href = url;
+    a.download = `${photo.keyValue}-${typeName}-${photo.id}.jpg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+}
+
+// ===================== СТАРТ =====================
+
+(async function init() {
+  try {
+    await openDB();
+    renderMenu();
+  } catch (e) {
+    console.error(e);
+    app.innerHTML = `<div class="card"><h2>Ошибка</h2><p>Не удалось инициализировать базу. Возможно, вы в приватном режиме или браузер не поддерживает IndexedDB.</p></div>`;
+  }
+})();
