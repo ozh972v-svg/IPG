@@ -1,0 +1,16 @@
+{
+    "name": "kamaz/ipg-garantia",
+    "description": "Рабочее место инженера по гарантии + фото по РА",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "ext-pdo": "*",
+        "ext-pdo_pgsql": "*",
+        "ext-fileinfo": "*",
+        "ext-json": "*"
+    },
+    "config": {
+        "vendor-dir": "vendor",
+        "optimize-autoloader": true
+    }
+}
