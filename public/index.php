@@ -35,11 +35,27 @@ $stmt = $pdo->prepare("
     FROM photos p
     JOIN users u ON u.id = p.user_id
     $whereSql
-    ORDER BY p.created_at DESC
+    ORDER BY p.key_value ASC, p.created_at DESC
     LIMIT 500
 ");
 $stmt->execute($params);
 $photos = $stmt->fetchAll();
+
+// Группируем по ключу (РА или VIN)
+$groups = [];
+foreach ($photos as $p) {
+    $key = $p['key_type'] . '::' . $p['key_value'];
+    if (!isset($groups[$key])) {
+        $groups[$key] = [
+            'key_type' => $p['key_type'],
+            'key_value' => $p['key_value'],
+            'photos' => []
+        ];
+    }
+    $groups[$key]['photos'][] = $p;
+}
+
+$totalPhotos = count($photos);
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -63,7 +79,9 @@ $photos = $stmt->fetchAll();
   .btn:hover { opacity: 0.9; }
   .btn-secondary { background: #fff; color: #2563eb; border: 1.5px solid #2563eb; }
   .btn-green { background: #16a34a; }
+  .btn-red { background: #dc2626; }
   .btn-small { padding: 8px 14px; font-size: 14px; }
+  .btn-xs { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .form-row { margin-bottom: 14px; }
   .form-row label { display: block; font-size: 13px; font-weight: 600; color: #666; margin-bottom: 6px; }
@@ -75,18 +93,26 @@ $photos = $stmt->fetchAll();
   .type-option:hover { border-color: #2563eb; }
   .type-option input { display: none; }
   .type-option.selected { border-color: #2563eb; background: #eff6ff; color: #2563eb; font-weight: 600; }
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
-  .photo-card { background: #f9fafb; border-radius: 10px; overflow: hidden; border: 1.5px solid #e5e7eb; }
+  .group-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 16px; background: #eff6ff; border-radius: 10px; margin-bottom: 12px; }
+  .group-title { font-size: 16px; font-weight: 700; color: #1e3a8a; }
+  .group-title small { display: block; font-size: 12px; font-weight: 400; color: #666; margin-top: 2px; }
+  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .photo-card { background: #f9fafb; border-radius: 10px; overflow: hidden; border: 1.5px solid #e5e7eb; position: relative; }
   .photo-card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #e5e7eb; cursor: pointer; }
   .photo-meta { padding: 10px; font-size: 11px; color: #666; }
   .photo-type { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #eff6ff; color: #2563eb; font-weight: 600; font-size: 11px; margin-bottom: 4px; }
   .photo-user { font-size: 11px; color: #888; margin-top: 4px; }
+  .photo-actions { display: flex; gap: 4px; margin-top: 8px; }
+  .photo-actions a { flex: 1; padding: 5px 8px; border-radius: 6px; font-size: 11px; text-align: center; text-decoration: none; font-weight: 600; }
+  .action-edit { background: #eff6ff; color: #2563eb; }
+  .action-del { background: #fef2f2; color: #dc2626; }
+  .action-dl { background: #f0fdf4; color: #16a34a; }
   .empty-state { text-align: center; padding: 40px 20px; color: #888; font-size: 14px; }
   .empty-state .big { font-size: 48px; margin-bottom: 12px; }
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
   .alert-success { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
-  .search-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .search-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   .search-bar input, .search-bar select { padding: 10px 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 14px; }
   .search-bar input { flex: 1; min-width: 200px; }
   @media (max-width: 600px) {
@@ -110,11 +136,20 @@ $photos = $stmt->fetchAll();
     <div class="btn-row">
       <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
       <a href="#upload" class="btn btn-green btn-small">📷 Загрузить фото</a>
+      <?php if ($totalPhotos > 0): ?>
+        <a href="download.php?all=1" class="btn btn-small">📥 Скачать всё (ZIP)</a>
+      <?php endif; ?>
     </div>
   </div>
 
   <?php if (isset($_GET['uploaded'])): ?>
     <div class="alert alert-success">✅ Фото успешно загружено</div>
+  <?php endif; ?>
+  <?php if (isset($_GET['deleted'])): ?>
+    <div class="alert alert-success">🗑️ Фото удалено</div>
+  <?php endif; ?>
+  <?php if (isset($_GET['edited'])): ?>
+    <div class="alert alert-success">✏️ Фото отредактировано</div>
   <?php endif; ?>
   <?php if (isset($_GET['error'])): ?>
     <div class="alert alert-error">❌ Ошибка: <?= e($_GET['error']) ?></div>
@@ -158,7 +193,7 @@ $photos = $stmt->fetchAll();
   </div>
 
   <div class="card">
-    <h2>Все фото (<?= count($photos) ?>)</h2>
+    <h2>Все фото (<?= $totalPhotos ?>)</h2>
     <form method="get" class="search-bar">
       <input type="text" name="key" placeholder="Поиск по номеру РА, VIN или комментарию" value="<?= e($filterKey) ?>">
       <select name="type">
@@ -173,31 +208,51 @@ $photos = $stmt->fetchAll();
       <?php endif; ?>
     </form>
 
-    <?php if (empty($photos)): ?>
+    <?php if (empty($groups)): ?>
       <div class="empty-state">
         <div class="big">📷</div>
         <div>Пока нет фото</div>
         <div style="margin-top:6px;">Загрузите первое фото через форму выше</div>
       </div>
     <?php else: ?>
-      <div class="photo-grid">
-        <?php foreach ($photos as $p): ?>
-          <div class="photo-card">
-            <a href="<?= e($p['file_path']) ?>" target="_blank">
-              <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
-            </a>
-            <div class="photo-meta">
-              <div class="photo-type"><?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?></div>
-              <div><b><?= e($p['key_type'] === 'ra' ? 'РА' : 'VIN') ?>:</b> <?= e($p['key_value']) ?></div>
-              <?php if ($p['comment']): ?>
-                <div style="margin-top:4px;color:#333;"><?= e($p['comment']) ?></div>
-              <?php endif; ?>
-              <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
-              <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
+      <?php foreach ($groups as $g): ?>
+        <div style="margin-bottom:24px;">
+          <div class="group-header">
+            <div class="group-title">
+              <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?>
+              <small>Фото: <?= count($g['photos']) ?></small>
             </div>
+            <a href="download.php?key_type=<?= e($g['key_type']) ?>&key=<?= urlencode($g['key_value']) ?>" class="btn btn-small">📥 Скачать ZIP</a>
           </div>
-        <?php endforeach; ?>
-      </div>
+          <div class="photo-grid">
+            <?php foreach ($g['photos'] as $p): ?>
+              <div class="photo-card">
+                <a href="<?= e($p['file_path']) ?>" target="_blank">
+                  <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
+                </a>
+                <div class="photo-meta">
+                  <div class="photo-type"><?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?></div>
+                  <?php if ($p['comment']): ?>
+                    <div style="margin-top:4px;color:#333;"><?= e($p['comment']) ?></div>
+                  <?php endif; ?>
+                  <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
+                  <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
+                  <div class="photo-actions">
+                    <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl">📥</a>
+                    <?php if ((int)$p['user_id'] === (int)$user['id']): ?>
+                      <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit">✏️</a>
+                      <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del">🗑️</a>
+                      <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
+                        <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
+                      </form>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+      <?php endforeach; ?>
     <?php endif; ?>
   </div>
 
