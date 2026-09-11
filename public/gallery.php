@@ -258,20 +258,50 @@ function updateKeyPlaceholder() {
   document.getElementById('keyValue').placeholder = t === 'ra' ? 'Например: 12345' : 'Например: XTC65115...';
 }
 
-function submitTypePhoto(input) {
-  // Перед отправкой формы копируем значения key_value и comment в скрытые поля
+let selectedPhotoType = null;
+const cameraInput = document.getElementById('hiddenCamera');
+
+document.querySelectorAll('.type-option').forEach(el => {
+  el.addEventListener('click', () => {
+    const keyValue = document.getElementById('keyValue').value.trim();
+    if (!keyValue) {
+      alert('Сначала укажите номер РА или VIN');
+      return;
+    }
+    selectedPhotoType = el.dataset.type;
+    document.querySelectorAll('.type-option').forEach(x => x.classList.remove('selected'));
+    el.classList.add('selected');
+    cameraInput.click();
+  });
+});
+
+cameraInput.addEventListener('change', () => {
+  const file = cameraInput.files[0];
+  if (!file || !selectedPhotoType) return;
+
+  const keyType = document.getElementById('keyType').value;
   const keyValue = document.getElementById('keyValue').value.trim();
   const comment = document.getElementById('commentInput').value.trim();
 
-  if (!keyValue) {
-    alert('Сначала укажите номер РА или VIN');
-    input.value = '';
-    return false;
-  }
+  const formData = new FormData();
+  formData.append('key_type', keyType);
+  formData.append('key_value', keyValue);
+  formData.append('photo_type', selectedPhotoType);
+  formData.append('comment', comment);
+  formData.append('photo', file);
 
-  const form = input.closest('form');
-  form.querySelector('#keyHidden').value = keyValue;
-  form.querySelector('#commentHidden').value = comment;
-  form.submit();
-}
+  const status = document.createElement('div');
+  status.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:14px;background:#2563eb;color:#fff;text-align:center;font-weight:600;z-index:9999;';
+  status.textContent = '📤 Загрузка...';
+  document.body.appendChild(status);
+
+  fetch('upload.php', { method: 'POST', body: formData })
+    .then(r => {
+      window.location.href = 'gallery.php?uploaded=1';
+    })
+    .catch(err => {
+      alert('Ошибка загрузки: ' + err.message);
+      document.body.removeChild(status);
+    });
+});
 </script>
