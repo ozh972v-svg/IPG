@@ -105,5 +105,5 @@ try {
     redirect_error('Ошибка базы: ' . $e->getMessage());
 }
 
-header('Location: index.php?uploaded=1');
+header('Location: gallery.php?uploaded=1');
 exit;
