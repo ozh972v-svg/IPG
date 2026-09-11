@@ -9,7 +9,6 @@ COPY . /app
 RUN mkdir -p /app/public/uploads \
     && chmod -R 777 /app/public/uploads \
     && chmod -R 755 /app/public \
-    && chmod 644 /app/public/index.html
 
 RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
     && echo "post_max_size = 25M" >> /usr/local/etc/php/conf.d/uploads.ini \
