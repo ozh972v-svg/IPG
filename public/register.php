@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([':email' => $email, ':hash' => $hash, ':name' => $name]);
                 $userId = $stmt->fetchColumn();
                 $_SESSION['user_id'] = $userId;
-                header('Location: index.php');
+                header('Location: gallery.php');
                 exit;
             }
         } catch (Throwable $e) {
