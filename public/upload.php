@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 function redirect_error(string $msg): void {
-    header('Location: index.php?error=' . urlencode($msg));
+    header('Location: gallery.php?error=' . urlencode($msg));
     exit;
 }
 
