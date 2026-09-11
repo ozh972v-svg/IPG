@@ -1,0 +1,1524 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Рабочее место инженера по гарантии КАМАЗ</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #f0f2f5;
+    --card: #ffffff;
+    --text: #1a1a1a;
+    --text-secondary: #666;
+    --border: #e5e7eb;
+    --primary: #2563eb;
+    --primary-light: #eff6ff;
+    --success: #16a34a;
+    --success-light: #f0fdf4;
+    --danger: #dc2626;
+    --danger-light: #fef2f2;
+    --warn: #f59e0b;
+    --warn-light: #fffbeb;
+    --shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  body.dark {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --text: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border: #334155;
+    --primary: #3b82f6;
+    --primary-light: #1e3a8a;
+    --success: #22c55e;
+    --success-light: #14532d;
+    --danger: #ef4444;
+    --danger-light: #7f1d1d;
+    --warn: #f59e0b;
+    --warn-light: #78350f;
+    --shadow: 0 2px 12px rgba(0,0,0,0.3);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 16px;
+    line-height: 1.5;
+    transition: background 0.2s, color 0.2s;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .top-bar h1 {
+    font-size: 22px;
+    margin: 0;
+  }
+  .top-bar h1 span {
+    color: var(--primary);
+  }
+  .theme-btn {
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .theme-btn:hover { border-color: var(--primary); }
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .tile {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 2px solid transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tile:hover {
+    border-color: var(--primary);
+    transform: translateY(-2px);
+  }
+  .tile-icon { font-size: 32px; line-height: 1; }
+  .tile-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .tile-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .tile.tile-warn { border-left: 4px solid var(--warn); }
+  .tile.tile-success { border-left: 4px solid var(--success); }
+  .tile.tile-danger { border-left: 4px solid var(--danger); }
+  .tile.tile-primary { border-left: 4px solid var(--primary); }
+
+  .card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 18px;
+    margin: 0 0 16px;
+  }
+  .back-btn {
+    background: transparent;
+    border: none;
+    color: var(--primary);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 6px 0;
+    margin-bottom: 12px;
+  }
+  .back-btn:hover { text-decoration: underline; }
+  .form-row {
+    margin-bottom: 14px;
+  }
+  .form-row label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .form-row input,
+  .form-row select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    font-size: 15px;
+    background: var(--card);
+    color: var(--text);
+    font-family: inherit;
+  }
+  .form-row input:focus,
+  .form-row select:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    background: var(--primary);
+    color: #fff;
+  }
+  .btn:active { opacity: 0.85; }
+  .btn-secondary {
+    background: var(--card);
+    color: var(--primary);
+    border: 1.5px solid var(--primary);
+  }
+  .result-box {
+    margin-top: 16px;
+    padding: 16px;
+    border-radius: 10px;
+    background: var(--primary-light);
+  }
+  .result-box.success { background: var(--success-light); }
+  .result-box.warn { background: var(--warn-light); }
+  .result-box.danger { background: var(--danger-light); }
+  .result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    font-size: 15px;
+  }
+  .result-row:last-child { border-bottom: none; }
+  .result-row b { color: var(--primary); }
+  .result-big {
+    font-size: 32px;
+    font-weight: 700;
+    text-align: center;
+    margin: 10px 0;
+  }
+  .result-big.success { color: var(--success); }
+  .result-big.warn { color: var(--warn); }
+  .result-big.danger { color: var(--danger); }
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 14px;
+    background: var(--card);
+  }
+  .check-item.checked {
+    background: var(--success-light);
+    border-color: var(--success);
+  }
+  .check-item input { flex-shrink: 0; width: 18px; height: 18px; }
+  .progress-ring {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .progress-bar {
+    flex: 1;
+    height: 12px;
+    background: var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--success);
+    transition: width 0.3s;
+  }
+  .progress-text {
+    font-size: 18px;
+    font-weight: 700;
+    min-width: 60px;
+  }
+  .guide-item {
+    padding: 12px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    background: var(--card);
+  }
+  .guide-item h3 {
+    font-size: 15px;
+    margin: 0 0 6px;
+    color: var(--primary);
+  }
+  .guide-item p {
+    font-size: 14px;
+    margin: 4px 0;
+    color: var(--text-secondary);
+  }
+  .guide-item code {
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--primary);
+  }
+  .status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-r { background: var(--danger-light); color: var(--danger); }
+  .status-s1 { background: var(--warn-light); color: var(--warn); }
+  .status-s2 { background: var(--primary-light); color: var(--primary); }
+  .tag {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--primary-light);
+    color: var(--primary);
+    margin-right: 6px;
+    margin-bottom: 6px;
+  }
+  .tag.success { background: var(--success-light); color: var(--success); }
+  .tag.warn { background: var(--warn-light); color: var(--warn); }
+  .tag.danger { background: var(--danger-light); color: var(--danger); }
+
+  .birk-card {
+    border: 2px solid #111;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fff;
+    color: #111;
+    max-width: 420px;
+    margin: 16px auto;
+    font-family: Arial, sans-serif;
+  }
+  .birk-title {
+    text-align: center;
+    font-weight: 700;
+    font-size: 15px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #111;
+  }
+  .birk-row {
+    display: flex;
+    font-size: 12px;
+    padding: 4px 0;
+  }
+  .birk-label {
+    width: 45%;
+    font-weight: 600;
+  }
+  .birk-value {
+    width: 55%;
+  }
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1f2937;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 14px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .info-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===================== КОНСТАНТЫ =====================
+
+const REGIONS = [
+  // Северные, труднодоступные и приравненные к ним
+  { name: "Амурская область", north: true },
+  { name: "Республика Бурятия", north: true },
+  { name: "Архангельская область", north: true },
+  { name: "Республика Карелия", north: true },
+  { name: "Республика Коми", north: true },
+  { name: "Республика Саха (Якутия)", north: true },
+  { name: "Забайкальский край", north: true },
+  { name: "Республика Тыва", north: true },
+  { name: "Сахалинская область", north: true },
+  { name: "Иркутская область", north: true },
+  { name: "Томская область", north: true },
+  { name: "Камчатский край", north: true },
+  { name: "Хабаровский край", north: true },
+  { name: "Красноярский край", north: true },
+  { name: "Ханты-Мансийский автономный округ", north: true },
+  { name: "Магаданская область", north: true },
+  { name: "Чукотский автономный округ", north: true },
+  { name: "Мурманская область", north: true },
+  { name: "Ненецкий автономный округ", north: true },
+  { name: "Приморский край", north: true },
+  { name: "Ямало-Ненецкий автономный округ", north: true },
+  { name: "Донецкая народная республика", north: true },
+  { name: "Запорожская область", north: true },
+  { name: "Луганская народная республика", north: true },
+  { name: "Херсонская область", north: true },
+  // Обычные
+  { name: "Москва", north: false },
+  { name: "Санкт-Петербург", north: false },
+  { name: "Московская область", north: false },
+  { name: "Ленинградская область", north: false },
+  { name: "Республика Татарстан", north: false },
+  { name: "Республика Башкортостан", north: false },
+  { name: "Свердловская область", north: false },
+  { name: "Челябинская область", north: false },
+  { name: "Новосибирская область", north: false },
+  { name: "Краснодарский край", north: false },
+  { name: "Ростовская область", north: false },
+  { name: "Самарская область", north: false },
+  { name: "Нижегородская область", north: false },
+  { name: "Воронежская область", north: false },
+  { name: "Волгоградская область", north: false },
+  { name: "Омская область", north: false },
+  { name: "Саратовская область", north: false },
+  { name: "Тюменская область", north: false },
+  { name: "Пермский край", north: false },
+  { name: "Оренбургская область", north: false },
+  { name: "Кемеровская область", north: false },
+  { name: "Алтайский край", north: false },
+  { name: "Ставропольский край", north: false },
+  { name: "Тульская область", north: false },
+  { name: "Ярославская область", north: false },
+  { name: "Владимирская область", north: false },
+  { name: "Калужская область", north: false },
+  { name: "Рязанская область", north: false },
+  { name: "Тверская область", north: false },
+  { name: "Смоленская область", north: false },
+  { name: "Брянская область", north: false },
+  { name: "Курская область", north: false },
+  { name: "Белгородская область", north: false },
+  { name: "Липецкая область", north: false },
+  { name: "Тамбовская область", north: false },
+  { name: "Пензенская область", north: false },
+  { name: "Ульяновская область", north: false },
+  { name: "Кировская область", north: false },
+  { name: "Республика Мордовия", north: false },
+  { name: "Республика Чувашия", north: false },
+  { name: "Республика Марий Эл", north: false },
+  { name: "Удмуртская Республика", north: false },
+  { name: "Республика Крым", north: false },
+  { name: "Севастополь", north: false },
+  { name: "Калининградская область", north: false },
+  { name: "Республика Адыгея", north: false },
+  { name: "Республика Калмыкия", north: false },
+  { name: "Астраханская область", north: false },
+  { name: "Республика Дагестан", north: false },
+  { name: "Республика Чечня", north: false },
+  { name: "Республика Ингушетия", north: false },
+  { name: "Кабардино-Балкарская Республика", north: false },
+  { name: "Карачаево-Черкесская Республика", north: false },
+  { name: "Республика Северная Осетия", north: false },
+  { name: "Республика Алтай", north: false },
+  { name: "Республика Хакасия", north: false },
+  { name: "Республика Калмыкия", north: false },
+  { name: "Курганская область", north: false },
+  { name: "Костанайская область (Казахстан)", north: false }
+];
+
+const NORMO_HOUR_RATES = {
+  // [north][k5_pass][place][term]
+  // place: 'service' | 'exit'
+  // term: 'fast' (<5 дней) | 'slow' (>5 дней)
+  north: {
+    k5_pass: { service: { fast: 2000, slow: 2000 }, exit: { fast: 2400, slow: 2400 } },
+    other: { service: { fast: 1600, slow: 1600 }, exit: { fast: 2000, slow: 2000 } }
+  },
+  south: {
+    k5_pass: { service: { fast: 2500, slow: 2850 }, exit: { fast: 3000, slow: 3350 } },
+    other: { service: { fast: 2850, slow: 2850 }, exit: { fast: 3250, slow: 3250 } }
+  }
+};
+
+const PARTS_COMPENSATION = {
+  // Ставка возмещения для оригинальных з/ч, складской запас
+  // north / other / k5_pass
+  north_warehouse: 140,
+  south_k5_pass: 140,
+  south_other: 120,
+  sfd_exceptions: 130,   // Сибирский ФО (кроме Иркутской, Тывы, Томской)
+  sfd_exceptions2: 120,
+  urgent: 110,           // срочная поставка
+  outside: 110,          // вне товаропроводящей сети
+  daval: 100             // давальческие — 100% с НДС без наценки
+};
+
+const STATUSES_1C = [
+  { code: "Оформление", desc: "РА создан, но не проведён. Черновик." },
+  { code: "Провести (предварить)", desc: "Проверка данных перед отправкой." },
+  { code: "Требуется поставка", desc: "Запрошена срочная поставка запчастей в АЗК." },
+  { code: "Предъявлен", desc: "РА отправлен в АЗК на рассмотрение." },
+  { code: "Рассмотрение", desc: "АЗК рассматривает РА (5-15 рабочих дней)." },
+  { code: "Возврат", desc: "РА возвращён на доработку. Срок устранения — 3 рабочих дня." },
+  { code: "Подтвержден", desc: "РА одобрен. Можно оформлять акт выполненных работ." },
+  { code: "Отклонен", desc: "РА отклонён. Можно подать апелляцию в течение 30 дней." },
+  { code: "Требуется возврат ДИ", desc: "АЗК запросил возврат дефектного изделия на исследование." }
+];
+
+const OTM_CATEGORIES = [
+  {
+    code: "R",
+    title: "ОТМ категории R",
+    badge: "status-r",
+    desc: "Критические и массовые дефекты, нарушающие Технический регламент о безопасности колёсных ТС, ведущие к запрету эксплуатации, создающие угрозу жизни и здоровью.",
+    actions: [
+      "Информирование субъектов товаропроводящей сети о запрете реализации дефектной автотехники",
+      "Информирование потребителей о немедленной приостановке эксплуатации",
+      "Обращение в ближайший Сервисный центр для проведения работ",
+      "Проведение работ в кратчайшие сроки",
+      "Информирование АЗК о ходе работ"
+    ]
+  },
+  {
+    code: "S1",
+    title: "ОТМ категории S1",
+    badge: "status-s1",
+    desc: "Устранение несоответствий автотехники, не нарушающих требования Технического регламента, не ведущих к запрету эксплуатации. Проводятся в гарантийный период.",
+    actions: [
+      "Получить информационное письмо АЗК",
+      "Оповестить потребителей о необходимости обратиться в СЦ",
+      "Провести работы по доработке",
+      "Оформить РА по ОТМ",
+      "Предъявить РА не позднее выезда автотехники из СЦ"
+    ]
+  },
+  {
+    code: "S2",
+    title: "ОТМ категории S2",
+    badge: "status-s2",
+    desc: "Устранение несоответствий автотехники, не нарушающих требования Технического регламента. Проводятся в гарантийный И послегарантийный период.",
+    actions: [
+      "Получить информационное письмо АЗК",
+      "Оповестить потребителей",
+      "Провести работы по доработке",
+      "Оформить акт устранения дефектов (вне гарантии)",
+      "Предъявить в АЗК"
+    ]
+  }
+];
+
+const DEADLINES = [
+  { name: "Восстановление автотехники", value: "≤ 5 календарных дней с момента обращения" },
+  { name: "Предъявление РА в АЗК", value: "≤ 10 рабочих дней с даты восстановления" },
+  { name: "Доработка РА", value: "3 рабочих дня с даты возврата" },
+  { name: "Передача дефектных изделий", value: "30 календарных дней (срочно — 7 дней)" },
+  { name: "Апелляция РА", value: "30 календарных дней с даты отклонения" },
+  { name: "Хранение дефектных изделий", value: "6 месяцев с даты подтверждения РА" },
+  { name: "Передача платёжных документов", value: "60 календарных дней с даты подтверждения РА" },
+  { name: "Возмещение затрат (СГ)", value: "30 календарных дней с даты поступления документов" },
+  { name: "Возмещение затрат (ОР)", value: "45 календарных дней с даты поступления документов" },
+  { name: "Заказ-наряд по гарантийному ремонту", value: "не позднее 5 дней с момента подтверждения РА" },
+  { name: "Предварительное одобрение (ответ)", value: "1-5 рабочих дней, на з/ч — до 10 рабочих дней" },
+  { name: "Предварительное одобрение (кол-во)", value: "не более 4 РА в месяц" },
+  { name: "Предварительное одобрение (сумма)", value: "не менее 200 000 руб." }
+];
+
+const CHECKLIST_RA = [
+  { id: "srts", label: "Копия СРТС / ПТС / выписка из ЭПТС" },
+  { id: "sk", label: "Копия талона предпродажной подготовки (сервисная книжка)" },
+  { id: "to", label: "Копия графика проведения ТО (сервисная книжка)" },
+  { id: "photo", label: "Пакет фотоматериалов (8 обязательных фото)" },
+  { id: "photo_vin", label: "Фото VIN / номера шасси" },
+  { id: "photo_odo", label: "Фото показаний одометра / моточасов" },
+  { id: "photo_def", label: "Фото дефектного изделия (до и после демонтажа)" },
+  { id: "photo_mark", label: "Фото маркировки изделия" },
+  { id: "part", label: "Номер детали по каталогу" },
+  { id: "norms", label: "Нормы времени из 1С:ГОА / ЭЭД 2.0" },
+  { id: "extra", label: "Документы по доп. затратам (транспортные, командировочные)" },
+  { id: "order", label: "Закрытый заказ-наряд (выгружен в 1С:ГОА)" },
+  { id: "tor12", label: "Копия накладной ТОРГ-12 (для запасной части)" },
+  { id: "foto_protocol", label: "Фото/протокол проверки ДИ" }
+];
+
+const SPARES_GUIDE = [
+  {
+    name: "BOSCH",
+    full: "Топливная аппаратура Bosch",
+    steps: [
+      "Исключить все факторы неисправности: загрязнённый фильтр, топливо, пережатый топливопровод, завоздушивание, угол опережения впрыска, ослабление крепления привода, негерметичность системы, вода в топливе",
+      "Обратиться в СЦ АЗПИ для диагностики и выдачи технического заключения",
+      "Если в заключении — производственный дефект, оформить РА в 1С:ГОА с приложением документов",
+      "Если отказ СЦ АЗПИ — писать на azk.btos@kamaz.ru с темой «Отказ АЗПИ»"
+    ]
+  },
+  {
+    name: "АЗПИ",
+    full: "Топливная аппаратура АЗПИ",
+    steps: [
+      "Обратиться в ближайший СЦ АЗПИ для диагностики",
+      "Самостоятельная разборка ЗАПРЕЩЕНА",
+      "Доставить неисправные компоненты с комплектом документов (оригинал РА, транспортная накладная, документы по командировочным)",
+      "СЦ АЗПИ диагностирует в течение 1 рабочего дня",
+      "При гарантийном случае — ремонт/замена силами СЦ АЗПИ, АЗК оплачивает только 0,4 н/часа",
+      "Диагностика инжекторов по «сопротивлению катушки» (Е7-22-RLC) — допустима"
+    ]
+  },
+  {
+    name: "SPAICO",
+    full: "Топливная аппаратура SPAICO",
+    steps: [
+      "Первичная диагностика силами СЦ КАМАЗ",
+      "Если не устранена — заявка в техподдержку «АЗК-Вики» с фото маркировки и проявления",
+      "Указать коды ошибок и наличие проб топлива",
+      "При отправке форсунок — в сборе с медными шайбами NCR560I0122-150",
+      "При гарантийном случае — РА в 1С:ГОА с приложением акта исследования"
+    ]
+  },
+  {
+    name: "ЯЗДА",
+    full: "Топливная аппаратура ЯЗДА",
+    steps: [
+      "Обратиться к техническому специалисту ЯЗДА Сахарову Л.И. (SaharovLI@gaz.ru, +7 4852 406-032)",
+      "Специалист определит характер дефекта по фото и направит в СЦ ЯЗДА",
+      "Самостоятельная разборка ЗАПРЕЩЕНА",
+      "СЦ ЯЗДА диагностирует в течение 1 рабочего дня",
+      "Оплата СЦ — от АЗК при наличии полного комплекта документов"
+    ]
+  },
+  {
+    name: "ZF",
+    full: "Коробки передач ZF (TraXon, AVE, EcoLife, AS-Tronic, EcoLite, EcoMid, Ecomat)",
+    steps: [
+      "Ремонт производит ООО «АМТ Руссия»",
+      "При признании случая гарантийным — РА в 1С:ГОА с приложением акта исследования от «АМТ Руссия»",
+      "Затраты выставляются на ПАО «КАМАЗ»"
+    ]
+  },
+  {
+    name: "FAST GEAR",
+    full: "РКПП и АКПП FAST GEAR (Китай)",
+    steps: [
+      "Сборка/разборка РКПП несертифицированными СЦ ЗАПРЕЩЕНА",
+      "РКПП F12JZ: первичная диагностика, разборка, дефектовка, ремонт в аттестованном СЦ",
+      "АКПП FG6A145, FCВ6A140: заявка в АЗК на azk.btos@kamaz.ru с темой «КПП FAST GEAR»",
+      "FAST GEAR даёт решение о замене АКПП или отказе"
+    ]
+  },
+  {
+    name: "SORL",
+    full: "Тормозные системы SORL",
+    steps: [
+      "Требуется аттестация: оборудование + обучение 2 специалистов + аренда KSD + комплект манометров",
+      "Свидетельство выдаётся на 1 год",
+      "Запрос на аттестацию — azk.btos@kamaz.ru"
+    ]
+  },
+  {
+    name: "КАМА ДИЗЕЛЬ",
+    full: "Двигатели КАМА ДИЗЕЛЬ (Cummins)",
+    steps: [
+      "Модели: 667.51/52 = 6ISB ЕВРО-5; 689.51/52 = ISL ЕВРО-5; 667.41/42 = 6ISB ЕВРО-4; 445.41/42 = 4ISB ЕВРО-4",
+      "Образ двигателя EIF сохранять до и после ремонта",
+      "При возврате ДИ — уведомить warranty@kama-diesel.ru",
+      "Отгрузка за счёт АО «КАМА ДИЗЕЛЬ»"
+    ]
+  },
+  {
+    name: "ЦФ КАМА",
+    full: "Агрегаты ЦФ КАМА (КПП 1310, 1820)",
+    steps: [
+      "Первичная диагностика и исследование силами аттестованного СЦ",
+      "Оформить РА с полным описанием причинно-следственной связи дефекта + фотоматериалы",
+      "Решение о гарантии — совместно АЗК и «ЦФ КАМА»",
+      "При нестандартном дефекте — направить агрегат в «ЦФ КАМА» по согласованию с АЗК"
+    ]
+  },
+  {
+    name: "Тахографы",
+    full: "Тахографы всех моделей",
+    steps: [
+      "Обратиться в ближайшую аттестованную производителем мастерскую (приложение 15)",
+      "Приложить к РА документы от мастерской: акт осмотра/проверки, счёт на работы, калибровку, пломбировку"
+    ]
+  },
+  {
+    name: "SAF Holland",
+    full: "Осевые агрегаты SAF Holland",
+    steps: [
+      "Все виды ТО и ремонта допускаются в СЦ КАМАЗ",
+      "При неисправности ступицы — замена ступицы в сборе",
+      "РА оформляется согласно п. 3.7 Руководства"
+    ]
+  },
+  {
+    name: "BPW-Ost",
+    full: "Осевые агрегаты BPW-Ost",
+    steps: [
+      "Первичная диагностика в СЦ КАМАЗ",
+      "Ремонт — официальный сервисный партнёр производителя",
+      "Реестр партнёров: bpw-ost.ru/services/",
+      "РА направляется в адрес BPW-Ost"
+    ]
+  },
+  {
+    name: "Knorr-Bremse, ТСР",
+    full: "Тормозные системы Knorr-Bremse и ТСР",
+    steps: [
+      "Диагностика и ремонт — силами СЦ КАМАЗ",
+      "РА оформляется согласно п. 3.7 Руководства"
+    ]
+  },
+  {
+    name: "Haldex AB",
+    full: "Тормозные системы Haldex AB",
+    steps: [
+      "При невозможности устранения — обратиться к бывшим сервисным партнёрам Haldex",
+      "Реестр: haldex-pts.ru/rus/servis-centr/",
+      "Сервисный партнёр даёт заключение о характере неисправности",
+      "При производственном дефекте — РА с приложением документов"
+    ]
+  },
+  {
+    name: "VALX / Hande Axle",
+    full: "Мосты китайского производства",
+    steps: [
+      "ТО и ремонт — специалистами СЦ, прошедшими обучение в ЧОУ ДПО «МИТТУ»",
+      "Тема: «Ведущие мосты, прицепные оси автотехники КАМАЗ»"
+    ]
+  }
+];
+
+const API = {
+  azk_btos: "azk.btos@kamaz.ru",
+  prs: "prs@kamaz.ru",
+  sparts: "s_parts@kamaz.ru",
+  warranty_kama_diesel: "warranty@kama-diesel.ru",
+  service_azpi: "service@azpi.ru",
+  ezhova_portal: "Ezhova.EA@kamaz.ru",
+  portal_2_0: "portal_2.0@kamaz.ru",
+  kamaz_wiki: "https://v2.azkts.ru/"
+};
+
+let state = {
+  screen: 'menu',
+  checklist: loadJSON('kamaz_rm_checklist', {}),
+  timers: loadJSON('kamaz_rm_timers', []),
+  dark: loadJSON('kamaz_rm_dark', false)
+};
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch (e) { return fallback; }
+}
+
+function saveJSON(key, data) {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
+}
+
+function showToast(text) {
+  const t = document.getElementById('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+ // ===================== ГЛАВНОЕ МЕНЮ =====================
+
+const app = document.getElementById('app');
+
+function renderMenu() {
+  state.screen = 'menu';
+  document.body.classList.toggle('dark', state.dark);
+
+  const timers = loadJSON('kamaz_rm_timers', []);
+  const urgentTimers = timers.filter(t => {
+    const daysLeft = Math.ceil((new Date(t.deadline).getTime() - Date.now()) / (1000*60*60*24));
+    return daysLeft <= 2;
+  });
+
+  let html = `
+    <div class="top-bar">
+      <h1>🔧 Рабочее место <span>инженера по гарантии</span></h1>
+      <button class="theme-btn" id="themeBtn">${state.dark ? '☀️ Светлая' : '🌙 Тёмная'}</button>
+    </div>
+  `;
+
+  if (urgentTimers.length > 0) {
+    html += `
+      <div class="card" style="border-left:4px solid var(--danger);">
+        <h2 style="color:var(--danger);">⚠️ Срочные сроки</h2>
+        ${urgentTimers.map(t => `
+          <div class="result-row">
+            <span>${t.name}</span>
+            <b style="color:var(--danger);">${formatDeadline(t.deadline)}</b>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  html += `
+    <div class="tiles">
+      <div class="tile tile-danger" data-screen="timer">
+        <div class="tile-icon">⏱️</div>
+        <div class="tile-title">Таймер сроков</div>
+        <div class="tile-desc">5 дней на восстановление</div>
+      </div>
+      <div class="tile tile-primary" data-screen="calc-cost">
+        <div class="tile-icon">🧮</div>
+        <div class="tile-title">Калькулятор затрат</div>
+        <div class="tile-desc">Итоговая сумма возмещения</div>
+      </div>
+      <div class="tile tile-success" data-screen="calc-rate">
+        <div class="tile-icon">💰</div>
+        <div class="tile-title">Калькулятор нормочаса</div>
+        <div class="tile-desc">Ставка по региону и типу</div>
+      </div>
+      <div class="tile tile-primary" data-screen="regions">
+        <div class="tile-icon">🌍</div>
+        <div class="tile-title">Определитель региона</div>
+        <div class="tile-desc">Северный / обычный</div>
+      </div>
+      <div class="tile tile-success" data-screen="checklist">
+        <div class="tile-icon">✅</div>
+        <div class="tile-title">Чек-лист РА</div>
+        <div class="tile-desc">Готовность к отправке</div>
+      </div>
+      <div class="tile tile-warn" data-screen="birk">
+        <div class="tile-icon">🏷️</div>
+        <div class="tile-title">Генератор бирок</div>
+        <div class="tile-desc">Бирка дефектного изделия</div>
+      </div>
+      <div class="tile tile-primary" data-screen="spares">
+        <div class="tile-icon">🔧</div>
+        <div class="tile-title">Справочник поставщиков</div>
+        <div class="tile-desc">BOSCH, АЗПИ, ЯЗДА, ZF…</div>
+      </div>
+      <div class="tile tile-primary" data-screen="statuses">
+        <div class="tile-icon">📖</div>
+        <div class="tile-title">Статусы 1С:ГОА</div>
+        <div class="tile-desc">Что значит каждый</div>
+      </div>
+      <div class="tile tile-warn" data-screen="otm">
+        <div class="tile-icon">📋</div>
+        <div class="tile-title">Памятка по ОТМ</div>
+        <div class="tile-desc">Категории R / S1 / S2</div>
+      </div>
+      <div class="tile tile-success" data-screen="deadlines">
+        <div class="tile-icon">📊</div>
+        <div class="tile-title">Сроки по Руководству</div>
+        <div class="tile-desc">Все дедлайны в одном месте</div>
+      </div>
+      <div class="tile tile-primary" data-screen="contacts">
+        <div class="tile-icon">📞</div>
+        <div class="tile-title">Контакты</div>
+        <div class="tile-desc">Email-адреса и ссылки</div>
+      </div>
+            <a href="gallery.php" class="tile tile-success" style="text-decoration:none;color:inherit;">
+        <div class="tile-icon">📸</div>
+        <div class="tile-title">Фото по РА</div>
+        <div class="tile-desc">Прикреплять фото к рекламациям</div>
+      </a>
+    </div>
+    <div class="card">
+      <p style="font-size:13px;color:var(--text-secondary);text-align:center;margin:0;">
+        Данные сохраняются в браузере · Работает офлайн · Версия 1.0
+      </p>
+    </div>
+  `;
+  app.innerHTML = html;
+
+  document.getElementById('themeBtn').onclick = () => {
+    state.dark = !state.dark;
+    saveJSON('kamaz_rm_dark', state.dark);
+    renderMenu();
+  };
+
+  document.querySelectorAll('.tile').forEach(el => {
+    el.onclick = () => {
+      const s = el.dataset.screen;
+      if (s === 'timer') renderTimer();
+      else if (s === 'calc-cost') renderCalcCost();
+      else if (s === 'calc-rate') renderCalcRate();
+      else if (s === 'regions') renderRegions();
+      else if (s === 'checklist') renderChecklist();
+      else if (s === 'birk') renderBirk();
+      else if (s === 'spares') renderSpares();
+      else if (s === 'statuses') renderStatuses();
+      else if (s === 'otm') renderOTM();
+      else if (s === 'deadlines') renderDeadlines();
+      else if (s === 'contacts') renderContacts();
+    };
+  });
+}
+
+// ===================== УТИЛИТЫ =====================
+
+function formatDeadline(dateStr) {
+  const d = new Date(dateStr);
+  const diff = d.getTime() - Date.now();
+  const days = Math.ceil(diff / (1000*60*60*24));
+  const hours = Math.ceil(diff / (1000*60*60));
+  if (diff < 0) return `Просрочено на ${Math.abs(days)} дн.`;
+  if (days > 1) return `Осталось ${days} дн.`;
+  if (hours > 1) return `Осталось ${hours} ч.`;
+  return `Осталось меньше часа`;
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function backBtn() {
+  return `<button class="back-btn" id="backBtn">← В меню</button>`;
+}
+
+function bindBack() {
+  const b = document.getElementById('backBtn');
+  if (b) b.onclick = () => renderMenu();
+}
+
+// ===================== ТАЙМЕР СРОКОВ =====================
+
+function renderTimer() {
+  state.screen = 'timer';
+  const timers = loadJSON('kamaz_rm_timers', []);
+
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>⏱️ Таймер сроков</h2>
+      <p style="font-size:14px;color:var(--text-secondary);">
+        Отслеживание 5-дневного срока восстановления автотехники
+      </p>
+      <div class="form-row">
+        <label>Название / № РА или автотехники</label>
+        <input type="text" id="tName" placeholder="Например: РА 12345, КАМАЗ-54901">
+      </div>
+      <div class="form-row">
+        <label>Дата заезда в ремонт</label>
+        <input type="datetime-local" id="tStart">
+      </div>
+      <button class="btn" id="addTimer">Добавить таймер</button>
+    </div>
+  `;
+
+  if (timers.length > 0) {
+    html += `<div class="card"><h2>Активные таймеры</h2>`;
+    timers.forEach((t, i) => {
+      const diff = new Date(t.deadline).getTime() - Date.now();
+      const days = Math.ceil(diff / (1000*60*60*24));
+      const isOverdue = diff < 0;
+      const isUrgent = !isOverdue && days <= 2;
+      const cls = isOverdue ? 'danger' : (isUrgent ? 'warn' : 'success');
+      const big = isOverdue ? 'danger' : (isUrgent ? 'warn' : 'success');
+
+      html += `
+        <div class="result-box ${cls}" style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <b style="font-size:16px;">${t.name}</b>
+            <button class="back-btn" data-del="${i}" style="color:var(--danger);padding:0;">✕</button>
+          </div>
+          <div class="result-row"><span>Дата заезда</span><b>${formatDate(t.start)}</b></div>
+          <div class="result-row"><span>Дедлайн (5 дней)</span><b>${formatDate(t.deadline)}</b></div>
+          <div class="result-big ${big}">${formatDeadline(t.deadline)}</div>
+        </div>
+      `;
+    });
+    html += `</div>`;
+  }
+
+  html += `<div class="card"><button class="btn btn-secondary" id="clearTimers">Очистить все таймеры</button></div>`;
+  app.innerHTML = html;
+
+  bindBack();
+  document.getElementById('addTimer').onclick = () => {
+    const name = document.getElementById('tName').value.trim();
+    const start = document.getElementById('tStart').value;
+    if (!name || !start) { showToast('Заполните все поля'); return; }
+    const deadline = new Date(new Date(start).getTime() + 5*24*60*60*1000).toISOString();
+    timers.push({ name, start, deadline });
+    saveJSON('kamaz_rm_timers', timers);
+    renderTimer();
+    showToast('Таймер добавлен');
+  };
+  document.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = () => {
+      timers.splice(parseInt(b.dataset.del), 1);
+      saveJSON('kamaz_rm_timers', timers);
+      renderTimer();
+    };
+  });
+  document.getElementById('clearTimers').onclick = () => {
+    if (confirm('Удалить все таймеры?')) {
+      saveJSON('kamaz_rm_timers', []);
+      renderTimer();
+    }
+  };
+}
+
+// ===================== КАЛЬКУЛЯТОР ЗАТРАТ =====================
+
+function renderCalcCost() {
+  state.screen = 'calc-cost';
+
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>🧮 Калькулятор гарантийных затрат</h2>
+      <div class="form-row">
+        <label>Стоимость работ (руб.)</label>
+        <input type="number" id="ccWorks" placeholder="0">
+      </div>
+      <div class="form-row">
+        <label>Стоимость запчастей (руб., по прайсу АЗК)</label>
+        <input type="number" id="ccParts" placeholder="0">
+      </div>
+      <div class="form-row">
+        <label>Доп. затраты (руб.)</label>
+        <input type="number" id="ccExtra" placeholder="0">
+      </div>
+      <div class="form-row">
+        <label>Регион</label>
+        <select id="ccRegion">
+          <option value="south">Обычный регион (не северный)</option>
+          <option value="north">Северный / труднодоступный</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Тип автотехники</label>
+        <select id="ccType">
+          <option value="other">Обычная (кроме К5 и пассажирской)</option>
+          <option value="k5">К5 / пассажирский транспорт</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Тип запчастей</label>
+        <select id="ccPartType">
+          <option value="warehouse">Оригинальные из АЗК (склад)</option>
+          <option value="urgent">Оригинальные, срочная поставка</option>
+          <option value="outside">Вне товаропроводящей сети</option>
+          <option value="daval">Давальческие</option>
+        </select>
+      </div>
+      <button class="btn" id="ccCalc">Рассчитать</button>
+    </div>
+    <div id="ccResult"></div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+
+  document.getElementById('ccCalc').onclick = () => {
+    const works = parseFloat(document.getElementById('ccWorks').value) || 0;
+    const parts = parseFloat(document.getElementById('ccParts').value) || 0;
+    const extra = parseFloat(document.getElementById('ccExtra').value) || 0;
+    const region = document.getElementById('ccRegion').value;
+    const type = document.getElementById('ccType').value;
+    const partType = document.getElementById('ccPartType').value;
+
+    let rate = PARTS_COMPENSATION.south_other;
+    if (partType === 'daval') {
+      rate = 100;
+    } else if (partType === 'urgent' || partType === 'outside') {
+      rate = 110;
+    } else if (region === 'north') {
+      rate = 140;
+    } else if (type === 'k5') {
+      rate = 140;
+    } else {
+      rate = 120;
+    }
+
+    const partsCompensated = parts * rate / 100;
+    const total = works + partsCompensated + extra;
+
+    document.getElementById('ccResult').innerHTML = `
+      <div class="card">
+        <h2>Результат расчёта</h2>
+        <div class="result-row"><span>Стоимость работ</span><b>${works.toLocaleString('ru-RU')} ₽</b></div>
+        <div class="result-row"><span>Стоимость запчастей</span><b>${parts.toLocaleString('ru-RU')} ₽</b></div>
+        <div class="result-row"><span>Ставка возмещения запчастей</span><b>${rate}%</b></div>
+        <div class="result-row"><span>Запчасти к возмещению</span><b>${partsCompensated.toLocaleString('ru-RU')} ₽</b></div>
+        <div class="result-row"><span>Доп. затраты</span><b>${extra.toLocaleString('ru-RU')} ₽</b></div>
+        <div class="result-big success">${total.toLocaleString('ru-RU')} ₽</div>
+        <p style="font-size:12px;color:var(--text-secondary);text-align:center;margin-top:12px;">
+          Итоговая сумма к возмещению от АЗК (без НДС по договору)
+        </p>
+      </div>
+    `;
+  };
+}
+
+// ===================== КАЛЬКУЛЯТОР НОРМОЧАСА =====================
+
+function renderCalcRate() {
+  state.screen = 'calc-rate';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>💰 Калькулятор ставки нормочаса</h2>
+      <div class="form-row">
+        <label>Регион</label>
+        <select id="crRegion">
+          <option value="south">Обычный регион</option>
+          <option value="north">Северный / труднодоступный</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Тип автотехники</label>
+        <select id="crType">
+          <option value="other">Обычная (кроме К5 и пассажирской)</option>
+          <option value="k5">К5 / пассажирский транспорт</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Место ремонта</label>
+        <select id="crPlace">
+          <option value="service">В сервисе</option>
+          <option value="exit">На выезде</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Срок ремонта</label>
+        <select id="crTerm">
+          <option value="fast">≤ 5 дней</option>
+          <option value="slow">> 5 дней</option>
+        </select>
+      </div>
+      <button class="btn" id="crCalc">Рассчитать</button>
+    </div>
+    <div id="crResult"></div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+
+  document.getElementById('crCalc').onclick = () => {
+    const region = document.getElementById('crRegion').value;
+    const type = document.getElementById('crType').value;
+    const place = document.getElementById('crPlace').value;
+    const term = document.getElementById('crTerm').value;
+
+    const rate = NORMO_HOUR_RATES[region][type][place][term];
+
+    document.getElementById('crResult').innerHTML = `
+      <div class="card">
+        <h2>Результат</h2>
+        <div class="result-big success">${rate.toLocaleString('ru-RU')} ₽/час</div>
+        <p style="font-size:12px;color:var(--text-secondary);text-align:center;margin-top:12px;">
+          Без НДС. Ставка согласно презентации МИТТУ.
+        </p>
+      </div>
+    `;
+  };
+}
+
+// ===================== ОПРЕДЕЛИТЕЛЬ РЕГИОНА =====================
+
+function renderRegions() {
+  state.screen = 'regions';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>🌍 Определитель региона</h2>
+      <div class="form-row">
+        <label>Выберите регион</label>
+        <select id="regSelect">
+          <option value="">— Выберите —</option>
+          ${REGIONS.map((r, i) => `<option value="${i}">${r.name}</option>`).join('')}
+        </select>
+      </div>
+      <div id="regResult"></div>
+    </div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+
+  document.getElementById('regSelect').onchange = (e) => {
+    const idx = e.target.value;
+    if (idx === '') {
+      document.getElementById('regResult').innerHTML = '';
+      return;
+    }
+    const r = REGIONS[parseInt(idx)];
+    const isNorth = r.north;
+    const rate = isNorth
+      ? NORMO_HOUR_RATES.north.other.service.fast
+      : NORMO_HOUR_RATES.south.other.service.fast;
+    const compensation = isNorth ? 140 : 120;
+
+    document.getElementById('regResult').innerHTML = `
+      <div class="result-box ${isNorth ? 'warn' : 'success'}" style="margin-top:16px;">
+        <div class="result-row"><span>Регион</span><b>${r.name}</b></div>
+        <div class="result-row"><span>Тип</span><b>${isNorth ? 'Северный / труднодоступный' : 'Обычный'}</b></div>
+        <div class="result-row"><span>Ставка нормочаса (обычная АТ)</span><b>${rate} ₽/час</b></div>
+        <div class="result-row"><span>Ставка возмещения запчастей</span><b>${compensation}%</b></div>
+      </div>
+      <p style="font-size:12px;color:var(--text-secondary);text-align:center;margin-top:12px;">
+        Для К5 и пассажирского транспорта ставки выше — см. калькулятор нормочаса.
+      </p>
+    `;
+  };
+}
+
+// ===================== ЧЕК-ЛИСТ РА =====================
+
+function renderChecklist() {
+  state.screen = 'checklist';
+  const checked = state.checklist;
+
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>✅ Чек-лист рекламационного акта</h2>
+      <div class="progress-ring">
+        <div class="progress-bar"><div class="progress-bar-fill" id="clFill"></div></div>
+        <div class="progress-text" id="clText">0%</div>
+      </div>
+      <div class="checklist">
+  `;
+
+  CHECKLIST_RA.forEach(item => {
+    const isChecked = !!checked[item.id];
+    html += `
+      <label class="check-item ${isChecked ? 'checked' : ''}" data-id="${item.id}">
+        <input type="checkbox" ${isChecked ? 'checked' : ''}>
+        <span>${item.label}</span>
+      </label>
+    `;
+  });
+
+  html += `
+      </div>
+      <button class="btn btn-secondary" id="clReset" style="margin-top:16px;">Сбросить</button>
+    </div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+
+  function updateProgress() {
+    const total = CHECKLIST_RA.length;
+    const done = Object.values(checked).filter(Boolean).length;
+    const percent = Math.round(done / total * 100);
+    document.getElementById('clFill').style.width = percent + '%';
+    document.getElementById('clText').textContent = percent + '%';
+    document.getElementById('clText').style.color = percent >= 90 ? 'var(--success)' : (percent >= 50 ? 'var(--warn)' : 'var(--danger)');
+  }
+  updateProgress();
+
+  document.querySelectorAll('.check-item').forEach(el => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const id = el.dataset.id;
+      checked[id] = !checked[id];
+      saveJSON('kamaz_rm_checklist', checked);
+      el.classList.toggle('checked');
+      el.querySelector('input').checked = checked[id];
+      updateProgress();
+    };
+  });
+
+  document.getElementById('clReset').onclick = () => {
+    state.checklist = {};
+    saveJSON('kamaz_rm_checklist', {});
+    renderChecklist();
+  };
+}
+
+// ===================== ГЕНЕРАТОР БИРОК =====================
+
+function renderBirk() {
+  state.screen = 'birk';
+  const saved = loadJSON('kamaz_rm_birk', {});
+
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>🏷️ Генератор бирки дефектного изделия</h2>
+      <div class="form-row">
+        <label>Исполнитель (СЦ)</label>
+        <input type="text" id="bExec" value="${saved.exec || ''}" placeholder="ООО «ПСК «ОМСКДИЗЕЛЬ»">
+      </div>
+      <div class="form-row">
+        <label>Владелец / Покупатель</label>
+        <input type="text" id="bOwner" value="${saved.owner || ''}" placeholder="ООО «СОЛЯНОЕ»">
+      </div>
+      <div class="form-row">
+        <label>№ рекламационного акта</label>
+        <input type="text" id="bRA" value="${saved.ra || ''}" placeholder="1847-4 от 24.11.2024">
+      </div>
+      <div class="form-row">
+        <label>Модель автотехники</label>
+        <input type="text" id="bModel" value="${saved.model || ''}" placeholder="45143-5Н">
+      </div>
+      <div class="form-row">
+        <label>Шасси № / Двигатель</label>
+        <input type="text" id="bChassis" value="${saved.chassis || ''}" placeholder="1501117 / 667.510-310">
+      </div>
+      <div class="form-row">
+        <label>Пробег</label>
+        <input type="text" id="bMileage" value="${saved.mileage || ''}" placeholder="31 519">
+      </div>
+      <div class="form-row">
+        <label>Обозначение и наименование детали</label>
+        <input type="text" id="bPart" value="${saved.part || ''}" placeholder="4310-5003014-10 — гидроцилиндр">
+      </div>
+      <div class="form-row">
+        <label>Количество</label>
+        <input type="text" id="bQty" value="${saved.qty || '1'}">
+      </div>
+      <div class="form-row">
+        <label>Инженер по гарантии (ФИО, телефон)</label>
+        <input type="text" id="bEngineer" value="${saved.engineer || ''}" placeholder="А.В. Захаров, +7 913 688-29-69">
+      </div>
+      <button class="btn" id="bGen">Сгенерировать</button>
+    </div>
+    <div id="birkResult"></div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+
+  document.getElementById('bGen').onclick = () => {
+    const data = {
+      exec: document.getElementById('bExec').value,
+      owner: document.getElementById('bOwner').value,
+      ra: document.getElementById('bRA').value,
+      model: document.getElementById('bModel').value,
+      chassis: document.getElementById('bChassis').value,
+      mileage: document.getElementById('bMileage').value,
+      part: document.getElementById('bPart').value,
+      qty: document.getElementById('bQty').value,
+      engineer: document.getElementById('bEngineer').value
+    };
+    saveJSON('kamaz_rm_birk', data);
+
+    document.getElementById('birkResult').innerHTML = `
+      <div class="card">
+        <h2>Бирка</h2>
+        <div class="birk-card" id="birkCard">
+          <div class="birk-title">БИРКА ДЕФЕКТНОГО ИЗДЕЛИЯ</div>
+          <div class="birk-row"><div class="birk-label">Исполнитель:</div><div class="birk-value">${data.exec || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Владелец/Покупатель:</div><div class="birk-value">${data.owner || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Рекламационный акт:</div><div class="birk-value">${data.ra || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Модель автотехники:</div><div class="birk-value">${data.model || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Шасси / Двигатель:</div><div class="birk-value">${data.chassis || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Пробег:</div><div class="birk-value">${data.mileage || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Обозначение и наименование:</div><div class="birk-value">${data.part || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Количество:</div><div class="birk-value">${data.qty || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Инженер по гарантии:</div><div class="birk-value">${data.engineer || '—'}</div></div>
+        </div>
+        <button class="btn btn-secondary" id="birkPrint" style="margin-top:16px;">🖨️ Распечатать</button>
+      </div>
+    `;
+    document.getElementById('birkPrint').onclick = () => {
+      const w = window.open('', '', 'width=600,height=800');
+      w.document.write(`
+        <html><head><title>Бирка</title>
+        <style>
+          body { font-family: Arial; padding: 20px; }
+          .birk-card { border: 2px solid #111; border-radius: 8px; padding: 16px; max-width: 420px; margin: 0 auto; }
+          .birk-title { text-align: center; font-weight: 700; font-size: 15px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #111; }
+          .birk-row { display: flex; font-size: 12px; padding: 4px 0; }
+          .birk-label { width: 45%; font-weight: 600; }
+          .birk-value { width: 55%; }
+        </style></head><body>
+        <div class="birk-card">
+          <div class="birk-title">БИРКА ДЕФЕКТНОГО ИЗДЕЛИЯ</div>
+          <div class="birk-row"><div class="birk-label">Исполнитель:</div><div class="birk-value">${data.exec || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Владелец/Покупатель:</div><div class="birk-value">${data.owner || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Рекламационный акт:</div><div class="birk-value">${data.ra || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Модель автотехники:</div><div class="birk-value">${data.model || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Шасси / Двигатель:</div><div class="birk-value">${data.chassis || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Пробег:</div><div class="birk-value">${data.mileage || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Обозначение и наименование:</div><div class="birk-value">${data.part || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Количество:</div><div class="birk-value">${data.qty || '—'}</div></div>
+          <div class="birk-row"><div class="birk-label">Инженер по гарантии:</div><div class="birk-value">${data.engineer || '—'}</div></div>
+        </div>
+        </body></html>
+      `);
+      w.document.close();
+      w.print();
+    };
+  };
+}
+
+// ===================== СПРАВОЧНИК ПОСТАВЩИКОВ =====================
+
+function renderSpares() {
+  state.screen = 'spares';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>🔧 Справочник импортных комплектующих</h2>
+      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">
+        Порядок действий по каждому поставщику
+      </p>
+  `;
+
+  SPARES_GUIDE.forEach(s => {
+    html += `
+      <div class="guide-item">
+        <h3>${s.name}</h3>
+        <p style="font-weight:600;color:var(--text);">${s.full}</p>
+        <ol style="margin:8px 0 0 16px;padding:0;font-size:14px;">
+          ${s.steps.map(step => `<li style="margin-bottom:6px;">${step}</li>`).join('')}
+        </ol>
+      </div>
+    `;
+  });
+
+  html += `</div>`;
+  app.innerHTML = html;
+  bindBack();
+}
+
+// ===================== СТАТУСЫ 1С:ГОА =====================
+
+function renderStatuses() {
+  state.screen = 'statuses';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>📖 Статусы рекламационного акта в 1С:ГОА</h2>
+  `;
+
+  STATUSES_1C.forEach(s => {
+    html += `
+      <div class="guide-item">
+        <h3>${s.code}</h3>
+        <p>${s.desc}</p>
+      </div>
+    `;
+  });
+
+  html += `</div>`;
+  app.innerHTML = html;
+  bindBack();
+}
+
+// ===================== ОТМ =====================
+
+function renderOTM() {
+  state.screen = 'otm';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>📋 Памятка по ОТМ</h2>
+      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">
+        Категории организационно-технических мероприятий
+      </p>
+  `;
+
+  OTM_CATEGORIES.forEach(c => {
+    html += `
+      <div class="guide-item">
+        <h3>
+          <span class="status-badge ${c.badge}">${c.code}</span>
+          ${c.title}
+        </h3>
+        <p>${c.desc}</p>
+        <p style="margin-top:10px;font-weight:600;color:var(--text);">Действия СЦ:</p>
+        <ol style="margin:8px 0 0 16px;padding:0;font-size:14px;">
+          ${c.actions.map(a => `<li style="margin-bottom:6px;">${a}</li>`).join('')}
+        </ol>
+      </div>
+    `;
+  });
+
+  html += `</div>`;
+  app.innerHTML = html;
+  bindBack();
+}
+
+// ===================== СРОКИ =====================
+
+function renderDeadlines() {
+  state.screen = 'deadlines';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>📊 Сроки по Руководству</h2>
+      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">
+        Все дедлайны гарантийного процесса
+      </p>
+  `;
+
+  DEADLINES.forEach(d => {
+    html += `
+      <div class="result-row">
+        <span>${d.name}</span>
+        <b style="text-align:right;">${d.value}</b>
+      </div>
+    `;
+  });
+
+  html += `</div>`;
+  app.innerHTML = html;
+  bindBack();
+}
+
+// ===================== КОНТАКТЫ =====================
+
+function renderContacts() {
+  state.screen = 'contacts';
+  let html = `
+    <div class="card">
+      ${backBtn()}
+      <h2>📞 Контакты и ссылки</h2>
+      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">
+        Email-адреса и полезные ссылки
+      </p>
+      <div class="guide-item">
+        <h3>АЗК</h3>
+        <p>Общие вопросы: <code>${API.azk_btos}</code></p>
+        <p>Согласование аналогов з/ч: <code>${API.prs}</code></p>
+        <p>Срочная отгрузка запчастей: <code>${API.sparts}</code></p>
+      </div>
+      <div class="guide-item">
+        <h3>КАМА ДИЗЕЛЬ</h3>
+        <p>Возврат ДИ: <code>${API.warranty_kama_diesel}</code></p>
+      </div>
+      <div class="guide-item">
+        <h3>АЗПИ</h3>
+        <p>Сервисная служба: <code>${API.service_azpi}</code></p>
+      </div>
+      <div class="guide-item">
+        <h3>Портал Guide KAMAZ 2.0</h3>
+        <p>Заявка: <code>${API.ezhova_portal}</code> или <code>${API.portal_2_0}</code></p>
+      </div>
+      <div class="guide-item">
+        <h3>АЗК-Вики (AZK TS)</h3>
+        <p>WEB-версия: <code>${API.kamaz_wiki}</code></p>
+      </div>
+    </div>
+  `;
+  app.innerHTML = html;
+  bindBack();
+}
+
+// ===================== СТАРТ =====================
+renderMenu();
+</script>
+</body>
+</html>
