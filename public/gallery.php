@@ -28,6 +28,7 @@ $viewKeyValue = trim($_GET['key_value'] ?? '');
 $viewMode = $viewKeyType && $viewKeyValue;
 
 // === Данные для главного экрана ===
+$groups = [];
 if (!$viewMode) {
     if ($searchQuery !== '') {
         $stmt = $pdo->prepare("
@@ -56,7 +57,6 @@ if (!$viewMode) {
         $photoCounts[$row['key_type'] . '::' . $row['key_value']] = $row;
     }
 
-    $groups = [];
     foreach ($allKeys as $k) {
         $key = $k['key_type'] . '::' . $k['key_value'];
         $row = $photoCounts[$key] ?? null;
@@ -160,6 +160,8 @@ function formatSize($bytes) {
   .alert-success { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
 
+  .upload-status { position: fixed; top: 0; left: 0; right: 0; padding: 14px; text-align: center; font-weight: 600; z-index: 9999; color: #fff; }
+
   @media (max-width: 600px) {
     .photo-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
     .photo-card img { height: 120px; }
@@ -206,6 +208,7 @@ function formatSize($bytes) {
 
   <?php if (!$viewMode): ?>
     <!-- ЭКРАН 1: Список РА -->
+
     <div class="card">
       <h2>🔍 Поиск</h2>
       <form method="get" class="search-bar">
@@ -323,61 +326,57 @@ function formatSize($bytes) {
 </div>
 <script>
 <?php if ($viewMode): ?>
-let selectedPhotoType = null;
-const cameraInput = document.getElementById('hiddenCamera');
-const KEY_TYPE = <?= json_encode($viewKeyType) ?>;
-const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
+(function() {
+  let selectedPhotoType = null;
+  const cameraInput = document.getElementById('hiddenCamera');
+  const KEY_TYPE = <?= json_encode($viewKeyType) ?>;
+  const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 
-document.querySelectorAll('.type-option').forEach(el => {
-  el.addEventListener('click', () => {
-    selectedPhotoType = el.dataset.type;
-    document.querySelectorAll('.type-option').forEach(x => x.classList.remove('selected'));
-    el.classList.add('selected');
-    cameraInput.click();
-  });
-});
-
-cameraInput.addEventListener('change', () => {
-  const file = cameraInput.files[0];
-  if (!file || !selectedPhotoType) return;
-
-  const comment = document.getElementById('commentInput').value.trim();
-
-  const formData = new FormData();
-  formData.append('key_type', KEY_TYPE);
-  formData.append('key_value', KEY_VALUE);
-  formData.append('photo_type', selectedPhotoType);
-  formData.append('comment', comment);
-  formData.append('photo', file);
-
-  const status = document.createElement('div');
-  status.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:14px;background:#2563eb;color:#fff;text-align:center;font-weight:600;z-index:9999;';
-  status.textContent = '📤 Загрузка...';
-  document.body.appendChild(status);
-
-  fetch('upload.php', { method: 'POST', body: formData })
-    .then(r => r.text())
-    .then(text => {
-      // Проверяем, был ли редирект
-      if (text.toLowerCase().includes('location') || r.ok) {
-        status.style.background = '#16a34a';
-        status.textContent = '✅ Фото загружено';
-      } else {
-        status.style.background = '#16a34a';
-        status.textContent = '✅ Фото загружено';
-      }
-      setTimeout(() => {
-        window.location.href = 'gallery.php?key_type=' + KEY_TYPE + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
-      }, 800);
-    })
-    .catch(err => {
-      status.style.background = '#dc2626';
-      status.textContent = '❌ Ошибка: ' + err.message;
-      setTimeout(() => { document.body.removeChild(status); }, 3000);
+  document.querySelectorAll('.type-option').forEach(function(el) {
+    el.addEventListener('click', function() {
+      selectedPhotoType = el.dataset.type;
+      document.querySelectorAll('.type-option').forEach(function(x) { x.classList.remove('selected'); });
+      el.classList.add('selected');
+      cameraInput.click();
     });
+  });
 
-  cameraInput.value = '';
-});
+  cameraInput.addEventListener('change', function() {
+    const file = cameraInput.files[0];
+    if (!file || !selectedPhotoType) return;
+
+    const comment = document.getElementById('commentInput').value.trim();
+
+    const formData = new FormData();
+    formData.append('key_type', KEY_TYPE);
+    formData.append('key_value', KEY_VALUE);
+    formData.append('photo_type', selectedPhotoType);
+    formData.append('comment', comment);
+    formData.append('photo', file);
+
+    const status = document.createElement('div');
+    status.className = 'upload-status';
+    status.style.background = '#2563eb';
+    status.textContent = '📤 Загрузка...';
+    document.body.appendChild(status);
+
+    fetch('upload.php', { method: 'POST', body: formData })
+      .then(function() {
+        status.style.background = '#16a34a';
+        status.textContent = '✅ Фото загружено';
+        setTimeout(function() {
+          window.location.href = 'gallery.php?key_type=' + KEY_TYPE + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
+        }, 800);
+      })
+      .catch(function(err) {
+        status.style.background = '#dc2626';
+        status.textContent = '❌ Ошибка: ' + err.message;
+        setTimeout(function() { document.body.removeChild(status); }, 3000);
+      });
+
+    cameraInput.value = '';
+  });
+})();
 <?php endif; ?>
 </script>
 </body>
