@@ -169,22 +169,16 @@ $totalPhotos = count($photos);
         <label id="keyLabel">Номер РА</label>
         <input type="text" name="key_value" id="keyValue" required placeholder="Например: 12345">
       </div>
-      <div class="form-row">
-        <label>Тип фото — тапни, чтобы снять</label>
-            <div class="type-selector">
+                <div class="form-row">
+            <label>Тип фото — тапни, чтобы снять</label>
+            <div class="type-selector" id="typeSelector">
               <?php foreach ($PHOTO_TYPES as $id => $name): ?>
-                <form action="upload.php" method="post" enctype="multipart/form-data" style="display:contents;">
-                  <input type="hidden" name="key_type" value="<?= e($keyType) ?>">
-                  <input type="hidden" name="key_value" id="keyHidden" value="">
-                  <input type="hidden" name="photo_type" value="<?= e($id) ?>">
-                  <input type="hidden" name="comment" id="commentHidden" value="">
-                  <label class="type-option" data-type="<?= e($id) ?>">
-                    <input type="file" name="photo" accept="image/*" capture="environment" onchange="submitTypePhoto(this)" required>
-                    <?= e($name) ?>
-                  </label>
-                </form>
+                <div class="type-option" data-type="<?= e($id) ?>">
+                  <?= e($name) ?>
+                </div>
               <?php endforeach; ?>
             </div>
+            <input type="file" id="hiddenCamera" accept="image/*" capture="environment" style="display:none;">
           </div>
           <div class="form-row">
             <label>Комментарий (необязательно)</label>
