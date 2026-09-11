@@ -118,6 +118,7 @@ function formatSize($bytes) {
   .btn:hover { opacity: 0.9; }
   .btn-secondary { background: #fff; color: #2563eb; border: 1.5px solid #2563eb; }
   .btn-green { background: #16a34a; }
+  .btn-red { background: #dc2626; }
   .btn-small { padding: 8px 14px; font-size: 14px; }
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .form-row { margin-bottom: 14px; }
@@ -126,11 +127,15 @@ function formatSize($bytes) {
   .form-row input:focus, .form-row select:focus, .form-row textarea:focus { outline: none; border-color: #2563eb; }
   .form-row textarea { resize: vertical; min-height: 60px; }
 
-  .group-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px; margin-bottom: 10px; background: #fff; text-decoration: none; color: inherit; transition: all 0.15s; }
+  .group-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px; margin-bottom: 10px; background: #fff; transition: all 0.15s; }
   .group-item:hover { border-color: #2563eb; background: #f8faff; }
   .group-item-title { font-weight: 700; font-size: 16px; color: #1e3a8a; }
   .group-item-sub { font-size: 12px; color: #888; margin-top: 4px; }
   .group-item-count { font-size: 13px; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 12px; font-weight: 600; }
+  .group-link { flex: 1; text-decoration: none; color: inherit; }
+  .group-actions { display: flex; align-items: center; gap: 8px; }
+  .group-del-btn { color: #dc2626; font-size: 18px; text-decoration: none; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+  .group-del-btn:hover { background: #fef2f2; }
 
   .search-bar { display: flex; gap: 8px; flex-wrap: wrap; }
   .search-bar input { flex: 1; min-width: 200px; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 15px; }
@@ -186,6 +191,13 @@ function formatSize($bytes) {
       <?php if ($viewMode): ?>
         <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
         <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
+        <?php if ($totalPhotos > 0): ?>
+          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> фото по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все фото</a>
+          <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
+            <input type="hidden" name="key_type" value="<?= e($viewKeyType) ?>">
+            <input type="hidden" name="key_value" value="<?= e($viewKeyValue) ?>">
+          </form>
+        <?php endif; ?>
       <?php else: ?>
         <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
         <a href="download.php?all=1" class="btn btn-small">📥 Скачать всё (ZIP)</a>
@@ -199,6 +211,12 @@ function formatSize($bytes) {
   <?php if (isset($_GET['deleted'])): ?>
     <div class="alert alert-success">🗑️ Фото удалено</div>
   <?php endif; ?>
+  <?php if (isset($_GET['deleted_all_photos'])): ?>
+    <div class="alert alert-success">🗑️ Все фото по <?= e($_GET['deleted_all_photos'] === 'ra' ? 'РА' : 'VIN') ?> удалены</div>
+  <?php endif; ?>
+  <?php if (isset($_GET['deleted_all_key'])): ?>
+    <div class="alert alert-success">🗑️ Запись и все её фото удалены</div>
+  <?php endif; ?>
   <?php if (isset($_GET['edited'])): ?>
     <div class="alert alert-success">✏️ Фото отредактировано</div>
   <?php endif; ?>
@@ -208,17 +226,6 @@ function formatSize($bytes) {
 
   <?php if (!$viewMode): ?>
     <!-- ЭКРАН 1: Список РА -->
-
-    <div class="card">
-      <h2>🔍 Поиск</h2>
-      <form method="get" class="search-bar">
-        <input type="text" name="q" placeholder="Поиск по номеру РА или VIN" value="<?= e($searchQuery) ?>">
-        <button type="submit" class="btn btn-secondary btn-small">Найти</button>
-        <?php if ($searchQuery): ?>
-          <a href="gallery.php" class="btn btn-secondary btn-small">Сбросить</a>
-        <?php endif; ?>
-      </form>
-    </div>
 
     <div class="card">
       <h2>+ Добавить новый РА / VIN</h2>
@@ -239,6 +246,17 @@ function formatSize($bytes) {
     </div>
 
     <div class="card">
+      <h2>🔍 Поиск</h2>
+      <form method="get" class="search-bar">
+        <input type="text" name="q" placeholder="Поиск по номеру РА или VIN" value="<?= e($searchQuery) ?>">
+        <button type="submit" class="btn btn-secondary btn-small">Найти</button>
+        <?php if ($searchQuery): ?>
+          <a href="gallery.php" class="btn btn-secondary btn-small">Сбросить</a>
+        <?php endif; ?>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>Все записи (<?= count($groups) ?>)</h2>
       <?php if (empty($groups)): ?>
         <div class="empty-state">
@@ -247,15 +265,27 @@ function formatSize($bytes) {
         </div>
       <?php else: ?>
         <?php foreach ($groups as $g): ?>
-          <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-item">
-            <div>
-              <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
-              <?php if ($g['last_date']): ?>
-                <div class="group-item-sub">Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
-              <?php endif; ?>
+          <?php $delId = 'delAll-' . md5($g['key_type'] . $g['key_value']); ?>
+          <div class="group-item">
+            <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
+              <div>
+                <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
+                <?php if ($g['last_date']): ?>
+                  <div class="group-item-sub">Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
+                <?php endif; ?>
+              </div>
+            </a>
+            <div class="group-actions">
+              <div class="group-item-count"><?= (int)$g['count'] ?> 📷</div>
+              <a href="#" class="group-del-btn" title="Удалить весь РА и все фото"
+                 onclick="if(confirm('Удалить <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?> и ВСЕ его фото?')){document.getElementById('<?= $delId ?>').submit();}return false;">🗑️</a>
+              <form id="<?= $delId ?>" method="post" action="delete_all.php" style="display:none;">
+                <input type="hidden" name="key_type" value="<?= e($g['key_type']) ?>">
+                <input type="hidden" name="key_value" value="<?= e($g['key_value']) ?>">
+                <input type="hidden" name="remove_key" value="1">
+              </form>
             </div>
-            <div class="group-item-count"><?= (int)$g['count'] ?> 📷</div>
-          </a>
+          </div>
         <?php endforeach; ?>
       <?php endif; ?>
     </div>
@@ -311,6 +341,8 @@ function formatSize($bytes) {
                     <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del">🗑️</a>
                     <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
                       <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
+                      <input type="hidden" name="back_key_type" value="<?= e($viewKeyType) ?>">
+                      <input type="hidden" name="back_key_value" value="<?= e($viewKeyValue) ?>">
                     </form>
                   <?php endif; ?>
                 </div>
