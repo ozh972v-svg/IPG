@@ -265,12 +265,21 @@ function updateKeyPlaceholder() {
   document.getElementById('keyLabel').textContent = t === 'ra' ? 'Номер РА' : 'VIN / Номер шасси';
   document.getElementById('keyValue').placeholder = t === 'ra' ? 'Например: 12345' : 'Например: XTC65115...';
 }
-document.querySelectorAll('.type-option').forEach(el => {
-  el.addEventListener('click', () => {
-    document.querySelectorAll('.type-option').forEach(x => x.classList.remove('selected'));
-    el.classList.add('selected');
-  });
-});
+
+function submitTypePhoto(input) {
+  // Перед отправкой формы копируем значения key_value и comment в скрытые поля
+  const keyValue = document.getElementById('keyValue').value.trim();
+  const comment = document.getElementById('commentInput').value.trim();
+
+  if (!keyValue) {
+    alert('Сначала укажите номер РА или VIN');
+    input.value = '';
+    return false;
+  }
+
+  const form = input.closest('form');
+  form.querySelector('#keyHidden').value = keyValue;
+  form.querySelector('#commentHidden').value = comment;
+  form.submit();
+}
 </script>
-</body>
-</html>
