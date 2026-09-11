@@ -19,50 +19,85 @@ $PHOTO_TYPES = [
     'numbered_unit' => 'Номерной агрегат'
 ];
 
-// Фильтры
-$filterKey = trim($_GET['key'] ?? '');
-$filterType = trim($_GET['type'] ?? '');
-
-$where = [];
-$params = [];
-if ($filterKey) { $where[] = '(key_value ILIKE :key OR comment ILIKE :key)'; $params[':key'] = "%$filterKey%"; }
-if ($filterType) { $where[] = 'photo_type = :type'; $params[':type'] = $filterType; }
-$whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-
 $pdo = get_db();
-$stmt = $pdo->prepare("
-    SELECT p.*, u.name AS user_name, u.email AS user_email
-    FROM photos p
-    JOIN users u ON u.id = p.user_id
-    $whereSql
-    ORDER BY p.key_value ASC, p.created_at DESC
-    LIMIT 500
-");
-$stmt->execute($params);
-$photos = $stmt->fetchAll();
 
-// Группируем по ключу (РА или VIN)
-$groups = [];
-foreach ($photos as $p) {
-    $key = $p['key_type'] . '::' . $p['key_value'];
-    if (!isset($groups[$key])) {
-        $groups[$key] = [
-            'key_type' => $p['key_type'],
-            'key_value' => $p['key_value'],
-            'photos' => []
+// === ЭКРАН: внутри РА или список? ===
+$viewKeyType = trim($_GET['key_type'] ?? '');
+$viewKeyValue = trim($_GET['key_value'] ?? '');
+$viewMode = $viewKeyType && $viewKeyValue;
+
+// === Получить список всех РА/VIN (из таблицы keys + photos) ===
+if (!$viewMode) {
+    // Из keys
+    $stmt = $pdo->query("
+        SELECT key_type, key_value FROM keys
+        UNION
+        SELECT DISTINCT key_type, key_value FROM photos
+        ORDER BY key_value DESC
+    ");
+    $allKeys = $stmt->fetchAll();
+
+    // Получить количество фото для каждого ключа
+    $stmt = $pdo->query("
+        SELECT key_type, key_value, COUNT(*) AS cnt, MAX(created_at) AS last_date
+        FROM photos
+        GROUP BY key_type, key_value
+    ");
+    $photoCounts = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $k = $row['key_type'] . '::' . $row['key_value'];
+        $photoCounts[$k] = $row;
+    }
+
+    // Объединить
+    $groups = [];
+    foreach ($allKeys as $k) {
+        $key = $k['key_type'] . '::' . $k['key_value'];
+        $count = $photoCounts[$key]['cnt'] ?? 0;
+        $lastDate = $photoCounts[$key]['last_date'] ?? null;
+        $groups[] = [
+            'key_type' => $k['key_type'],
+            'key_value' => $k['key_value'],
+            'count' => $count,
+            'last_date' => $lastDate
         ];
     }
-    $groups[$key]['photos'][] = $p;
 }
 
-$totalPhotos = count($photos);
+// === Получить фото для конкретного РА ===
+$photos = [];
+$totalPhotos = 0;
+if ($viewMode) {
+    $stmt = $pdo->prepare("
+        SELECT p.*, u.name AS user_name, u.email AS user_email
+        FROM photos p
+        JOIN users u ON u.id = p.user_id
+        WHERE p.key_type = :kt AND p.key_value = :kv
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([':kt' => $viewKeyType, ':kv' => $viewKeyValue]);
+    $photos = $stmt->fetchAll();
+    $totalPhotos = count($photos);
+}
+
+// Общее число фото и размер — для главной
+$stmt = $pdo->query("SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size),0) AS total_size FROM photos");
+$summary = $stmt->fetch();
+$allPhotosCount = (int)$summary['cnt'];
+$allPhotosSize = (int)$summary['total_size'];
+
+function formatSize($bytes) {
+    if ($bytes < 1024) return $bytes . ' Б';
+    if ($bytes < 1048576) return round($bytes / 1024, 1) . ' КБ';
+    return round($bytes / 1048576, 1) . ' МБ';
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Фото по РА — общая база</title>
+<title><?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 16px; color: #1a1a1a; line-height: 1.5; }
@@ -81,21 +116,24 @@ $totalPhotos = count($photos);
   .btn-green { background: #16a34a; }
   .btn-red { background: #dc2626; }
   .btn-small { padding: 8px 14px; font-size: 14px; }
-  .btn-xs { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
   .form-row { margin-bottom: 14px; }
   .form-row label { display: block; font-size: 13px; font-weight: 600; color: #666; margin-bottom: 6px; }
   .form-row input, .form-row select, .form-row textarea { width: 100%; padding: 10px 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 15px; font-family: inherit; }
   .form-row input:focus, .form-row select:focus, .form-row textarea:focus { outline: none; border-color: #2563eb; }
   .form-row textarea { resize: vertical; min-height: 60px; }
+
   .type-selector { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 12px; }
   .type-option { padding: 10px 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 13px; cursor: pointer; background: #fff; text-align: center; transition: all 0.15s; }
   .type-option:hover { border-color: #2563eb; }
-  .type-option input { display: none; }
   .type-option.selected { border-color: #2563eb; background: #eff6ff; color: #2563eb; font-weight: 600; }
-  .group-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 16px; background: #eff6ff; border-radius: 10px; margin-bottom: 12px; }
-  .group-title { font-size: 16px; font-weight: 700; color: #1e3a8a; }
-  .group-title small { display: block; font-size: 12px; font-weight: 400; color: #666; margin-top: 2px; }
+
+  .group-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px; margin-bottom: 10px; background: #fff; text-decoration: none; color: inherit; transition: all 0.15s; }
+  .group-item:hover { border-color: #2563eb; background: #f8faff; }
+  .group-item-title { font-weight: 700; font-size: 16px; color: #1e3a8a; }
+  .group-item-sub { font-size: 12px; color: #888; margin-top: 4px; }
+  .group-item-count { font-size: 13px; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 12px; font-weight: 600; }
+
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
   .photo-card { background: #f9fafb; border-radius: 10px; overflow: hidden; border: 1.5px solid #e5e7eb; position: relative; }
   .photo-card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #e5e7eb; cursor: pointer; }
@@ -107,14 +145,14 @@ $totalPhotos = count($photos);
   .action-edit { background: #eff6ff; color: #2563eb; }
   .action-del { background: #fef2f2; color: #dc2626; }
   .action-dl { background: #f0fdf4; color: #16a34a; }
+
   .empty-state { text-align: center; padding: 40px 20px; color: #888; font-size: 14px; }
   .empty-state .big { font-size: 48px; margin-bottom: 12px; }
+
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
   .alert-success { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
-  .search-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-  .search-bar input, .search-bar select { padding: 10px 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 14px; }
-  .search-bar input { flex: 1; min-width: 200px; }
+
   @media (max-width: 600px) {
     .photo-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
     .photo-card img { height: 120px; }
@@ -126,17 +164,18 @@ $totalPhotos = count($photos);
 
   <div class="card">
     <div class="top-bar">
-      <h1>📸 Фото по РА — общая база</h1>
+      <h1>📸 <?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></h1>
       <div>
         <span class="user-info">👤 <b><?= e($user['name'] ?: $user['email']) ?></b></span>
         <a href="logout.php" class="logout">Выйти</a>
       </div>
     </div>
-    <p class="subtitle">Загружайте фото дефектов — их видят все зарегистрированные</p>
     <div class="btn-row">
-      <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
-      <a href="#upload" class="btn btn-green btn-small">📷 Загрузить фото</a>
-      <?php if ($totalPhotos > 0): ?>
+      <?php if ($viewMode): ?>
+        <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
+        <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP по <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?></a>
+      <?php else: ?>
+        <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
         <a href="download.php?all=1" class="btn btn-small">📥 Скачать всё (ZIP)</a>
       <?php endif; ?>
     </div>
@@ -155,119 +194,125 @@ $totalPhotos = count($photos);
     <div class="alert alert-error">❌ Ошибка: <?= e($_GET['error']) ?></div>
   <?php endif; ?>
 
-  <div class="card" id="upload">
-    <h2>Загрузить фото</h2>
-    <form action="upload.php" method="post" enctype="multipart/form-data">
-      <div class="form-row">
-        <label>Привязка к</label>
-        <select name="key_type" id="keyType" onchange="updateKeyPlaceholder()">
-          <option value="ra">РА (номер рекламационного акта)</option>
-          <option value="vin">VIN / Номер шасси</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label id="keyLabel">Номер РА</label>
-        <input type="text" name="key_value" id="keyValue" required placeholder="Например: 12345">
-      </div>
-                <div class="form-row">
-            <label>Тип фото — тапни, чтобы снять</label>
-            <div class="type-selector" id="typeSelector">
-              <?php foreach ($PHOTO_TYPES as $id => $name): ?>
-                <div class="type-option" data-type="<?= e($id) ?>">
-                  <?= e($name) ?>
-                </div>
-              <?php endforeach; ?>
-            </div>
-            <input type="file" id="hiddenCamera" accept="image/*" capture="environment" style="display:none;">
-          </div>
-          <div class="form-row">
-            <label>Комментарий (необязательно)</label>
-            <textarea id="commentInput" placeholder="Например: течь ОЖ в районе патрубка"></textarea>
-          </div>
-  </div>
+  <?php if (!$viewMode): ?>
+    <!-- ЭКРАН 1: Список всех РА -->
 
-  <div class="card">
-    <h2>Все фото (<?= $totalPhotos ?>)</h2>
-    <form method="get" class="search-bar">
-      <input type="text" name="key" placeholder="Поиск по номеру РА, VIN или комментарию" value="<?= e($filterKey) ?>">
-      <select name="type">
-        <option value="">Все типы</option>
-        <?php foreach ($PHOTO_TYPES as $id => $name): ?>
-          <option value="<?= e($id) ?>" <?= $filterType === $id ? 'selected' : '' ?>><?= e($name) ?></option>
+    <div class="card">
+      <h2>Добавить новый РА / VIN</h2>
+      <form method="get" action="gallery.php">
+        <div class="form-row">
+          <label>Тип привязки</label>
+          <select name="key_type">
+            <option value="ra">РА (номер рекламационного акта)</option>
+            <option value="vin">VIN / Номер шасси</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Номер</label>
+          <input type="text" name="key_value" required placeholder="Например: 12345">
+        </div>
+        <button type="submit" class="btn btn-green">+ Добавить</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Все записи (<?= count($groups) ?>)</h2>
+      <p class="subtitle">Всего фото: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
+
+      <?php if (empty($groups)): ?>
+        <div class="empty-state">
+          <div class="big">📷</div>
+          <div>Пока нет ни одного РА или VIN</div>
+          <div style="margin-top:6px;">Добавьте первый через форму выше</div>
+        </div>
+      <?php else: ?>
+        <?php foreach ($groups as $g): ?>
+          <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-item">
+            <div>
+              <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
+              <?php if ($g['last_date']): ?>
+                <div class="group-item-sub">Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
+              <?php endif; ?>
+            </div>
+            <div class="group-item-count"><?= (int)$g['count'] ?> 📷</div>
+          </a>
         <?php endforeach; ?>
-      </select>
-      <button type="submit" class="btn btn-secondary btn-small">Найти</button>
-      <?php if ($filterKey || $filterType): ?>
-        <a href="index.php" class="btn btn-secondary btn-small">Сбросить</a>
       <?php endif; ?>
-    </form>
+    </div>
 
-    <?php if (empty($groups)): ?>
-      <div class="empty-state">
-        <div class="big">📷</div>
-        <div>Пока нет фото</div>
-        <div style="margin-top:6px;">Загрузите первое фото через форму выше</div>
-      </div>
-    <?php else: ?>
-      <?php foreach ($groups as $g): ?>
-        <div style="margin-bottom:24px;">
-          <div class="group-header">
-            <div class="group-title">
-              <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?>
-              <small>Фото: <?= count($g['photos']) ?></small>
+  <?php else: ?>
+    <!-- ЭКРАН 2: Внутри конкретного РА -->
+
+    <div class="card">
+      <h2>Загрузить фото по <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?> <?= e($viewKeyValue) ?></h2>
+      <div class="form-row">
+        <label>Тип фото — тапни, чтобы снять</label>
+        <div class="type-selector" id="typeSelector">
+          <?php foreach ($PHOTO_TYPES as $id => $name): ?>
+            <div class="type-option" data-type="<?= e($id) ?>">
+              <?= e($name) ?>
             </div>
-            <a href="download.php?key_type=<?= e($g['key_type']) ?>&key=<?= urlencode($g['key_value']) ?>" class="btn btn-small">📥 Скачать ZIP</a>
-          </div>
-          <div class="photo-grid">
-            <?php foreach ($g['photos'] as $p): ?>
-              <div class="photo-card">
-                <a href="<?= e($p['file_path']) ?>" target="_blank">
-                  <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
-                </a>
-                <div class="photo-meta">
-                  <div class="photo-type"><?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?></div>
-                  <?php if ($p['comment']): ?>
-                    <div style="margin-top:4px;color:#333;"><?= e($p['comment']) ?></div>
+          <?php endforeach; ?>
+        </div>
+        <input type="file" id="hiddenCamera" accept="image/*" capture="environment" style="display:none;">
+      </div>
+      <div class="form-row">
+        <label>Комментарий (необязательно)</label>
+        <textarea id="commentInput" placeholder="Например: течь ОЖ в районе патрубка"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Фото (<?= $totalPhotos ?>)</h2>
+      <?php if (empty($photos)): ?>
+        <div class="empty-state">
+          <div class="big">📷</div>
+          <div>Пока нет фото по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?></div>
+          <div style="margin-top:6px;">Тапните по типу фото выше</div>
+        </div>
+      <?php else: ?>
+        <div class="photo-grid">
+          <?php foreach ($photos as $p): ?>
+            <div class="photo-card">
+              <a href="<?= e($p['file_path']) ?>" target="_blank">
+                <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
+              </a>
+              <div class="photo-meta">
+                <div class="photo-type"><?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?></div>
+                <?php if ($p['comment']): ?>
+                  <div style="margin-top:4px;color:#333;"><?= e($p['comment']) ?></div>
+                <?php endif; ?>
+                <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
+                <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
+                <div class="photo-actions">
+                  <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl">📥</a>
+                  <?php if ((int)$p['user_id'] === (int)$user['id']): ?>
+                    <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit">✏️</a>
+                    <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del">🗑️</a>
+                    <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
+                      <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
+                    </form>
                   <?php endif; ?>
-                  <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
-                  <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
-                  <div class="photo-actions">
-                    <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl">📥</a>
-                    <?php if ((int)$p['user_id'] === (int)$user['id']): ?>
-                      <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit">✏️</a>
-                      <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del">🗑️</a>
-                      <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
-                        <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
-                      </form>
-                    <?php endif; ?>
-                  </div>
                 </div>
               </div>
-            <?php endforeach; ?>
-          </div>
+            </div>
+          <?php endforeach; ?>
         </div>
-      <?php endforeach; ?>
-    <?php endif; ?>
-  </div>
+      <?php endif; ?>
+    </div>
+
+  <?php endif; ?>
 
 </div>
 <script>
-function updateKeyPlaceholder() {
-  const t = document.getElementById('keyType').value;
-  document.getElementById('keyLabel').textContent = t === 'ra' ? 'Номер РА' : 'VIN / Номер шасси';
-  document.getElementById('keyValue').placeholder = t === 'ra' ? 'Например: 12345' : 'Например: XTC65115...';
-}
-
+<?php if ($viewMode): ?>
 let selectedPhotoType = null;
 const cameraInput = document.getElementById('hiddenCamera');
+const KEY_TYPE = <?= json_encode($viewKeyType) ?>;
+const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 
 document.querySelectorAll('.type-option').forEach(el => {
   el.addEventListener('click', () => {
-    const keyValue = document.getElementById('keyValue').value.trim();
-    if (!keyValue) {
-      alert('Сначала укажите номер РА или VIN');
-      return;
-    }
     selectedPhotoType = el.dataset.type;
     document.querySelectorAll('.type-option').forEach(x => x.classList.remove('selected'));
     el.classList.add('selected');
@@ -279,13 +324,11 @@ cameraInput.addEventListener('change', () => {
   const file = cameraInput.files[0];
   if (!file || !selectedPhotoType) return;
 
-  const keyType = document.getElementById('keyType').value;
-  const keyValue = document.getElementById('keyValue').value.trim();
   const comment = document.getElementById('commentInput').value.trim();
 
   const formData = new FormData();
-  formData.append('key_type', keyType);
-  formData.append('key_value', keyValue);
+  formData.append('key_type', KEY_TYPE);
+  formData.append('key_value', KEY_VALUE);
   formData.append('photo_type', selectedPhotoType);
   formData.append('comment', comment);
   formData.append('photo', file);
@@ -297,11 +340,14 @@ cameraInput.addEventListener('change', () => {
 
   fetch('upload.php', { method: 'POST', body: formData })
     .then(r => {
-      window.location.href = 'gallery.php?uploaded=1';
+      window.location.href = 'gallery.php?key_type=' + KEY_TYPE + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
     })
     .catch(err => {
       alert('Ошибка загрузки: ' + err.message);
       document.body.removeChild(status);
     });
 });
+<?php endif; ?>
 </script>
+</body>
+</html>
