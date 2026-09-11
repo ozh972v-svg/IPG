@@ -170,9 +170,7 @@ $totalPhotos = count($photos);
         <input type="text" name="key_value" id="keyValue" required placeholder="Например: 12345">
       </div>
       <div class="form-row">
-        <label>Тип фото</label>
-          <div class="form-row">
-            <label>Тип фото — тапни, чтобы снять</label>
+        <label>Тип фото — тапни, чтобы снять</label>
             <div class="type-selector">
               <?php foreach ($PHOTO_TYPES as $id => $name): ?>
                 <form action="upload.php" method="post" enctype="multipart/form-data" style="display:contents;">
