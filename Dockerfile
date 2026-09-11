@@ -7,8 +7,9 @@ WORKDIR /app
 COPY . /app
 
 RUN mkdir -p /app/public/uploads \
-    && chmod -R 777 /app/public/uploads \
-    && chmod -R 755 /app/public
+    && chown -R www-data:www-data /app/public \
+    && chmod -R 775 /app/public \
+    && chmod -R 777 /app/public/uploads
     
 RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
     && echo "post_max_size = 25M" >> /usr/local/etc/php/conf.d/uploads.ini \
