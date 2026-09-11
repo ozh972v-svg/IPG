@@ -10,7 +10,7 @@ if (!$user) {
 
 $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
 if ($id <= 0) {
-    header('Location: index.php?error=' . urlencode('Неверный ID фото'));
+    header('Location: gallery.php?error=' . urlencode('Неверный ID фото'));
     exit;
 }
 
@@ -20,13 +20,13 @@ $stmt->execute([':id' => $id]);
 $photo = $stmt->fetch();
 
 if (!$photo) {
-    header('Location: index.php?error=' . urlencode('Фото не найдено'));
+    header('Location: gallery.php?error=' . urlencode('Фото не найдено'));
     exit;
 }
 
 // Удалять может только автор
 if ((int)$photo['user_id'] !== (int)$user['id']) {
-    header('Location: index.php?error=' . urlencode('Можно удалять только свои фото'));
+    header('Location: gallery.php?error=' . urlencode('Можно удалять только свои фото'));
     exit;
 }
 
@@ -40,5 +40,5 @@ if (file_exists($path)) {
 $stmt = $pdo->prepare('DELETE FROM photos WHERE id = :id');
 $stmt->execute([':id' => $id]);
 
-header('Location: index.php?deleted=1');
+header('Location: gallery.php?deleted=1');
 exit;
