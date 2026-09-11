@@ -18,7 +18,6 @@ function redirect_error(string $msg): void {
     exit;
 }
 
-// Проверяем поля
 $keyType = $_POST['key_type'] ?? '';
 $keyValue = trim($_POST['key_value'] ?? '');
 $photoType = $_POST['photo_type'] ?? '';
@@ -39,111 +38,67 @@ if (!in_array($photoType, $allowedTypes, true)) {
     redirect_error('Неверный тип фото');
 }
 
-// Проверяем файлы
-if (empty($_FILES['photos']) || empty($_FILES['photos']['name'][0])) {
-    redirect_error('Файлы не загружены');
+if (empty($_FILES['photo']) || $_FILES['photo']['error'] !== UPLOAD_ERR_OK) {
+    redirect_error('Файл не загружен или ошибка загрузки');
 }
 
-$pdo = get_db();
-
-// Сохраняем РА/VIN в таблицу keys (если его ещё нет)
-try {
-    $stmt = $pdo->prepare("
-        INSERT INTO keys (key_type, key_value)
-        VALUES (:kt, :kv)
-        ON CONFLICT (key_type, key_value) DO NOTHING
-    ");
-    $stmt->execute([':kt' => $keyType, ':kv' => $keyValue]);
-} catch (Throwable $e) {
-    // не критично — просто пропускаем
+$file = $_FILES['photo'];
+$maxSize = 20 * 1024 * 1024;
+if ($file['size'] > $maxSize) {
+    redirect_error('Файл больше 20 МБ');
 }
+
+$finfo = finfo_open(FILEINFO_MIME_TYPE);
+$mime = finfo_file($finfo, $file['tmp_name']);
+finfo_close($finfo);
+
+$allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+if (!in_array($mime, $allowedMimes, true)) {
+    redirect_error('Разрешены только изображения');
+}
+
+$ext = match ($mime) {
+    'image/jpeg' => 'jpg',
+    'image/png'  => 'png',
+    'image/webp' => 'webp',
+    'image/heic' => 'heic',
+    'image/heif' => 'heif',
+    default => 'jpg'
+};
 
 $uploadDir = __DIR__ . '/uploads';
 if (!is_dir($uploadDir)) {
     mkdir($uploadDir, 0777, true);
 }
 
-$allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
-$maxSize = 20 * 1024 * 1024;
+$safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $keyValue);
+$fileName = date('Ymd_His') . '_' . $user['id'] . '_' . $safeKey . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+$targetPath = $uploadDir . '/' . $fileName;
 
-$savedCount = 0;
-$errors = [];
-
-$fileCount = count($_FILES['photos']['name']);
-
-for ($i = 0; $i < $fileCount; $i++) {
-    $err = $_FILES['photos']['error'][$i];
-    if ($err !== UPLOAD_ERR_OK) {
-        $errors[] = "Файл #" . ($i + 1) . ": ошибка загрузки (код $err)";
-        continue;
-    }
-
-    $tmpPath = $_FILES['photos']['tmp_name'][$i];
-    $origName = $_FILES['photos']['name'][$i];
-    $fileSize = $_FILES['photos']['size'][$i];
-
-    if ($fileSize > $maxSize) {
-        $errors[] = "Файл #" . ($i + 1) . ": больше 20 МБ";
-        continue;
-    }
-
-    $finfo = finfo_open(FILEINFO_MIME_TYPE);
-    $mime = finfo_file($finfo, $tmpPath);
-    finfo_close($finfo);
-
-    if (!in_array($mime, $allowedMimes, true)) {
-        $errors[] = "Файл #" . ($i + 1) . ": не изображение ($mime)";
-        continue;
-    }
-
-    $ext = match ($mime) {
-        'image/jpeg' => 'jpg',
-        'image/png'  => 'png',
-        'image/webp' => 'webp',
-        'image/heic' => 'heic',
-        'image/heif' => 'heif',
-        default => 'jpg'
-    };
-
-    $safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $keyValue);
-    $fileName = date('Ymd_His') . '_' . $user['id'] . '_' . $safeKey . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-    $targetPath = $uploadDir . '/' . $fileName;
-
-    if (!move_uploaded_file($tmpPath, $targetPath)) {
-        $errors[] = "Файл #" . ($i + 1) . ": не удалось сохранить";
-        continue;
-    }
-
-    try {
-        $stmt = $pdo->prepare('
-            INSERT INTO photos (user_id, key_type, key_value, photo_type, comment, file_path, file_size, mime_type)
-            VALUES (:user_id, :key_type, :key_value, :photo_type, :comment, :file_path, :file_size, :mime_type)
-        ');
-        $stmt->execute([
-            ':user_id'    => $user['id'],
-            ':key_type'   => $keyType,
-            ':key_value'  => $keyValue,
-            ':photo_type' => $photoType,
-            ':comment'    => $comment ?: null,
-            ':file_path'  => 'uploads/' . $fileName,
-            ':file_size'  => $fileSize,
-            ':mime_type'  => $mime,
-        ]);
-        $savedCount++;
-    } catch (Throwable $e) {
-        @unlink($targetPath);
-        $errors[] = "Файл #" . ($i + 1) . ": ошибка базы";
-    }
+if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
+    redirect_error('Не удалось сохранить файл');
 }
 
-if ($savedCount === 0) {
-    redirect_error('Не удалось загрузить ни одного файла. ' . implode('; ', $errors));
+try {
+    $pdo = get_db();
+    $stmt = $pdo->prepare('
+        INSERT INTO photos (user_id, key_type, key_value, photo_type, comment, file_path, file_size, mime_type)
+        VALUES (:user_id, :key_type, :key_value, :photo_type, :comment, :file_path, :file_size, :mime_type)
+    ');
+    $stmt->execute([
+        ':user_id'    => $user['id'],
+        ':key_type'   => $keyType,
+        ':key_value'  => $keyValue,
+        ':photo_type' => $photoType,
+        ':comment'    => $comment ?: null,
+        ':file_path'  => 'uploads/' . $fileName,
+        ':file_size'  => $file['size'],
+        ':mime_type'  => $mime,
+    ]);
+} catch (Throwable $e) {
+    @unlink($targetPath);
+    redirect_error('Ошибка базы: ' . $e->getMessage());
 }
 
-$msg = "Загружено файлов: $savedCount";
-if ($errors) {
-    $msg .= '. Ошибки: ' . implode('; ', $errors);
-}
-
-header('Location: gallery.php?uploaded=' . urlencode($msg));
+header('Location: gallery.php?uploaded=1');
 exit;
