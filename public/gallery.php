@@ -171,25 +171,27 @@ $totalPhotos = count($photos);
       </div>
       <div class="form-row">
         <label>Тип фото</label>
-        <div class="type-selector">
-          <?php foreach ($PHOTO_TYPES as $id => $name): ?>
-            <label class="type-option <?= $id === 'general' ? 'selected' : '' ?>" data-type="<?= e($id) ?>">
-              <input type="radio" name="photo_type" value="<?= e($id) ?>" <?= $id === 'general' ? 'checked' : '' ?>>
-              <?= e($name) ?>
-            </label>
-          <?php endforeach; ?>
-        </div>
-      </div>
-      <div class="form-row">
-        <label>Комментарий (необязательно)</label>
-        <textarea name="comment" placeholder="Например: течь ОЖ в районе патрубка"></textarea>
-      </div>
-      <div class="form-row">
-        <label>Фото</label>
-        <input type="file" name="photo" accept="image/*" capture="environment" required>
-      </div>
-      <button type="submit" class="btn btn-green">📷 Загрузить</button>
-    </form>
+          <div class="form-row">
+            <label>Тип фото — тапни, чтобы снять</label>
+            <div class="type-selector">
+              <?php foreach ($PHOTO_TYPES as $id => $name): ?>
+                <form action="upload.php" method="post" enctype="multipart/form-data" style="display:contents;">
+                  <input type="hidden" name="key_type" value="<?= e($keyType) ?>">
+                  <input type="hidden" name="key_value" id="keyHidden" value="">
+                  <input type="hidden" name="photo_type" value="<?= e($id) ?>">
+                  <input type="hidden" name="comment" id="commentHidden" value="">
+                  <label class="type-option" data-type="<?= e($id) ?>">
+                    <input type="file" name="photo" accept="image/*" capture="environment" onchange="submitTypePhoto(this)" required>
+                    <?= e($name) ?>
+                  </label>
+                </form>
+              <?php endforeach; ?>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Комментарий (необязательно)</label>
+            <textarea id="commentInput" placeholder="Например: течь ОЖ в районе патрубка"></textarea>
+          </div>
   </div>
 
   <div class="card">
