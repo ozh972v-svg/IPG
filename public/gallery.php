@@ -157,6 +157,7 @@ function formatSize($bytes) {
   .action-edit { background: #eff6ff; color: #2563eb; }
   .action-del { background: #fef2f2; color: #dc2626; }
   .action-dl { background: #f0fdf4; color: #16a34a; }
+  .action-pdf { background: #fef3c7; color: #b45309; }
 
   .empty-state { text-align: center; padding: 40px 20px; color: #888; font-size: 14px; }
   .empty-state .big { font-size: 48px; margin-bottom: 12px; }
@@ -191,6 +192,7 @@ function formatSize($bytes) {
       <?php if ($viewMode): ?>
         <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
         <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
+        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?></a>
         <?php if ($totalPhotos > 0): ?>
           <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> фото по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все фото</a>
           <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
@@ -200,7 +202,6 @@ function formatSize($bytes) {
         <?php endif; ?>
       <?php else: ?>
         <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
-        <a href="download.php?all=1" class="btn btn-small">📥 Скачать всё (ZIP)</a>
       <?php endif; ?>
     </div>
   </div>
@@ -335,10 +336,11 @@ function formatSize($bytes) {
                 <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
                 <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
                 <div class="photo-actions">
-                  <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl">📥</a>
+                  <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl" title="Скачать JPG">📥</a>
+                  <a href="print_pdf.php?id=<?= (int)$p['id'] ?>" target="_blank" class="action-pdf" title="Открыть PDF">📄</a>
                   <?php if ((int)$p['user_id'] === (int)$user['id']): ?>
-                    <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit">✏️</a>
-                    <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del">🗑️</a>
+                    <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit" title="Редактировать">✏️</a>
+                    <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del" title="Удалить">🗑️</a>
                     <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
                       <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
                       <input type="hidden" name="back_key_type" value="<?= e($viewKeyType) ?>">
