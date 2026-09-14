@@ -50,7 +50,14 @@ if (!$backKeyType || !$backKeyValue) {
 // === 1. Удалить из хранилища IzIPost (если есть storage_path) ===
 $storageKey = getenv('STORAGE_API_KEY');
 if ($storageKey && !empty($photo['storage_path'])) {
-    $apiUrl = 'https://relaxdev.ru/api/v1/storage/files?path=' . urlencode($photo['storage_path']);
+    // НЕ кодируем слэши — только проблемные символы
+    $pathForUrl = str_replace(
+        [' ', '&', '#', '?', '+'],
+        ['%20', '%26', '%23', '%3F', '%2B'],
+        $photo['storage_path']
+    );
+    $apiUrl = 'https://relaxdev.ru/api/v1/storage/files?path=' . $pathForUrl;
+
     $ch = curl_init($apiUrl);
     curl_setopt_array($ch, [
         CURLOPT_CUSTOMREQUEST => 'DELETE',
