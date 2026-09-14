@@ -10,23 +10,23 @@ if (current_user()) {
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = trim($_POST['email'] ?? '');
+    $login = trim($_POST['login'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    if (!$email || !$password) {
+    if (!$login || !$password) {
         $error = 'Заполните все поля';
     } else {
         try {
             $pdo = get_db();
-            $stmt = $pdo->prepare('SELECT id, password_hash FROM users WHERE email = :email');
-            $stmt->execute([':email' => $email]);
+            $stmt = $pdo->prepare('SELECT id, password_hash FROM users WHERE email = :login');
+            $stmt->execute([':login' => $login]);
             $user = $stmt->fetch();
             if ($user && password_verify($password, $user['password_hash'])) {
                 $_SESSION['user_id'] = $user['id'];
                 header('Location: gallery.php');
                 exit;
             } else {
-                $error = 'Неверный email или пароль';
+                $error = 'Неверный логин или пароль';
             }
         } catch (Throwable $e) {
             $error = 'Ошибка: ' . $e->getMessage();
@@ -59,10 +59,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <h1>Вход</h1>
   <?php if ($error): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
   <form method="post">
-    <label>Email</label>
-    <input type="email" name="email" required value="<?= e($_POST['email'] ?? '') ?>">
+    <label>Логин</label>
+    <input type="text" name="login" required value="<?= e($_POST['login'] ?? '') ?>" autocomplete="username">
     <label>Пароль</label>
-    <input type="password" name="password" required>
+    <input type="password" name="password" required autocomplete="current-password">
     <button type="submit">Войти</button>
   </form>
   <div class="link">Нет аккаунта? <a href="register.php">Зарегистрироваться</a></div>
