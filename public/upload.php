@@ -13,8 +13,15 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-function redirect_error(string $msg): void {
-    header('Location: gallery.php?error=' . urlencode($msg));
+function redirect_error(string $msg, string $kt = '', string $kv = ''): void {
+    $back = 'gallery.php';
+    if ($kt && $kv) {
+        $back = 'gallery.php?key_type=' . urlencode($kt) . '&key_value=' . urlencode($kv);
+        $back .= '&error=' . urlencode($msg);
+    } else {
+        $back .= '?error=' . urlencode($msg);
+    }
+    header('Location: ' . $back);
     exit;
 }
 
@@ -39,13 +46,13 @@ if (!in_array($photoType, $allowedTypes, true)) {
 }
 
 if (empty($_FILES['photo']) || $_FILES['photo']['error'] !== UPLOAD_ERR_OK) {
-    redirect_error('Файл не загружен или ошибка загрузки');
+    redirect_error('Файл не загружен', $keyType, $keyValue);
 }
 
 $file = $_FILES['photo'];
 $maxSize = 20 * 1024 * 1024;
 if ($file['size'] > $maxSize) {
-    redirect_error('Файл больше 20 МБ');
+    redirect_error('Файл больше 20 МБ', $keyType, $keyValue);
 }
 
 $finfo = finfo_open(FILEINFO_MIME_TYPE);
@@ -54,51 +61,82 @@ finfo_close($finfo);
 
 $allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 if (!in_array($mime, $allowedMimes, true)) {
-    redirect_error('Разрешены только изображения');
+    redirect_error('Разрешены только изображения (JPG, PNG, WEBP, HEIC)', $keyType, $keyValue);
 }
 
-$ext = match ($mime) {
-    'image/jpeg' => 'jpg',
-    'image/png'  => 'png',
-    'image/webp' => 'webp',
-    'image/heic' => 'heic',
-    'image/heif' => 'heif',
-    default => 'jpg'
-};
-
-$uploadDir = __DIR__ . '/uploads';
-if (!is_dir($uploadDir)) {
-    mkdir($uploadDir, 0777, true);
+// === Токен хранилища ===
+$storageKey = getenv('STORAGE_API_KEY');
+if (!$storageKey) {
+    redirect_error('STORAGE_API_KEY не настроен. Запустите реплой проекта.', $keyType, $keyValue);
 }
 
+// === Загрузка в IzIPost ===
 $safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $keyValue);
-$fileName = date('Ymd_His') . '_' . $user['id'] . '_' . $safeKey . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-$targetPath = $uploadDir . '/' . $fileName;
+$subPath = 'photos/' . $keyType . '-' . $safeKey;
 
-if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
-    redirect_error('Не удалось сохранить файл');
+$cfile = new CURLFile($file['tmp_name'], $mime, $file['name']);
+
+$ch = curl_init('https://relaxdev.ru/api/v1/storage/upload');
+curl_setopt_array($ch, [
+    CURLOPT_POST => true,
+    CURLOPT_POSTFIELDS => [
+        'file' => $cfile,
+        'path' => $subPath,
+        'webp' => 'false', // сохраняем оригинал как есть
+    ],
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER => [
+        'Authorization: Bearer ' . $storageKey,
+    ],
+    CURLOPT_TIMEOUT => 60,
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlError = curl_error($ch);
+curl_close($ch);
+
+if ($curlError) {
+    redirect_error('Ошибка хранилища: ' . $curlError, $keyType, $keyValue);
 }
 
+$data = json_decode($response, true);
+if ($httpCode < 200 || $httpCode >= 300 || empty($data['url'])) {
+    redirect_error('Хранилище вернуло ошибку: ' . substr((string)$response, 0, 200), $keyType, $keyValue);
+}
+
+$fileUrl = $data['url'];
+$storagePath = $data['path'] ?? '';
+
+// === Сохранение в БД ===
 try {
     $pdo = get_db();
+
+    // Ключ (РА/VIN) в таблицу keys
+    $stmt = $pdo->prepare("INSERT INTO keys (key_type, key_value) VALUES (:kt, :kv) ON CONFLICT (key_type, key_value) DO NOTHING");
+    $stmt->execute([':kt' => $keyType, ':kv' => $keyValue]);
+
+    // Фото
     $stmt = $pdo->prepare('
-        INSERT INTO photos (user_id, key_type, key_value, photo_type, comment, file_path, file_size, mime_type)
-        VALUES (:user_id, :key_type, :key_value, :photo_type, :comment, :file_path, :file_size, :mime_type)
+        INSERT INTO photos
+            (user_id, key_type, key_value, photo_type, comment, file_path, storage_path, file_size, mime_type)
+        VALUES
+            (:user_id, :key_type, :key_value, :photo_type, :comment, :file_path, :storage_path, :file_size, :mime_type)
     ');
     $stmt->execute([
-        ':user_id'    => $user['id'],
-        ':key_type'   => $keyType,
-        ':key_value'  => $keyValue,
-        ':photo_type' => $photoType,
-        ':comment'    => $comment ?: null,
-        ':file_path'  => 'uploads/' . $fileName,
-        ':file_size'  => $file['size'],
-        ':mime_type'  => $mime,
+        ':user_id'      => $user['id'],
+        ':key_type'     => $keyType,
+        ':key_value'    => $keyValue,
+        ':photo_type'   => $photoType,
+        ':comment'      => $comment ?: null,
+        ':file_path'    => $fileUrl,
+        ':storage_path' => $storagePath,
+        ':file_size'    => $file['size'],
+        ':mime_type'    => $mime,
     ]);
 } catch (Throwable $e) {
-    @unlink($targetPath);
-    redirect_error('Ошибка базы: ' . $e->getMessage());
+    redirect_error('Ошибка базы: ' . $e->getMessage(), $keyType, $keyValue);
 }
 
-header('Location: gallery.php?uploaded=1');
+header('Location: gallery.php?key_type=' . urlencode($keyType) . '&key_value=' . urlencode($keyValue) . '&uploaded=1');
 exit;
