@@ -3,33 +3,31 @@ require __DIR__ . '/db.php';
 start_session();
 
 $error = '';
-$success = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = trim($_POST['email'] ?? '');
+    $login = trim($_POST['login'] ?? '');
+    $name = trim($_POST['name'] ?? '');
     $password = $_POST['password'] ?? '';
     $password2 = $_POST['password2'] ?? '';
-    $name = trim($_POST['name'] ?? '');
 
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Некорректный email';
-    } elseif (strlen($password) < 6) {
+    if (mb_strlen($login) < 3) {
+        $error = 'Логин должен быть не короче 3 символов';
+    } elseif (mb_strlen($password) < 6) {
         $error = 'Пароль должен быть не короче 6 символов';
     } elseif ($password !== $password2) {
         $error = 'Пароли не совпадают';
     } else {
         try {
             $pdo = get_db();
-            $stmt = $pdo->prepare('SELECT id FROM users WHERE email = :email');
-            $stmt->execute([':email' => $email]);
+            $stmt = $pdo->prepare('SELECT id FROM users WHERE email = :login');
+            $stmt->execute([':login' => $login]);
             if ($stmt->fetch()) {
-                $error = 'Такой email уже зарегистрирован';
+                $error = 'Такой логин уже занят';
             } else {
                 $hash = password_hash($password, PASSWORD_DEFAULT);
-                $stmt = $pdo->prepare('INSERT INTO users (email, password_hash, name) VALUES (:email, :hash, :name) RETURNING id');
-                $stmt->execute([':email' => $email, ':hash' => $hash, ':name' => $name]);
-                $userId = $stmt->fetchColumn();
-                $_SESSION['user_id'] = $userId;
+                $stmt = $pdo->prepare('INSERT INTO users (email, password_hash, name) VALUES (:login, :hash, :name) RETURNING id');
+                $stmt->execute([':login' => $login, ':hash' => $hash, ':name' => $name]);
+                $_SESSION['user_id'] = $stmt->fetchColumn();
                 header('Location: gallery.php');
                 exit;
             }
@@ -64,10 +62,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <h1>Регистрация</h1>
   <?php if ($error): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
   <form method="post">
+    <label>Логин (латиница или кириллица)</label>
+    <input type="text" name="login" required value="<?= e($_POST['login'] ?? '') ?>" placeholder="Например: Ivanov">
     <label>Имя (необязательно)</label>
-    <input type="text" name="name" value="<?= e($_POST['name'] ?? '') ?>">
-    <label>Email</label>
-    <input type="email" name="email" required value="<?= e($_POST['email'] ?? '') ?>">
+    <input type="text" name="name" value="<?= e($_POST['name'] ?? '') ?>" placeholder="Иван Иванов">
     <label>Пароль (минимум 6 символов)</label>
     <input type="password" name="password" required>
     <label>Повторите пароль</label>
