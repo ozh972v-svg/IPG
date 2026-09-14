@@ -1,7 +1,7 @@
 FROM php:8.3-fpm-alpine
 
-RUN apk add --no-cache nginx postgresql-dev libpq libzip-dev zip unzip \
-    && docker-php-ext-install pdo pdo_pgsql zip
+RUN apk add --no-cache nginx postgresql-dev libpq libzip-dev zip unzip curl-dev \
+    && docker-php-ext-install pdo pdo_pgsql zip curl
 
 WORKDIR /app
 COPY . /app
@@ -10,11 +10,12 @@ RUN mkdir -p /app/public/uploads \
     && chown -R www-data:www-data /app/public \
     && chmod -R 775 /app/public \
     && chmod -R 777 /app/public/uploads
-    
+
 RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
     && echo "post_max_size = 25M" >> /usr/local/etc/php/conf.d/uploads.ini \
     && echo "memory_limit = 256M" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "max_execution_time = 120" >> /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "max_execution_time = 120" >> /usr/local/etc/php/conf.d/uploads.ini
+
 RUN mkdir -p /etc/nginx/http.d \
     && printf '%s\n' \
     'server {' \
