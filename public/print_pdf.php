@@ -116,32 +116,42 @@ if (empty($photos)) {
 </div>
 
 <script>
-  window.addEventListener('load', function() {
-    let loaded = 0;
-    const imgs = document.querySelectorAll('.photo');
-    const total = imgs.length;
+  (function() {
+    let printed = false;
 
-    function tryPrint() {
-      if (loaded >= total) {
-        setTimeout(function() { window.print(); }, 500);
-      }
+    function doPrint() {
+      if (printed) return;
+      printed = true;
+      window.print();
     }
 
-    if (total === 0) {
-      setTimeout(function() { window.print(); }, 500);
-      return;
-    }
+    window.addEventListener('load', function() {
+      let loaded = 0;
+      const imgs = document.querySelectorAll('.photo');
+      const total = imgs.length;
 
-    imgs.forEach(function(img) {
-      if (img.complete) { loaded++; tryPrint(); }
-      else {
-        img.addEventListener('load', function() { loaded++; tryPrint(); });
-        img.addEventListener('error', function() { loaded++; tryPrint(); });
+      function tryPrint() {
+        if (loaded >= total) {
+          setTimeout(doPrint, 500);
+        }
       }
+
+      if (total === 0) {
+        setTimeout(doPrint, 500);
+        return;
+      }
+
+      imgs.forEach(function(img) {
+        if (img.complete) { loaded++; tryPrint(); }
+        else {
+          img.addEventListener('load', function() { loaded++; tryPrint(); });
+          img.addEventListener('error', function() { loaded++; tryPrint(); });
+        }
+      });
+
+      setTimeout(doPrint, 4000);
     });
-
-    setTimeout(function() { window.print(); }, 3000);
-  });
+  })();
 </script>
 </body>
 </html>
