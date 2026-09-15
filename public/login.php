@@ -3,7 +3,7 @@ require __DIR__ . '/db.php';
 start_session();
 
 if (current_user()) {
-    header('Location: gallery.php');
+    header('Location: index.html');
     exit;
 }
 
@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $user = $stmt->fetch();
             if ($user && password_verify($password, $user['password_hash'])) {
                 $_SESSION['user_id'] = $user['id'];
-                header('Location: gallery.php');
+                header('Location: index.html');
                 exit;
             } else {
                 $error = 'Неверный логин или пароль';
