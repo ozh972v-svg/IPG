@@ -126,11 +126,20 @@ function extract_description(SimpleXMLElement $sx): ?string {
     return $v === '' ? null : $v;
 }
 
+/**
+ * Формирует StartDate / EndDate с учётом таймзоны.
+ * Таймзону можно переопределить переменной ONEC_DATE_TZ (по умолчанию +05:00 — Екатеринбург).
+ */
+function date_params(): array {
+    $tz = getenv('ONEC_DATE_TZ') ?: '+05:00';
+    return [
+        'StartDate' => '2000-01-01T00:00:00' . $tz,
+        'EndDate'   => '2099-12-31T23:59:59' . $tz,
+    ];
+}
+
 function do_sync_works(PDO $pdo): array {
-    $xml = onec_call('UnloadWorkOperations', [
-        'StartDate' => '2000-01-01T00:00:00',
-        'EndDate'   => '2099-12-31T23:59:59',
-    ]);
+    $xml = onec_call('UnloadWorkOperations', date_params());
     check_soap_fault($xml);
     $sx = parse_soap($xml);
 
@@ -194,10 +203,7 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $xml = onec_call('UnloadNomenclature', [
-        'StartDate' => '2000-01-01T00:00:00',
-        'EndDate'   => '2099-12-31T23:59:59',
-    ]);
+    $xml = onec_call('UnloadNomenclature', date_params());
     check_soap_fault($xml);
     $sx = parse_soap($xml);
 
@@ -364,7 +370,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Используется операция выгрузки за весь период (2000 – 2099). Может занять до нескольких минут.
+      Используется выгрузка за весь период (2000 – 2099). Формат дат — с таймзоной.
     </p>
   </div>
 
@@ -418,6 +424,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
         <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '❌ не задана' ?></td></tr>
         <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '❌ не задана' ?></td></tr>
         <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (используется стандартный)' ?></td></tr>
+        <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (по умолчанию +05:00)' ?></td></tr>
       </tbody>
     </table>
   </div>
