@@ -183,6 +183,7 @@ function formatSize($bytes) {
       <h1>📸 <?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></h1>
       <div>
         <span class="user-info">👤 <b><?= e($user['name'] ?: $user['email']) ?></b></span>
+        <a href="search_vin.php" class="nav-link" style="color:#2563eb;">🔍 Поиск по VIN</a>
         <a href="profile.php" class="nav-link" style="color:#2563eb;">Профиль</a>
         <?php if ($user['is_admin']): ?>
           <a href="admin.php" class="nav-link" style="color:#dc2626;">🛡️ Админ</a>
