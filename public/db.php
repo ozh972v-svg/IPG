@@ -54,7 +54,7 @@ function current_user(): ?array {
     start_session();
     if (empty($_SESSION['user_id'])) return null;
 
-    $stmt = get_db()->prepare('SELECT id, email, name, created_at FROM users WHERE id = :id');
+    $stmt = get_db()->prepare('SELECT id, email, name, created_at, is_admin FROM users WHERE id = :id');
     $stmt->execute([':id' => $_SESSION['user_id']]);
     $u = $stmt->fetch();
     return $u ?: null;
