@@ -60,7 +60,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 45,  // было 180 — уменьшили, чтобы уложиться в nginx
+        CURLOPT_TIMEOUT        => 45,
         CURLOPT_CONNECTTIMEOUT => 15,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
@@ -113,7 +113,17 @@ function raw_preview(string $xml, int $len = 2000): string {
 }
 
 /**
+ * Обрезает строку до допустимой длины (в символах Unicode).
+ */
+function cut(?string $s, int $max): ?string {
+    if ($s === null) return null;
+    return mb_substr($s, 0, $max, 'UTF-8');
+}
+
+/**
  * Парсит ответ с элементами WorkOperation (внутри <WorkOperations>).
+ * Стратегия: находим все <Code>, для каждого берём окно и вытаскиваем поля.
+ * С защитой от мусора — код не длиннее 50 символов и начинается с буквы/цифры.
  */
 function parse_work_operations(string $xml): array {
     $items = [];
@@ -136,6 +146,9 @@ function parse_work_operations(string $xml): array {
     for ($i = 0; $i < $n; $i++) {
         $code = trim(html_entity_decode($codes[$i][0], ENT_XML1, 'UTF-8'));
         if ($code === '') continue;
+        // Защита от мусора: код должен быть коротким и начинаться с буквы/цифры
+        if (mb_strlen($code, 'UTF-8') > 50) continue;
+        if (!preg_match('/^[A-Za-zА-Яа-я0-9]/u', $code)) continue;
 
         $startPos = $positions[$i][1];
         $endPos   = ($i + 1 < $n) ? $positions[$i + 1][1] : min($containerEnd, strlen($xml));
@@ -161,18 +174,18 @@ function parse_work_operations(string $xml): array {
         $parentCode = null;
         if (preg_match('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $window, $pm)) {
             $pc = xml_tag($pm[1], 'Code');
-            if ($pc !== null && $pc !== $code) $parentCode = $pc;
+            if ($pc !== null && $pc !== $code && mb_strlen($pc, 'UTF-8') <= 50) $parentCode = $pc;
         }
 
         $items[$code] = [
-            'code'           => $code,
-            'parent_code'    => $parentCode,
+            'code'           => cut($code, 50),
+            'parent_code'    => cut($parentCode, 50),
             'it_is_group'    => $itIsGroup,
-            'name'           => $getLast('Name'),
-            'operation_code' => $getLast('OperationCode'),
-            'name_work'      => $getLast('NameWork'),
-            'eng_name'       => $getLast('EngName'),
-            'description'    => $getLast('Description'),
+            'name'           => cut($getLast('Name'), 250),
+            'operation_code' => cut($getLast('OperationCode'), 50),
+            'name_work'      => cut($getLast('NameWork'), 250),
+            'eng_name'       => cut($getLast('EngName'), 250),
+            'description'    => cut($getLast('Description'), 5000),
             'guard_work'     => $guardWork,
             'fact_work'      => $factWork,
             'deleted'        => $deleted,
@@ -188,7 +201,6 @@ function date_tz(): string {
 
 /**
  * Возвращает описание одного диагностического варианта по номеру.
- * Каждый вариант — ОДИН запрос (чтобы уложиться в nginx-таймаут).
  */
 function diag_variant(int $n): ?array {
     $tz  = date_tz();
@@ -197,17 +209,17 @@ function diag_variant(int $n): ?array {
 
     $variants = [
         1 => [
-            'label' => 'UnloadWorkOperations с nillable (OperationCode=null, даты с tz)',
+            'label' => 'UnloadWorkOperations, OperationCode=null, даты с tz',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
         ],
         2 => [
-            'label' => 'UnloadWorkOperations с nillable (даты без tz)',
+            'label' => 'UnloadWorkOperations, OperationCode=null, даты без tz',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
         ],
         3 => [
-            'label' => 'UnloadWorkOperations все null',
+            'label' => 'UnloadWorkOperations, все null',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => null, 'EndDate' => null],
         ],
@@ -368,7 +380,7 @@ if ($running && $type) {
     }
 }
 
-// Результат одного диагностического варианта
+// Один диагностический вариант
 $diagResult = null;
 if ($diagN > 0) {
     $cfg = diag_variant($diagN);
