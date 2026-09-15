@@ -12,9 +12,10 @@ $pdo  = get_db();
 $type = $_GET['type'] ?? '';
 if (!in_array($type, ['works', 'nomenclature', 'all'], true)) $type = '';
 
-$running = !empty($_GET['run']);
-$messages = [];
-$error = null;
+$running   = !empty($_GET['run']);
+$diagnose  = !empty($_GET['diagnose']);
+$messages  = [];
+$error     = null;
 
 function onec_call(string $operation, array $params = []): string {
     $login    = getenv('ONEC_SOAP_LOGIN')    ?: getenv('ONEC_LOGIN');
@@ -23,8 +24,6 @@ function onec_call(string $operation, array $params = []): string {
         throw new RuntimeException('Не заданы ONEC_LOGIN / ONEC_PASSWORD');
     }
 
-    // ВАЖНО: POST идёт на /ws/Zakaz (имя сервиса), а не на /ws/ws2.1cws
-    // (последний — только для просмотра WSDL браузером).
     $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
     $ns = 'http://1c.kamaz.ru/zakaz';
 
@@ -48,7 +47,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 180,
+        CURLOPT_TIMEOUT        => 120,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_HTTPHEADER     => [
@@ -63,15 +62,12 @@ function onec_call(string $operation, array $params = []): string {
 
     if ($curlErr) throw new RuntimeException('Ошибка соединения: ' . $curlErr);
     if ($httpCode === 401 || $httpCode === 402) {
-        throw new RuntimeException(
-            'Неверный логин/пароль для POST на ' . $endpoint . ' (HTTP ' . $httpCode . '). '
-            . 'Ответ: ' . substr(preg_replace('/\s+/', ' ', (string)$response), 0, 500)
-        );
+        throw new RuntimeException('Неверный логин/пароль (HTTP ' . $httpCode . '): ' . substr(preg_replace('/\s+/', ' ', (string)$response), 0, 300));
     }
     if ($httpCode === 403) throw new RuntimeException('Нет прав на операцию ' . $operation);
     if ($httpCode !== 200) {
         $preview = substr(preg_replace('/\s+/', ' ', trim((string)$response)), 0, 700);
-        throw new RuntimeException('1С вернул код ' . $httpCode . ' (' . $endpoint . '). Ответ: ' . $preview);
+        throw new RuntimeException('1С вернул код ' . $httpCode . '. Ответ: ' . $preview);
     }
     return (string)$response;
 }
@@ -138,6 +134,71 @@ function date_params(): array {
 function raw_preview(string $xml): string {
     $v = preg_replace('/\s+/', ' ', $xml);
     return substr(trim($v), 0, 400);
+}
+
+/**
+ * Диагностика: перебирает разные варианты вызова UnloadWorkOperations,
+ * чтобы найти тот, который возвращает данные.
+ */
+function diagnose_works(PDO $pdo): array {
+    $tz = date_tz();
+    $inn = getenv('ONEC_INN') ?: '';
+    $kpp = getenv('ONEC_KPP') ?: '';
+
+    $variants = [
+        'V1: OperationCode="", даты xs:date с tz' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
+        ],
+        'V2: без OperationCode, даты xs:date с tz' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
+        ],
+        'V3: только OperationCode=""' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => ''],
+        ],
+        'V4: даты xs:dateTime с tz' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01T00:00:00' . $tz, 'EndDate' => '2099-12-31T23:59:59' . $tz],
+        ],
+        'V5: даты без tz' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
+        ],
+        'V6: узкий период (2015-2030)' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => '', 'StartDate' => '2015-01-01' . $tz, 'EndDate' => '2030-12-31' . $tz],
+        ],
+        'V7: UnloadWorkOperationsUpdates c INN/KPP' => [
+            'op' => 'UnloadWorkOperationsUpdates',
+            'params' => ['INN' => $inn, 'KPP' => $kpp],
+        ],
+        'V8: UnloadWorkOperationsUpdates без параметров' => [
+            'op' => 'UnloadWorkOperationsUpdates',
+            'params' => [],
+        ],
+    ];
+
+    $results = [];
+    foreach ($variants as $label => $cfg) {
+        $entry = ['label' => $label, 'op' => $cfg['op'], 'params' => $cfg['params']];
+        try {
+            $xml = onec_call($cfg['op'], $cfg['params']);
+            $entry['http']    = 200;
+            $entry['desc']    = xml_tag($xml, 'Description');
+            $blocks           = xml_blocks($xml, 'WorkOperation');
+            $entry['count']   = count($blocks);
+            $entry['preview'] = substr(preg_replace('/\s+/', ' ', $xml), 0, 500);
+            if ($entry['count'] > 0) {
+                $entry['sample'] = substr(preg_replace('/\s+/', ' ', $blocks[0]), 0, 800);
+            }
+        } catch (Throwable $e) {
+            $entry['error'] = $e->getMessage();
+        }
+        $results[] = $entry;
+    }
+    return $results;
 }
 
 function do_sync_works(PDO $pdo): array {
@@ -332,6 +393,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .badge-blue { background:#eff6ff; color:#2563eb; }
   code { background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; }
   .err-cell { color:#555; font-size:11px; word-break:break-all; max-width:480px; }
+  .diag-item { border:1.5px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:12px; }
 </style>
 </head>
 <body>
@@ -353,6 +415,45 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <div class="alert alert-success">✅ <?= e($m) ?></div>
   <?php endforeach; ?>
 
+  <?php if ($diagnose): ?>
+    <?php $diagResults = diagnose_works($pdo); ?>
+    <div class="card">
+      <h2>🔬 Результаты диагностики</h2>
+      <?php foreach ($diagResults as $i => $r): ?>
+        <div class="diag-item">
+          <div style="font-weight:700;margin-bottom:6px;">
+            <?= ($i + 1) ?>. <?= e($r['label']) ?>
+          </div>
+          <div style="font-size:12px;color:#666;margin-bottom:6px;">
+            Метод: <code><?= e($r['op']) ?></code> ·
+            Параметры: <code><?= e(json_encode($r['params'], JSON_UNESCAPED_UNICODE)) ?></code>
+          </div>
+          <?php if (isset($r['error'])): ?>
+            <div style="background:#fef2f2;color:#dc2626;padding:8px;border-radius:6px;font-size:12px;word-break:break-all;">
+              ❌ Ошибка: <?= e(substr($r['error'], 0, 500)) ?>
+            </div>
+          <?php else: ?>
+            <div style="background:<?= $r['count'] > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:8px;border-radius:6px;font-size:13px;font-weight:600;">
+              ✅ HTTP 200 · Найдено записей: <?= (int)$r['count'] ?>
+              <?php if ($r['desc']): ?> · Описание: <?= e($r['desc']) ?><?php endif; ?>
+            </div>
+            <?php if (!empty($r['sample'])): ?>
+              <details style="margin-top:8px;">
+                <summary style="cursor:pointer;color:#2563eb;font-size:12px;">Пример первой записи</summary>
+                <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;white-space:pre-wrap;"><?= e($r['sample']) ?></pre>
+              </details>
+            <?php endif; ?>
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 500 символов)</summary>
+              <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:150px;white-space:pre-wrap;"><?= e($r['preview']) ?></pre>
+            </details>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+      <a href="sync.php" class="btn btn-secondary">← Назад</a>
+    </div>
+  <?php endif; ?>
+
   <div class="card">
     <h2>Что синхронизировать</h2>
     <div class="btn-row">
@@ -368,9 +469,13 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
          onclick="return confirm('Обновить всё?')">
         🔄 Обновить всё
       </a>
+      <a href="sync.php?diagnose=1" class="btn" style="background:#b45309;"
+         onclick="return confirm('Перебрать 8 вариантов вызова 1С? Займёт ~30 секунд.')">
+        🔬 Диагностика (перебрать варианты)
+      </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      POST идёт на <code>/ws/Zakaz</code> (имя сервиса из WSDL), формат дат — <code>xs:date</code> с таймзоной.
+      POST идёт на <code>/ws/Zakaz</code>. Диагностика покажет, какой набор параметров даёт результат.
     </p>
   </div>
 
