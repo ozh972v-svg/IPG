@@ -1,13 +1,11 @@
 <?php
 /**
  * Фоновый воркер синхронизации с 1С:ГОА.
- * Запускается из sync.php через exec('php sync_worker.php works &').
- * Не имеет HTML-вывода. Результат пишет в sync_log.
  */
 
 if (php_sapi_name() !== 'cli') {
     http_response_code(403);
-    exit('Этот скрипт запускается только из командной строки');
+    exit('CLI only');
 }
 
 require __DIR__ . '/db.php';
@@ -18,7 +16,6 @@ if (!in_array($type, ['works', 'nomenclature', 'all'], true)) {
     exit(1);
 }
 
-// Разрешаем долгую работу
 set_time_limit(0);
 ini_set('memory_limit', '512M');
 
@@ -30,47 +27,34 @@ function onec_call(string $operation, array $params = []): string {
     $login    = getenv('ONEC_SOAP_LOGIN')    ?: getenv('ONEC_LOGIN');
     $password = getenv('ONEC_SOAP_PASSWORD') ?: getenv('ONEC_PASSWORD');
     if (!$login || !$password) throw new RuntimeException('Не заданы ONEC_LOGIN / ONEC_PASSWORD');
-
     $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
-    $ns  = 'http://1c.kamaz.ru/zakaz';
+    $ns = 'http://1c.kamaz.ru/zakaz';
     $xsi = 'http://www.w3.org/2001/XMLSchema-instance';
-
     $paramsXml = '';
     foreach ($params as $k => $v) {
         $paramsXml .= ($v === null)
             ? '<zak:' . $k . ' xsi:nil="true"/>'
             : '<zak:' . $k . '>' . htmlspecialchars((string)$v, ENT_XML1) . '</zak:' . $k . '>';
     }
-
     $envelope = '<?xml version="1.0" encoding="UTF-8"?>'
         . '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:zak="' . $ns . '" xmlns:xsi="' . $xsi . '">'
         . '<soapenv:Header/><soapenv:Body><zak:' . $operation . '>' . $paramsXml . '</zak:' . $operation . '></soapenv:Body></soapenv:Envelope>';
-
     $ch = curl_init($endpoint);
     curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $envelope,
-        CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
-        CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 300,
-        CURLOPT_CONNECTTIMEOUT => 20,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
-        CURLOPT_HTTPHEADER     => [
-            'Content-Type: text/xml; charset=utf-8',
-            'SOAPAction: "' . soap_action($operation) . '"',
-        ],
+        CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => $envelope,
+        CURLOPT_HTTPAUTH => CURLAUTH_BASIC, CURLOPT_USERPWD => $login . ':' . $password,
+        CURLOPT_TIMEOUT => 300, CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_HTTPHEADER => ['Content-Type: text/xml; charset=utf-8', 'SOAPAction: "' . soap_action($operation) . '"'],
     ]);
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $curlErr  = curl_error($ch);
     curl_close($ch);
-
     if ($curlErr) throw new RuntimeException('Ошибка соединения: ' . $curlErr);
     if ($httpCode === 401 || $httpCode === 402) throw new RuntimeException('Неверный логин/пароль (HTTP ' . $httpCode . ')');
     if ($httpCode === 403) throw new RuntimeException('Нет прав на операцию ' . $operation);
-    if ($httpCode !== 200) throw new RuntimeException('1С вернул код ' . $httpCode . '. Ответ: ' . substr(preg_replace('/\s+/', ' ', (string)$response), 0, 400));
+    if ($httpCode !== 200) throw new RuntimeException('1С вернул код ' . $httpCode);
     return (string)$response;
 }
 
@@ -124,7 +108,7 @@ function parse_works_simplexml(string $xml): array {
                 return null;
             };
 
-            $items[$code] = [
+            $items[] = [
                 'code'           => cut($code, 50),
                 'parent_code'    => cut($parentCode, 50),
                 'it_is_group'    => strtolower($get('ItIsGroup') ?? 'false') === 'true',
@@ -139,7 +123,7 @@ function parse_works_simplexml(string $xml): array {
             ];
         }
     }
-    return array_values($items);
+    return $items;
 }
 
 function parse_works_regex(string $xml): array {
@@ -166,7 +150,7 @@ function parse_works_regex(string $xml): array {
             return null;
         };
 
-        $items[$code] = [
+        $items[] = [
             'code' => cut($code, 50), 'parent_code' => null,
             'it_is_group' => strtolower($get('ItIsGroup') ?? 'false') === 'true',
             'name' => cut($get('Name'), 250), 'operation_code' => cut($get('OperationCode'), 50),
@@ -177,7 +161,7 @@ function parse_works_regex(string $xml): array {
             'deleted'    => strtolower($get('Deleted')   ?? 'false') === 'true',
         ];
     }
-    return array_values($items);
+    return $items;
 }
 
 function parse_works(string $xml, ?string &$method = null): array {
@@ -196,32 +180,64 @@ function do_sync_works(PDO $pdo): array {
     ]);
     $method = null;
     $parsed = parse_works($xml, $method);
-    if (count($parsed) === 0) {
-        return ['total' => 0, 'message' => 'Записей 0. Длина: ' . strlen($xml) . ' байт. Парсер: ' . $method];
+
+    // === ФИЛЬТРАЦИЯ ===
+    $filtered = [];
+    $seenOpCodes = [];      // коды операций (для дедупликации работ)
+    $seenGroupCodes = [];   // коды групп
+    $skippedDeleted = 0;
+    $skippedDup = 0;
+
+    foreach ($parsed as $p) {
+        // 1) Пропускаем удалённые
+        if (!empty($p['deleted'])) { $skippedDeleted++; continue; }
+
+        // 2) Группы — сохраняем все (уникальные по code)
+        if ($p['it_is_group']) {
+            if (isset($seenGroupCodes[$p['code']])) continue;
+            $seenGroupCodes[$p['code']] = true;
+            $filtered[] = $p;
+            continue;
+        }
+
+        // 3) Работы: дедупликация по operation_code (если он есть)
+        $opc = $p['operation_code'] ?? '';
+        if ($opc !== '') {
+            if (isset($seenOpCodes[$opc])) { $skippedDup++; continue; }
+            $seenOpCodes[$opc] = true;
+        }
+        $filtered[] = $p;
     }
+
+    if (count($filtered) === 0) {
+        return ['total' => 0, 'message' => 'Записей 0. Парсер: ' . $method];
+    }
+
+    // Полная замена справочника
+    $pdo->exec("TRUNCATE work_operations");
 
     $stmt = $pdo->prepare("
         INSERT INTO work_operations (code, parent_code, it_is_group, name, operation_code, name_work, eng_name, description, guard_work, fact_work, deleted, updated_at)
         VALUES (:code, :parent_code, :it_is_group, :name, :operation_code, :name_work, :eng_name, :description, :guard_work, :fact_work, :deleted, NOW())
-        ON CONFLICT (code) DO UPDATE SET
-            parent_code=EXCLUDED.parent_code, it_is_group=EXCLUDED.it_is_group, name=EXCLUDED.name,
-            operation_code=EXCLUDED.operation_code, name_work=EXCLUDED.name_work, eng_name=EXCLUDED.eng_name,
-            description=EXCLUDED.description, guard_work=EXCLUDED.guard_work, fact_work=EXCLUDED.fact_work,
-            deleted=EXCLUDED.deleted, updated_at=NOW()
     ");
     $total = 0;
-    foreach ($parsed as $p) {
+    foreach ($filtered as $p) {
         $stmt->execute([
             ':code' => $p['code'], ':parent_code' => $p['parent_code'],
             ':it_is_group' => $p['it_is_group'] ? 1 : 0, ':name' => $p['name'],
             ':operation_code' => $p['operation_code'], ':name_work' => $p['name_work'],
             ':eng_name' => $p['eng_name'], ':description' => $p['description'],
             ':guard_work' => $p['guard_work'] ? 1 : 0, ':fact_work' => $p['fact_work'] ? 1 : 0,
-            ':deleted' => $p['deleted'] ? 1 : 0,
+            ':deleted' => 0,
         ]);
         $total++;
     }
-    return ['total' => $total, 'message' => 'Парсер: ' . $method];
+    return [
+        'total' => $total,
+        'message' => 'Парсер: ' . $method
+            . '. Удалено: ' . $skippedDeleted
+            . '. Дублей отсеяно: ' . $skippedDup,
+    ];
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
@@ -231,6 +247,7 @@ function do_sync_nomenclature(PDO $pdo): array {
     $method = null;
     $parsed = parse_works($xml, $method);
     if (count($parsed) === 0) return ['total' => 0, 'message' => 'Записей 0. Парсер: ' . $method];
+
     $stmt = $pdo->prepare("
         INSERT INTO nomenclatures (code, name, full_name, eng_name, base_measure, code_1c, parent, deleted, updated_at)
         VALUES (:code, :name, :full_name, :eng_name, :base_measure, :code_1c, :parent, :deleted, NOW())
@@ -262,16 +279,11 @@ function run_sync(PDO $pdo, string $t, callable $fn): array {
     }
 }
 
-// === Основная работа ===
 $pdo = get_db();
-
-if ($type === 'works') {
-    run_sync($pdo, 'works', 'do_sync_works');
-} elseif ($type === 'nomenclature') {
-    run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
-} else {
+if ($type === 'works') run_sync($pdo, 'works', 'do_sync_works');
+elseif ($type === 'nomenclature') run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
+else {
     run_sync($pdo, 'works', 'do_sync_works');
     run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
 }
-
 exit(0);
