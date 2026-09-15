@@ -10,7 +10,7 @@
 
 set_time_limit(0);
 ignore_user_abort(true);
-ini_set('memory_limit', '1024M');  // увеличили с 512M
+ini_set('memory_limit', '1024M');
 
 require __DIR__ . '/db.php';
 start_session();
@@ -84,19 +84,6 @@ function date_tz(): string { return getenv('ONEC_DATE_TZ') ?: '+05:00'; }
 /**
  * SAX-парсер XML — читает потоком, не строит дерево в памяти.
  * Возвращает массив записей из <WorkOperations>/*.
- *
- * Структура ответа 1С:
- *   <WorkOperations>
- *     <Parent>                ← одна запись
- *       <ItIsGroup>true</ItIsGroup>
- *       <Code>10</Code>
- *       <Name>...</Name>
- *       <OperationCode>...</OperationCode>
- *       <GuardWork>false</GuardWork>
- *       ...
- *     </Parent>
- *     <Parent>...</Parent>
- *   </WorkOperations>
  */
 function parse_works_sax(string $xml, ?string &$err = null): array {
     if (!function_exists('xml_parser_create')) {
@@ -104,7 +91,6 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
         return [];
     }
 
-    // Убираем BOM и XML-декларацию
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
     $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
 
@@ -112,25 +98,24 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
     xml_parser_set_option($parser, XML_OPTION_CASE_FOLDING, 0);
     xml_parser_set_option($parser, XML_OPTION_SKIP_WHITE, 1);
 
-    $stack = [];       // стек тегов (только имена, без namespace-префиксов)
-    $items = [];       // накопленные записи
-    $current = null;   // текущая запись
-    $currentDepth = 0; // глубина записи (относительно корня)
+    $stack = [];
+    $items = [];
+    $current = null;
+    $currentDepth = 0;
 
-    // Убираем namespace-префиксы (m:, zak: и т.п.) — берём local-name
     $local = function(string $name): string {
         $pos = strrpos($name, ':');
         return $pos !== false ? substr($name, $pos + 1) : $name;
     };
 
+    // Открывающие и закрывающие теги
     xml_set_element_handler(
         $parser,
-        function($parser, $name, $attrs) use (&$stack, &$items, &$current, &$currentDepth, $local) {
+        function($parser, $name, $attrs) use (&$stack, &$current, &$currentDepth, $local) {
             $localName = $local($name);
             $stack[] = $localName;
             $depth = count($stack);
 
-            // Начало записи: тег на 2-м уровне, родитель в стеке — WorkOperations
             if ($current === null
                 && $depth === 2
                 && isset($stack[0])
@@ -144,28 +129,30 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
             $localName = $local($name);
             $depth = count($stack);
 
-            // Конец записи
-            if ($current !== null && $depth === $currentDepth && $localName === $stack[$depth - 1]) {
-                // Проверяем, что закрывается именно тег-запись (Parent/WorkOperation)
-                if ($localName === 'Parent' || $localName === 'WorkOperation') {
-                    // Нормализуем поля — обрезаем пробелы и пустые значения
-                    foreach ($current as $k => $v) {
-                        $v = trim((string)$v);
-                        $current[$k] = $v === '' ? null : $v;
-                    }
-                    if (!empty($current['Code'])) {
-                        $items[] = $current;
-                    }
-                    $current = null;
+            if ($current !== null
+                && $depth === $currentDepth
+                && ($localName === 'Parent' || $localName === 'WorkOperation')
+            ) {
+                foreach ($current as $k => $v) {
+                    $v = trim((string)$v);
+                    $current[$k] = $v === '' ? null : $v;
                 }
+                if (!empty($current['Code'])) {
+                    $items[] = $current;
+                }
+                $current = null;
             }
 
             array_pop($stack);
-        },
+        }
+    );
+
+    // Текст внутри тегов — отдельный обработчик
+    xml_set_character_data_handler(
+        $parser,
         function($parser, $data) use (&$stack, &$current, &$currentDepth) {
             if ($current === null) return;
             $depth = count($stack);
-            // Текст относится к полю записи, если глубина = глубине записи + 1
             if ($depth === $currentDepth + 1 && $depth >= 1) {
                 $fieldName = $stack[$depth - 1];
                 if (!array_key_exists($fieldName, $current)) {
@@ -183,7 +170,6 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
     }
     xml_parser_free($parser);
 
-    // Нормализуем записи
     $result = [];
     foreach ($items as $item) {
         $code = trim((string)($item['Code'] ?? ''));
@@ -191,7 +177,7 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
 
         $result[] = [
             'code'           => cut($code, 50),
-            'parent_code'    => null,  // вычислим позже
+            'parent_code'    => null,
             'it_is_group'    => strtolower(trim((string)($item['ItIsGroup'] ?? 'false'))) === 'true',
             'name'           => cut(trim((string)($item['Name'] ?? '')) ?: null, 250),
             'operation_code' => cut(trim((string)($item['OperationCode'] ?? '')) ?: null, 50),
@@ -208,8 +194,6 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
 
 /**
  * Вычисляет parent_code для групп и работ.
- * Группы: 10 → корень, 1002 → 10, 1000 → 10
- * Работы: П10-017 → группа 10, 00-000 → группа 00
  */
 function compute_parents(array $items): array {
     $groupCodes = [];
