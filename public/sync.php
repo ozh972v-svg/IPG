@@ -76,7 +76,7 @@ function onec_call(string $operation, array $params = []): string {
  * Проверяет SOAP Fault.
  */
 function check_soap_fault(string $xml): void {
-    if (stripos($xml, 'Fault') !== false && stripos($xml, '<faultcode') !== false) {
+    if (stripos($xml, '<faultcode') !== false || stripos($xml, ':Fault>') !== false) {
         if (preg_match('/<faultstring[^>]*>(.*?)<\/faultstring>/is', $xml, $m)) {
             throw new RuntimeException('1С: ' . trim($m[1]));
         }
@@ -85,21 +85,40 @@ function check_soap_fault(string $xml): void {
 }
 
 /**
- * Разбирает SOAP-ответ.
+ * Разбирает SOAP-ответ. Двумя способами: SimpleXML, потом DOMDocument как fallback.
  */
 function parse_soap(string $xml): SimpleXMLElement {
+    // Убираем BOM и лишние пробелы
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
-    $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
+    $xml = trim($xml);
 
     $prev = libxml_use_internal_errors(true);
     libxml_clear_errors();
-    $sx = simplexml_load_string($xml);
+
+    // Первая попытка — SimpleXML
+    $sx = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
     $errs = libxml_get_errors();
     libxml_clear_errors();
+
+    // Вторая попытка — через DOMDocument
+    if (!$sx) {
+        $doc = new DOMDocument();
+        $loaded = @$doc->loadXML($xml, LIBXML_NONET | LIBXML_NOCDATA);
+        if ($loaded) {
+            $sx = simplexml_import_dom($doc);
+        }
+    }
+
+    // Третья попытка — удаляем XML-декларацию и пробуем ещё раз
+    if (!$sx) {
+        $xmlNoDecl = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
+        $sx = simplexml_load_string(trim($xmlNoDecl), 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
+    }
+
     libxml_use_internal_errors($prev);
 
     if (!$sx) {
-        $preview = substr(preg_replace('/\s+/', ' ', trim($xml)), 0, 700);
+        $preview = substr(preg_replace('/\s+/', ' ', $xml), 0, 700);
         $errMsg  = $errs ? (' | libxml: ' . trim($errs[0]->message)) : '';
         throw new RuntimeException('Не удалось разобрать ответ 1С.' . $errMsg . ' Ответ: ' . $preview);
     }
@@ -117,7 +136,7 @@ function first_text(SimpleXMLElement $el, string $tag): ?string {
 }
 
 /**
- * Достаёт Description из ответа.
+ * Достаёт Description из ответа (может быть "Операции не найдены" и т.п.).
  */
 function extract_description(SimpleXMLElement $sx): ?string {
     $nodes = $sx->xpath('//*[local-name()="Description"]');
@@ -133,11 +152,17 @@ function date_tz(): string {
     return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
+/**
+ * Возвращает строку-превью для лога — без тегов, до 500 символов.
+ */
+function raw_preview(string $xml): string {
+    $v = preg_replace('/\s+/', ' ', $xml);
+    return substr(trim($v), 0, 500);
+}
+
 function do_sync_works(PDO $pdo): array {
     $tz = date_tz();
 
-    // Пробуем: OperationCode (пустой) + StartDate + EndDate.
-    // По документации эти три параметра — обязательные.
     $xml = onec_call('UnloadWorkOperations', [
         'OperationCode' => '',
         'StartDate'     => '2000-01-01T00:00:00' . $tz,
@@ -154,7 +179,8 @@ function do_sync_works(PDO $pdo): array {
     if (count($nodes) === 0) {
         return [
             'total'   => 0,
-            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)'),
+            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
+                       . ' | Ответ 1С: ' . raw_preview($xml),
         ];
     }
 
@@ -223,7 +249,8 @@ function do_sync_nomenclature(PDO $pdo): array {
     if (count($nodes) === 0) {
         return [
             'total'   => 0,
-            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)'),
+            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
+                       . ' | Ответ 1С: ' . raw_preview($xml),
         ];
     }
 
