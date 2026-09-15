@@ -1,12 +1,11 @@
 <?php
 /**
  * HTTP-воркер синхронизации с 1С:ГОА.
- * Отдаёт клиенту 1x1 GIF сразу (fastcgi_finish_request), продолжает работу в фоне.
+ * Отдаёт клиенту 1x1 GIF сразу (fastcgi_finish_request), продолжает в фоне.
+ *
  * Режимы:
- *   ?type=works          — обычная синхронизация справочника работ
- *   ?type=nomenclature   — синхронизация номенклатуры
- *   ?type=all            — обе
- *   ?dump=works          — СОХРАНИТЬ сырой XML от 1С в файл (для отладки)
+ *   ?type=works|nomenclature|all  — синхронизация
+ *   ?dry=works                    — БЕЗ записи в БД, только показать, что распарсилось
  */
 
 set_time_limit(0);
@@ -18,54 +17,27 @@ start_session();
 
 $user = current_user();
 $type = $_GET['type'] ?? '';
-$dump = $_GET['dump'] ?? '';
+$dry  = $_GET['dry'] ?? '';
 
 $GIF = base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
-header('Content-Type: image/gif');
-header('Content-Length: ' . strlen($GIF));
-header('Cache-Control: no-store');
-header('Connection: close');
 
-if (function_exists('fastcgi_finish_request')) {
-    echo $GIF;
-    fastcgi_finish_request();
-} else {
-    echo $GIF;
-    @ob_end_flush();
-    @flush();
-}
-
-// === Дальше без клиента ===
-if (!$user || !$user['is_admin']) exit;
-
-// ============ РЕЖИМ ДАМПА ============
-if ($dump === 'works') {
-    try {
-        $xml = onec_call('UnloadWorkOperations', [
-            'OperationCode' => null,
-            'StartDate'     => '2000-01-01' . date_tz(),
-            'EndDate'       => '2099-12-31' . date_tz(),
-        ]);
-        $dir = __DIR__ . '/uploads';
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        @file_put_contents($dir . '/1c_response_works.xml', $xml);
-        @file_put_contents($dir . '/1c_response_works.txt', $xml); // дубль как .txt
-    } catch (Throwable $e) {
-        $dir = __DIR__ . '/uploads';
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        @file_put_contents($dir . '/1c_response_works.txt', 'ОШИБКА: ' . $e->getMessage());
+// Режим dry — отдаём HTML, а не GIF
+if ($dry === '') {
+    header('Content-Type: image/gif');
+    header('Content-Length: ' . strlen($GIF));
+    header('Cache-Control: no-store');
+    header('Connection: close');
+    if (function_exists('fastcgi_finish_request')) {
+        echo $GIF;
+        fastcgi_finish_request();
+    } else {
+        echo $GIF;
+        @ob_end_flush();
+        @flush();
     }
-    exit(0);
 }
 
-if (!in_array($type, ['works', 'nomenclature', 'all'], true)) exit;
-
-// Защита от параллельных запусков
-try {
-    $pdoChk = get_db();
-    $stmt = $pdoChk->query("SELECT COUNT(*) FROM sync_log WHERE status='running' AND started_at > NOW() - INTERVAL '15 minutes'");
-    if ((int)$stmt->fetchColumn() > 0) exit;
-} catch (Throwable $e) { /* ignore */ }
+if (!$user || !$user['is_admin']) exit;
 
 function soap_action(string $op): string {
     return 'http://1c.kamaz.ru/zakaz#Zakaz:' . $op;
@@ -76,7 +48,7 @@ function onec_call(string $operation, array $params = []): string {
     $password = getenv('ONEC_SOAP_PASSWORD') ?: getenv('ONEC_PASSWORD');
     if (!$login || !$password) throw new RuntimeException('Не заданы ONEC_LOGIN / ONEC_PASSWORD');
     $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
-    $ns  = 'http://1c.kamaz.ru/zakaz';
+    $ns = 'http://1c.kamaz.ru/zakaz';
     $xsi = 'http://www.w3.org/2001/XMLSchema-instance';
     $paramsXml = '';
     foreach ($params as $k => $v) {
@@ -114,118 +86,196 @@ function cut(?string $s, int $max): ?string {
 function date_tz(): string { return getenv('ONEC_DATE_TZ') ?: '+05:00'; }
 
 /**
- * SAX-парсер. Самый надёжный способ пройти по XML и собрать данные.
- * Работает на любом XML, включая очень вложенный.
+ * Парсер через SimpleXML с использованием XPath (local-name игнорирует namespace).
  */
-function parse_works_sax(string $xml): array {
-    // Убираем BOM и xml-декларацию (SAX их не любит в виде строки)
+function parse_works_simplexml(string $xml): array {
+    if (!function_exists('simplexml_load_string')) return [];
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
-    $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
+    $prev = libxml_use_internal_errors(true);
+    $sx = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NOCDATA | LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    if (!$sx) return [];
 
-    $parser = xml_parser_create('UTF-8');
-    xml_parser_set_option($parser, XML_OPTION_CASE_FOLDING, 0);
-    xml_parser_set_option($parser, XML_OPTION_SKIP_WHITE, 1);
+    $containers = $sx->xpath('//*[local-name()="WorkOperations"]');
+    if (!$containers) return [];
 
     $items = [];
-    $current = null;
-    $tagStack = [];
-    $currentText = '';
+    foreach ($containers as $container) {
+        // Прямые дети через xpath (игнорирует namespace)
+        $children = $container->xpath('./*');
+        if (!$children) continue;
 
-    xml_set_element_handler($parser,
-        function($parser, $name, $attrs) use (&$items, &$current, &$tagStack, &$currentText) {
-            $tagStack[] = $name;
-            $currentText = '';
+        foreach ($children as $n) {
+            $get = function(string $tag) use ($n) {
+                $found = $n->xpath('./*[local-name()="' . $tag . '"]');
+                if (!$found || !isset($found[0])) return null;
+                $v = trim((string)$found[0]);
+                return $v === '' ? null : $v;
+            };
 
-            // Начало новой работы/группы — тег WorkOperations > (Parent | WorkOperation)
-            // Структура: <WorkOperations><Parent>...</Parent><Parent>...</Parent></WorkOperations>
-            // Где "Parent" — это не родитель, а тег самого элемента.
-            $depth = count($tagStack);
-            if ($depth >= 2) {
-                $parentTag = $tagStack[$depth - 2] ?? '';
-                $tag = $name;
-                // Ищем прямых детей WorkOperations, имя не важно — берём любой тег на 2-м уровне под WorkOperations
-                if ($parentTag === 'WorkOperations') {
-                    // Начинаем новый item
-                    $current = ['_tag' => $tag];
+            $code = $get('Code');
+            if ($code === null) continue;
+
+            // Вложенный <Parent><Code>...</Code></Parent> — если есть
+            $parentCode = null;
+            $parentNodes = $n->xpath('./*[local-name()="Parent"]');
+            if ($parentNodes && isset($parentNodes[0])) {
+                $pc = $parentNodes[0]->xpath('./*[local-name()="Code"]');
+                if ($pc && isset($pc[0])) {
+                    $pcVal = trim((string)$pc[0]);
+                    if ($pcVal !== '' && $pcVal !== $code) $parentCode = $pcVal;
                 }
             }
-        },
-        function($parser, $name) use (&$items, &$current, &$tagStack, &$currentText) {
-            array_pop($tagStack);
 
-            // Закрытие тега внутри элемента — сохраняем текстовое значение
-            if ($current !== null && count($tagStack) > 0) {
-                $depth = count($tagStack);
-                // Если мы на 3-м уровне (внутри WorkOperations > Parent > поле)
-                $parentTag = $tagStack[$depth - 1] ?? '';
-                if ($parentTag === 'WorkOperations' || ($depth >= 1 && ($tagStack[$depth - 1] ?? '') === $current['_tag'])) {
-                    // Закрытие самого элемента
-                    if ($name === $current['_tag'] && ($tagStack[$depth - 1] ?? '') === 'WorkOperations') {
-                        // Заканчиваем текущий item
-                        $items[] = $current;
-                        $current = null;
-                    } else {
-                        // Это поле внутри item
-                        $val = trim($currentText);
-                        // Если поле уже задано и это Parent — пропускаем (там вложенный объект)
-                        if (!isset($current[$name])) {
-                            $current[$name] = $val;
-                        }
-                    }
-                }
-            }
-            $currentText = '';
-        },
-        function($parser, $data) use (&$currentText) {
-            $currentText .= $data;
+            $items[] = [
+                'code'           => cut($code, 50),
+                'parent_code'    => cut($parentCode, 50),
+                'it_is_group'    => strtolower($get('ItIsGroup') ?? 'false') === 'true',
+                'name'           => cut($get('Name'), 250),
+                'operation_code' => cut($get('OperationCode'), 50),
+                'name_work'      => cut($get('NameWork'), 250),
+                'eng_name'       => cut($get('EngName'), 250),
+                'description'    => cut($get('Description'), 5000),
+                'guard_work'     => strtolower($get('GuardWork') ?? 'false') === 'true',
+                'fact_work'      => strtolower($get('FactWork') ?? 'false') === 'true',
+                'deleted'        => strtolower($get('Deleted') ?? 'false') === 'true',
+            ];
         }
-    );
-
-    xml_parse($parser, $xml, true);
-    xml_parser_free($parser);
-
-    // Нормализуем результат
-    $result = [];
-    foreach ($items as $item) {
-        $code = trim($item['Code'] ?? '');
-        if ($code === '') continue;
-
-        // Parent вложенный — ищем в сыром виде
-        $parentCode = null;
-        if (isset($item['Parent_Code'])) {
-            $parentCode = trim($item['Parent_Code']);
-        }
-
-        $result[] = [
-            'code'           => cut($code, 50),
-            'parent_code'    => cut($parentCode, 50),
-            'it_is_group'    => strtolower($item['ItIsGroup'] ?? 'false') === 'true',
-            'name'           => cut($item['Name'] ?? null, 250),
-            'operation_code' => cut($item['OperationCode'] ?? null, 50),
-            'name_work'      => cut($item['NameWork'] ?? null, 250),
-            'eng_name'       => cut($item['EngName'] ?? null, 250),
-            'description'    => cut($item['Description'] ?? null, 5000),
-            'guard_work'     => strtolower($item['GuardWork'] ?? 'false') === 'true',
-            'fact_work'      => strtolower($item['FactWork'] ?? 'false') === 'true',
-            'deleted'        => strtolower($item['Deleted'] ?? 'false') === 'true',
-        ];
     }
-    return $result;
+    return $items;
 }
+
+/**
+ * Вычисляет parent_code для групп и работ на основе кодов.
+ */
+function compute_parents(array $items): array {
+    // Собираем все коды групп
+    $groupCodes = [];
+    foreach ($items as $item) {
+        if (!empty($item['it_is_group'])) {
+            $groupCodes[$item['code']] = true;
+        }
+    }
+
+    foreach ($items as &$item) {
+        // Если parent уже вычислен (вложенный Parent был) — не трогаем
+        if (!empty($item['parent_code'])) continue;
+
+        if (!empty($item['it_is_group'])) {
+            // Группа: родитель = код без последних 2 цифр
+            $code = $item['code'];
+            if (preg_match('/^\d+$/', $code) && strlen($code) > 2) {
+                $candidate = substr($code, 0, -2);
+                if (isset($groupCodes[$candidate])) {
+                    $item['parent_code'] = $candidate;
+                }
+            }
+        } else {
+            // Работа: префикс кода операции = группа
+            $opc = $item['operation_code'] ?? '';
+            if ($opc && preg_match('/^[A-Za-zА-Яа-я]*?(\d{2})/u', $opc, $m)) {
+                $candidate = $m[1];
+                if (isset($groupCodes[$candidate])) {
+                    $item['parent_code'] = $candidate;
+                }
+            }
+        }
+    }
+    return $items;
+}
+
+// ========== DRY-режим — показать что распарсилось ==========
+if ($dry === 'works') {
+    header('Content-Type: text/html; charset=utf-8');
+    try {
+        $xml = onec_call('UnloadWorkOperations', [
+            'OperationCode' => null,
+            'StartDate' => '2000-01-01' . date_tz(),
+            'EndDate'   => '2099-12-31' . date_tz(),
+        ]);
+        $parsed = parse_works_simplexml($xml);
+        $parsed = compute_parents($parsed);
+
+        $groups = array_filter($parsed, fn($x) => $x['it_is_group']);
+        $works  = array_filter($parsed, fn($x) => !$x['it_is_group']);
+
+        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Dry-разбор</title>';
+        echo '<style>body{font-family:-apple-system,sans-serif;background:#f0f2f5;padding:16px;line-height:1.5}';
+        echo '.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 2px 12px rgba(0,0,0,0.06)}';
+        echo 'h1{font-size:20px;margin:0 0 12px}h2{font-size:16px;margin:12px 0 8px;color:#1e3a8a}';
+        echo 'table{width:100%;border-collapse:collapse;font-size:12px}';
+        echo 'th{background:#f9fafb;text-align:left;padding:6px 8px;font-size:10px;color:#666;text-transform:uppercase}';
+        echo 'td{padding:6px 8px;border-bottom:1px solid #f0f0f0}';
+        echo 'code{background:#eff6ff;padding:1px 5px;border-radius:3px;color:#1e3a8a}';
+        echo '.err{color:#dc2626}</style></head><body>';
+
+        echo '<div class="card"><h1>🔬 DRY-разбор XML от 1С (без записи в БД)</h1>';
+        echo '<p>Длина XML: <b>' . strlen($xml) . '</b> байт</p>';
+        echo '<p>SimpleXML распарсил: <b class="' . (empty($parsed) ? 'err' : '') . '">' . (empty($parsed) ? '❌ НЕТ' : '✅ да') . '</b></p>';
+        echo '<p>Всего элементов: <b>' . count($parsed) . '</b> '
+            . '(групп: <b>' . count($groups) . '</b>, работ: <b>' . count($works) . '</b>)</p>';
+        echo '</div>';
+
+        if (!empty($parsed)) {
+            echo '<div class="card"><h2>Первые 30 элементов</h2><table>';
+            echo '<tr><th>Code</th><th>Parent</th><th>Тип</th><th>Имя</th><th>OperationCode</th></tr>';
+            $i = 0;
+            foreach ($parsed as $p) {
+                if (++$i > 30) break;
+                echo '<tr>';
+                echo '<td><code>' . htmlspecialchars($p['code']) . '</code></td>';
+                echo '<td><code>' . htmlspecialchars($p['parent_code'] ?? '—') . '</code></td>';
+                echo '<td>' . ($p['it_is_group'] ? '📁 группа' : '🔧 работа') . '</td>';
+                echo '<td>' . htmlspecialchars(mb_substr($p['name'] ?? '', 0, 60)) . '</td>';
+                echo '<td>' . htmlspecialchars($p['operation_code'] ?? '—') . '</td>';
+                echo '</tr>';
+            }
+            echo '</table></div>';
+
+            // Примеры работ и их вычисленного родителя
+            echo '<div class="card"><h2>Примеры работ → вычисленный родитель</h2><table>';
+            echo '<tr><th>Code</th><th>OperationCode</th><th>→ группа</th><th>Имя</th></tr>';
+            $i = 0;
+            foreach ($works as $w) {
+                if (++$i > 30) break;
+                echo '<tr>';
+                echo '<td><code>' . htmlspecialchars($w['code']) . '</code></td>';
+                echo '<td><code>' . htmlspecialchars($w['operation_code'] ?? '—') . '</code></td>';
+                echo '<td><code>' . htmlspecialchars($w['parent_code'] ?? '—') . '</code></td>';
+                echo '<td>' . htmlspecialchars(mb_substr($w['name'] ?? '', 0, 60)) . '</td>';
+                echo '</tr>';
+            }
+            echo '</table></div>';
+        }
+
+        echo '</body></html>';
+    } catch (Throwable $e) {
+        echo '<div class="card" style="color:#dc2626">❌ Ошибка: ' . htmlspecialchars($e->getMessage()) . '</div>';
+    }
+    exit(0);
+}
+
+// ========== Обычная синхронизация ==========
+if (!in_array($type, ['works', 'nomenclature', 'all'], true)) exit;
+
+try {
+    $pdoChk = get_db();
+    $stmt = $pdoChk->query("SELECT COUNT(*) FROM sync_log WHERE status='running' AND started_at > NOW() - INTERVAL '15 minutes'");
+    if ((int)$stmt->fetchColumn() > 0) exit;
+} catch (Throwable $e) { /* ignore */ }
 
 function do_sync_works(PDO $pdo): array {
     $xml = onec_call('UnloadWorkOperations', [
         'OperationCode' => null,
-        'StartDate'     => '2000-01-01' . date_tz(),
-        'EndDate'       => '2099-12-31' . date_tz(),
+        'StartDate' => '2000-01-01' . date_tz(),
+        'EndDate'   => '2099-12-31' . date_tz(),
     ]);
 
-    // Сохраним сырой XML для отладки
-    $dir = __DIR__ . '/uploads';
-    if (!is_dir($dir)) @mkdir($dir, 0775, true);
-    @file_put_contents($dir . '/1c_response_works.txt', $xml);
+    $parsed = parse_works_simplexml($xml);
+    if (empty($parsed)) throw new RuntimeException('SimpleXML не смог разобрать ответ');
 
-    $parsed = parse_works_sax($xml);
+    $parsed = compute_parents($parsed);
 
     // === ФИЛЬТРАЦИЯ ===
     $filtered = [];
@@ -252,10 +302,6 @@ function do_sync_works(PDO $pdo): array {
         $filtered[] = $p;
     }
 
-    if (count($filtered) === 0) {
-        return ['total' => 0, 'message' => 'Записей 0. SAX-парсер вернул 0. Длина XML: ' . strlen($xml)];
-    }
-
     $pdo->exec("TRUNCATE work_operations");
 
     $stmt = $pdo->prepare("
@@ -276,7 +322,7 @@ function do_sync_works(PDO $pdo): array {
     }
     return [
         'total' => $total,
-        'message' => 'Парсер: SAX. Удалено: ' . $skippedDeleted . '. Дублей отсеяно: ' . $skippedDup,
+        'message' => 'SimpleXML. Удалено: ' . $skippedDeleted . '. Дублей: ' . $skippedDup,
     ];
 }
 
@@ -284,13 +330,8 @@ function do_sync_nomenclature(PDO $pdo): array {
     $inn = getenv('ONEC_INN'); $kpp = getenv('ONEC_KPP');
     if (!$inn || !$kpp) throw new RuntimeException('Нужны ONEC_INN и ONEC_KPP');
     $xml = onec_call('UnloadNomenclatureUpdates', ['INN' => $inn, 'KPP' => $kpp]);
-    $dir = __DIR__ . '/uploads';
-    if (!is_dir($dir)) @mkdir($dir, 0775, true);
-    @file_put_contents($dir . '/1c_response_nomenclature.txt', $xml);
-
-    $parsed = parse_works_sax($xml);
-    if (count($parsed) === 0) return ['total' => 0, 'message' => 'Записей 0. Длина XML: ' . strlen($xml)];
-
+    $parsed = parse_works_simplexml($xml);
+    if (empty($parsed)) return ['total' => 0, 'message' => 'SimpleXML 0'];
     $stmt = $pdo->prepare("
         INSERT INTO nomenclatures (code, name, full_name, eng_name, base_measure, code_1c, parent, deleted, updated_at)
         VALUES (:code, :name, :full_name, :eng_name, :base_measure, :code_1c, :parent, :deleted, NOW())
@@ -304,7 +345,7 @@ function do_sync_nomenclature(PDO $pdo): array {
             ':parent' => $p['parent_code'], ':deleted' => $p['deleted'] ? 1 : 0]);
         $total++;
     }
-    return ['total' => $total, 'message' => 'Парсер: SAX'];
+    return ['total' => $total, 'message' => 'SimpleXML'];
 }
 
 function run_sync(PDO $pdo, string $t, callable $fn): array {
