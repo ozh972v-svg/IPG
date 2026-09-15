@@ -99,6 +99,11 @@ function do_sync_works(PDO $pdo): array {
     if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
 
     $xml = onec_call('UnloadWorkOperationsUpdates', ['INN' => $inn, 'KPP' => $kpp]);
+
+    // === ОТЛАДКА: сохраняем сырой ответ 1С в файл ===
+    @file_put_contents(__DIR__ . '/sync_debug_works.xml', $xml);
+    // === КОНЕЦ ОТЛАДКИ ===
+
     check_soap_fault($xml);
 
     $prev = libxml_use_internal_errors(true);
