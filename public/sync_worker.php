@@ -1,23 +1,40 @@
 <?php
 /**
- * Фоновый воркер синхронизации с 1С:ГОА.
+ * HTTP-версия воркера. Запускается браузером через <img src>.
+ * Работает сколько нужно — браузеру всё равно, сколько ждать картинку.
+ * Возвращает 1x1 прозрачный GIF в самом конце.
  */
 
-if (php_sapi_name() !== 'cli') {
-    http_response_code(403);
-    exit('CLI only');
-}
+// Убираем любые лимиты
+set_time_limit(0);
+ignore_user_abort(true);
+ini_set('memory_limit', '512M');
 
 require __DIR__ . '/db.php';
 
-$type = $argv[1] ?? '';
-if (!in_array($type, ['works', 'nomenclature', 'all'], true)) {
-    fwrite(STDERR, "Usage: php sync_worker.php works|nomenclature|all\n");
-    exit(1);
+// Защита: только админ (по сессии)
+start_session();
+$user = current_user();
+if (!$user || !$user['is_admin']) {
+    http_response_code(403);
+    header('Content-Type: image/gif');
+    echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+    exit;
 }
 
-set_time_limit(0);
-ini_set('memory_limit', '512M');
+$type = $_GET['type'] ?? '';
+if (!in_array($type, ['works', 'nomenclature', 'all'], true)) {
+    header('Content-Type: image/gif');
+    echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+    exit;
+}
+
+// Отправляем заголовки сразу — браузер получит картинку позже, но не будет ждать
+header('Content-Type: image/gif');
+header('Content-Length: 43');
+header('Connection: close');
+
+// === Логика ===
 
 function soap_action(string $op): string {
     return 'http://1c.kamaz.ru/zakaz#Zakaz:' . $op;
@@ -126,49 +143,11 @@ function parse_works_simplexml(string $xml): array {
     return $items;
 }
 
-function parse_works_regex(string $xml): array {
-    $items = [];
-    $re = '~<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?Code>~i';
-    if (!preg_match_all($re, $xml, $m, PREG_OFFSET_CAPTURE)) return $items;
-    $codes = $m[1]; $positions = $m[0]; $n = count($codes);
-
-    for ($i = 0; $i < $n; $i++) {
-        $code = trim(html_entity_decode($codes[$i][0], ENT_XML1, 'UTF-8'));
-        if ($code === '' || mb_strlen($code, 'UTF-8') > 50) continue;
-        if (!preg_match('/^[A-Za-zА-Яа-я0-9]/u', $code)) continue;
-        $startPos = $positions[$i][1];
-        $endPos = ($i + 1 < $n) ? $positions[$i + 1][1] : strlen($xml);
-        $wStart = max(0, $startPos - 300);
-        $window = substr($xml, $wStart, $endPos - $wStart + 400);
-
-        $get = function(string $tag) use ($window) {
-            $t = preg_quote($tag, '~');
-            if (preg_match('~<(?:[^:>\s]+:)?' . $t . '(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?' . $t . '>~i', $window, $mm)) {
-                $v = trim(html_entity_decode($mm[1], ENT_XML1, 'UTF-8'));
-                return $v === '' ? null : $v;
-            }
-            return null;
-        };
-
-        $items[] = [
-            'code' => cut($code, 50), 'parent_code' => null,
-            'it_is_group' => strtolower($get('ItIsGroup') ?? 'false') === 'true',
-            'name' => cut($get('Name'), 250), 'operation_code' => cut($get('OperationCode'), 50),
-            'name_work' => cut($get('NameWork'), 250), 'eng_name' => cut($get('EngName'), 250),
-            'description' => cut($get('Description'), 5000),
-            'guard_work' => strtolower($get('GuardWork') ?? 'false') === 'true',
-            'fact_work'  => strtolower($get('FactWork')  ?? 'false') === 'true',
-            'deleted'    => strtolower($get('Deleted')   ?? 'false') === 'true',
-        ];
-    }
-    return $items;
-}
-
 function parse_works(string $xml, ?string &$method = null): array {
     $viaSx = parse_works_simplexml($xml);
     if (!empty($viaSx)) { $method = 'SimpleXML'; return $viaSx; }
-    $method = 'regex (fallback)';
-    return parse_works_regex($xml);
+    $method = 'empty';
+    return [];
 }
 
 function date_tz(): string { return getenv('ONEC_DATE_TZ') ?: '+05:00'; }
@@ -183,16 +162,14 @@ function do_sync_works(PDO $pdo): array {
 
     // === ФИЛЬТРАЦИЯ ===
     $filtered = [];
-    $seenOpCodes = [];      // коды операций (для дедупликации работ)
-    $seenGroupCodes = [];   // коды групп
+    $seenOpCodes = [];
+    $seenGroupCodes = [];
     $skippedDeleted = 0;
     $skippedDup = 0;
 
     foreach ($parsed as $p) {
-        // 1) Пропускаем удалённые
         if (!empty($p['deleted'])) { $skippedDeleted++; continue; }
 
-        // 2) Группы — сохраняем все (уникальные по code)
         if ($p['it_is_group']) {
             if (isset($seenGroupCodes[$p['code']])) continue;
             $seenGroupCodes[$p['code']] = true;
@@ -200,7 +177,6 @@ function do_sync_works(PDO $pdo): array {
             continue;
         }
 
-        // 3) Работы: дедупликация по operation_code (если он есть)
         $opc = $p['operation_code'] ?? '';
         if ($opc !== '') {
             if (isset($seenOpCodes[$opc])) { $skippedDup++; continue; }
@@ -213,7 +189,6 @@ function do_sync_works(PDO $pdo): array {
         return ['total' => 0, 'message' => 'Записей 0. Парсер: ' . $method];
     }
 
-    // Полная замена справочника
     $pdo->exec("TRUNCATE work_operations");
 
     $stmt = $pdo->prepare("
@@ -280,10 +255,16 @@ function run_sync(PDO $pdo, string $t, callable $fn): array {
 }
 
 $pdo = get_db();
-if ($type === 'works') run_sync($pdo, 'works', 'do_sync_works');
-elseif ($type === 'nomenclature') run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
-else {
-    run_sync($pdo, 'works', 'do_sync_works');
-    run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
+try {
+    if ($type === 'works') run_sync($pdo, 'works', 'do_sync_works');
+    elseif ($type === 'nomenclature') run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
+    else {
+        run_sync($pdo, 'works', 'do_sync_works');
+        run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
+    }
+} catch (Throwable $e) {
+    // Тихо — лог уже в БД
 }
-exit(0);
+
+// Возвращаем 1x1 прозрачный GIF — браузер закончит запрос
+echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
