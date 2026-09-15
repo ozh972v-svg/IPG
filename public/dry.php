@@ -30,7 +30,7 @@ $autoReload = !empty($_GET['wait']);
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f0f2f5;margin:0;padding:16px;color:#1a1a1a;line-height:1.5}
-  .container{max-width:1200px;margin:0 auto}
+  .container{max-width:1400px;margin:0 auto}
   .card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:16px}
   h1{font-size:22px;margin:0 0 12px} h2{font-size:16px;margin:0 0 12px;color:#1e3a8a}
   .btn{display:inline-block;padding:12px 18px;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;text-decoration:none;text-align:center}
@@ -87,21 +87,18 @@ $autoReload = !empty($_GET['wait']);
     </div>
   <?php elseif (!empty($result['parse_error'])): ?>
     <div class="card">
-      <h2>❌ Ошибка парсинга SimpleXML</h2>
+      <h2>❌ Ошибка парсинга</h2>
       <div class="alert alert-error">
-        <b>Длина XML:</b> <?= (int)($result['xml_len'] ?? 0) ?> байт<br>
+        <b>Длина XML:</b> <?= number_format((int)($result['xml_len'] ?? 0), 0, '.', ' ') ?> байт<br>
         <b>Ошибка:</b> <?= htmlspecialchars($result['parse_error']) ?>
       </div>
-      <p style="color:#666;font-size:13px;">
-        Это ключевая информация для отладки. Скинь скриншот.
-      </p>
     </div>
   <?php else: ?>
     <div class="card">
       <h2>Статистика</h2>
       <div class="stats">
         <div class="stat"><b><?= number_format((int)($result['xml_len'] ?? 0), 0, '.', ' ') ?></b>длина XML (байт)</div>
-        <div class="stat"><b><?= !empty($result['simplexml_ok']) ? '✅' : '❌' ?></b>SimpleXML</div>
+        <div class="stat"><b><?= !empty($result['simplexml_ok']) ? '✅' : '❌' ?></b>SAX-парсер</div>
         <div class="stat"><b><?= (int)($result['stats']['total'] ?? 0) ?></b>всего</div>
         <div class="stat"><b><?= (int)($result['stats']['groups'] ?? 0) ?></b>групп</div>
         <div class="stat"><b><?= (int)($result['stats']['works'] ?? 0) ?></b>работ</div>
@@ -112,12 +109,18 @@ $autoReload = !empty($_GET['wait']);
       <div class="card">
         <h2>Первые 50 элементов</h2>
         <table>
-          <thead><tr><th>Code</th><th>Parent</th><th>Тип</th><th>Имя</th><th>OperationCode</th></tr></thead>
+          <thead><tr><th>Code</th><th>Parent_Code (вложенный)</th><th>Тип</th><th>Имя</th><th>OperationCode</th></tr></thead>
           <tbody>
             <?php foreach ($result['items'] as $p): ?>
               <tr>
                 <td><code><?= htmlspecialchars($p['code']) ?></code></td>
-                <td><code><?= htmlspecialchars($p['parent_code'] ?? '—') ?></code></td>
+                <td>
+                  <?php if (!empty($p['parent_code'])): ?>
+                    <code style="background:#f0fdf4;color:#16a34a;"><?= htmlspecialchars($p['parent_code']) ?></code>
+                  <?php else: ?>
+                    <code style="background:#fef2f2;color:#dc2626;">—</code>
+                  <?php endif; ?>
+                </td>
                 <td><?= $p['it_is_group'] ? '📁' : '🔧' ?></td>
                 <td><?= htmlspecialchars(mb_substr($p['name'] ?? '', 0, 60)) ?></td>
                 <td><?= htmlspecialchars($p['operation_code'] ?? '—') ?></td>
@@ -130,20 +133,40 @@ $autoReload = !empty($_GET['wait']);
 
     <?php if (!empty($result['works_sample'])): ?>
       <div class="card">
-        <h2>Примеры работ → вычисленный родитель</h2>
+        <h2>Примеры работ → вложенный Parent из XML</h2>
+        <p style="font-size:12px;color:#666;margin-bottom:8px;">
+          Если у работ тут стоит <code style="color:#16a34a;">зелёный</code> код — значит в XML есть вложенный &lt;Parent&gt;&lt;Code&gt;.
+          Если <code style="color:#dc2626;">красное тире</code> — в 1С нет вложенного Parent у работ.
+        </p>
         <table>
-          <thead><tr><th>Code</th><th>OperationCode</th><th>→ Родитель</th><th>Имя</th></tr></thead>
+          <thead><tr><th>Code</th><th>OperationCode</th><th>Parent_Code</th><th>Имя</th></tr></thead>
           <tbody>
             <?php foreach ($result['works_sample'] as $w): ?>
               <tr>
                 <td><code><?= htmlspecialchars($w['code']) ?></code></td>
                 <td><code><?= htmlspecialchars($w['operation_code'] ?? '—') ?></code></td>
-                <td><code style="color:<?= empty($w['parent_code']) ? '#dc2626' : '#16a34a' ?>;"><?= htmlspecialchars($w['parent_code'] ?? '—') ?></code></td>
+                <td>
+                  <?php if (!empty($w['parent_code'])): ?>
+                    <code style="background:#f0fdf4;color:#16a34a;font-weight:700;"><?= htmlspecialchars($w['parent_code']) ?></code>
+                  <?php else: ?>
+                    <code style="background:#fef2f2;color:#dc2626;">—</code>
+                  <?php endif; ?>
+                </td>
                 <td><?= htmlspecialchars(mb_substr($w['name'] ?? '', 0, 60)) ?></td>
               </tr>
             <?php endforeach; ?>
           </tbody>
         </table>
+      </div>
+    <?php endif; ?>
+
+    <?php if (!empty($result['raw_xml'])): ?>
+      <div class="card">
+        <h2>🔍 Сырой XML (первые 100 000 символов) — для отладки</h2>
+        <p style="color:#666;font-size:13px;">
+          Скинь скриншот этой области — мне нужно увидеть, есть ли у работ вложенный &lt;Parent&gt;.
+        </p>
+        <pre style="background:#1a1a1a;color:#d1d5db;padding:16px;border-radius:10px;font-size:10px;overflow:auto;max-height:600px;white-space:pre-wrap;word-break:break-all;"><?= htmlspecialchars($result['raw_xml']) ?></pre>
       </div>
     <?php endif; ?>
   <?php endif; ?>
