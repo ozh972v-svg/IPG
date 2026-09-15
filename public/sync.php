@@ -18,9 +18,6 @@ $error = null;
 
 /**
  * Отправляет SOAP-запрос к 1С:ГОА.
- * @param string $operation  имя операции (UnloadWorkOperationsUpdates или UnloadNomenclatureUpdates)
- * @param array  $params     ассоциативный массив параметров операции
- * @return string  тело ответа
  */
 function onec_call(string $operation, array $params = []): string {
     $login    = getenv('ONEC_LOGIN');
@@ -68,7 +65,10 @@ function onec_call(string $operation, array $params = []): string {
     if ($curlErr) throw new RuntimeException('Ошибка соединения: ' . $curlErr);
     if ($httpCode === 401) throw new RuntimeException('Неверный логин/пароль 1С');
     if ($httpCode === 403) throw new RuntimeException('Нет прав на операцию ' . $operation);
-    if ($httpCode !== 200) throw new RuntimeException('1С вернул код ' . $httpCode . ': ' . substr((string)$response, 0, 300));
+    if ($httpCode !== 200) {
+        $preview = substr(preg_replace('/\s+/', ' ', trim((string)$response)), 0, 600);
+        throw new RuntimeException('1С вернул код ' . $httpCode . '. Ответ: ' . $preview);
+    }
     return (string)$response;
 }
 
@@ -93,26 +93,31 @@ function first_text(SimpleXMLElement $el, string $tag): ?string {
     return $v === '' ? null : $v;
 }
 
+/**
+ * Диагностика: короткое описание того, что вернула 1С.
+ */
+function describe_response(string $xml): string {
+    $trimmed = ltrim($xml);
+    $head = substr(preg_replace('/\s+/', ' ', $trimmed), 0, 700);
+    return 'Ответ 1С (' . strlen($xml) . ' байт): ' . $head;
+}
+
 function do_sync_works(PDO $pdo): array {
     $inn = getenv('ONEC_INN');
     $kpp = getenv('ONEC_KPP');
     if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
 
     $xml = onec_call('UnloadWorkOperationsUpdates', ['INN' => $inn, 'KPP' => $kpp]);
-
-    // === ОТЛАДКА: сохраняем сырой ответ 1С в файл ===
-    @file_put_contents(__DIR__ . '/sync_debug_works.xml', $xml);
-    // === КОНЕЦ ОТЛАДКИ ===
-
     check_soap_fault($xml);
 
     $prev = libxml_use_internal_errors(true);
     $sx = simplexml_load_string($xml);
     libxml_clear_errors();
     libxml_use_internal_errors($prev);
-    if (!$sx) throw new RuntimeException('Не удалось разобрать ответ 1С (XML)');
+    if (!$sx) {
+        throw new RuntimeException('Не удалось разобрать ответ 1С (XML). ' . describe_response($xml));
+    }
 
-    // Ищем все WorkOperation в ответе (вне зависимости от вложенности)
     $nodes = $sx->xpath('//*[local-name()="WorkOperation"]');
     if ($nodes === false) $nodes = [];
 
@@ -140,7 +145,6 @@ function do_sync_works(PDO $pdo): array {
 
         $parentCode = null;
         if (isset($n->Parent)) {
-            // Parent может быть либо строкой (код), либо вложенным объектом с Code
             $pc = trim((string)$n->Parent->Code);
             if ($pc === '') $pc = trim((string)$n->Parent);
             if ($pc !== '') $parentCode = $pc;
@@ -176,9 +180,10 @@ function do_sync_nomenclature(PDO $pdo): array {
     $sx = simplexml_load_string($xml);
     libxml_clear_errors();
     libxml_use_internal_errors($prev);
-    if (!$sx) throw new RuntimeException('Не удалось разобрать ответ 1С (XML)');
+    if (!$sx) {
+        throw new RuntimeException('Не удалось разобрать ответ 1С (XML). ' . describe_response($xml));
+    }
 
-    // В XSD массив называется NomenclatureArray, элементы — Nomenclature
     $nodes = $sx->xpath('//*[local-name()="Nomenclature"]');
     if ($nodes === false) $nodes = [];
 
@@ -201,7 +206,6 @@ function do_sync_nomenclature(PDO $pdo): array {
         $code = first_text($n, 'Code');
         if (!$code) continue;
 
-        // BaseMeasure — вложенный объект Measure с полем Name
         $baseMeasure = null;
         if (isset($n->BaseMeasure)) {
             $baseMeasure = trim((string)$n->BaseMeasure->Name);
@@ -224,9 +228,6 @@ function do_sync_nomenclature(PDO $pdo): array {
     return ['total' => $total];
 }
 
-/**
- * Обёртка для журналирования + вызова.
- */
 function run_sync(PDO $pdo, string $syncType, callable $fn): array {
     $stmt = $pdo->prepare("INSERT INTO sync_log (sync_type, status) VALUES (:t, 'running') RETURNING id");
     $stmt->execute([':t' => $syncType]);
@@ -252,7 +253,7 @@ if ($running && $type) {
     } else { // all
         $r1 = run_sync($pdo, 'works', 'do_sync_works');
         $r2 = run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
-        $r = ['ok' => ($r1['ok'] && $r2['ok']), 'details' => [$r1, $r2]];
+        $r = ['ok' => ($r1['ok'] && $r2['ok'])];
     }
     if (!empty($r['ok'])) {
         $messages[] = 'Синхронизация выполнена. Записей: ' . ($r['total'] ?? '—');
@@ -261,7 +262,6 @@ if ($running && $type) {
     }
 }
 
-// История
 $history = $pdo->query("
     SELECT * FROM sync_log ORDER BY started_at DESC LIMIT 20
 ")->fetchAll();
@@ -298,6 +298,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .badge-red { background:#fef2f2; color:#dc2626; }
   .badge-blue { background:#eff6ff; color:#2563eb; }
   code { background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; }
+  .err-cell { color:#dc2626; font-size:11px; word-break:break-all; max-width:400px; }
 </style>
 </head>
 <body>
@@ -319,28 +320,26 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <div class="alert alert-success">✅ <?= e($m) ?></div>
   <?php endforeach; ?>
 
-  <?php if (!$type || $type === 'all'): ?>
-        <div class="card">
-      <h2>Что синхронизировать</h2>
-      <div class="btn-row">
-        <a href="sync.php?type=works&run=1" class="btn btn-green"
-           onclick="return confirm('Запустить синхронизацию справочника работ?')">
-          🔧 Обновить работы
-        </a>
-        <a href="sync.php?type=nomenclature&run=1" class="btn btn-green"
-           onclick="return confirm('Запустить синхронизацию номенклатуры?')">
-          📦 Обновить номенклатуру
-        </a>
-        <a href="sync.php?type=all&run=1" class="btn"
-           onclick="return confirm('Обновить всё?')">
-          🔄 Обновить всё
-        </a>
-      </div>
-      <p style="font-size:13px;color:#666;margin-top:12px;">
-        Синхронизация может занять до нескольких минут. Не закрывайте вкладку во время работы.
-      </p>
+  <div class="card">
+    <h2>Что синхронизировать</h2>
+    <div class="btn-row">
+      <a href="sync.php?type=works&run=1" class="btn btn-green"
+         onclick="return confirm('Запустить синхронизацию справочника работ?')">
+        🔧 Обновить работы
+      </a>
+      <a href="sync.php?type=nomenclature&run=1" class="btn btn-green"
+         onclick="return confirm('Запустить синхронизацию номенклатуры?')">
+        📦 Обновить номенклатуру
+      </a>
+      <a href="sync.php?type=all&run=1" class="btn"
+         onclick="return confirm('Обновить всё?')">
+        🔄 Обновить всё
+      </a>
     </div>
-  <?php endif; ?>
+    <p style="font-size:13px;color:#666;margin-top:12px;">
+      Синхронизация может занять до нескольких минут. Не закрывайте вкладку во время работы.
+    </p>
+  </div>
 
   <div class="card">
     <h2>История синхронизаций</h2>
@@ -374,7 +373,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
               <td><?= e(fmtTs($h['started_at'])) ?></td>
               <td><?= e(fmtTs($h['finished_at'])) ?></td>
               <td><?= (int)$h['items_total'] ?></td>
-              <td style="color:#dc2626;font-size:12px;"><?= e($h['error_message'] ?: '') ?></td>
+              <td class="err-cell"><?= e($h['error_message'] ?: '') ?></td>
             </tr>
           <?php endforeach; ?>
         </tbody>
@@ -383,15 +382,17 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   </div>
 
   <div class="card">
-    <h2>Что нужно для работы</h2>
-    <p style="font-size:13px;color:#666;">
-      Синхронизация использует переменные окружения (задаются в панели RelaxDev):
-    </p>
-    <ul style="font-size:13px;color:#666;">
-      <li><code>ONEC_LOGIN</code>, <code>ONEC_PASSWORD</code> — учётка сервисного пользователя 1С (уже настроены)</li>
-      <li><code>ONEC_INN</code>, <code>ONEC_KPP</code> — ИНН и КПП получателя данных</li>
-      <li><code>ONEC_SOAP_URL</code> — опционально, если эндпоинт отличается от стандартного</li>
-    </ul>
+    <h2>Диагностика окружения</h2>
+    <table class="doc-table">
+      <thead><tr><th>Переменная</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td><code>ONEC_LOGIN</code></td><td><?= getenv('ONEC_LOGIN') ? '✅ задана' : '❌ не задана' ?></td></tr>
+        <tr><td><code>ONEC_PASSWORD</code></td><td><?= getenv('ONEC_PASSWORD') ? '✅ задана' : '❌ не задана' ?></td></tr>
+        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '❌ не задана' ?></td></tr>
+        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '❌ не задана' ?></td></tr>
+        <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (используется стандартный)' ?></td></tr>
+      </tbody>
+    </table>
   </div>
 
 </div>
