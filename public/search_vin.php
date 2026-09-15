@@ -75,6 +75,24 @@ if (!empty($_GET['number'])) {
         }
     }
 }
+
+// Формат даты: 2026-12-30 -> 30.12.2026
+function fmtDate($d) {
+    if (!$d || $d === '—') return '—';
+    $d = trim($d);
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $d, $m)) {
+        return $m[3] . '.' . $m[2] . '.' . $m[1];
+    }
+    return $d;
+}
+
+// Проверить, активна ли дата (>= сегодня)
+function isActive($d) {
+    if (!$d) return false;
+    $ts = strtotime($d);
+    if ($ts === false) return false;
+    return $ts >= strtotime(date('Y-m-d'));
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -105,7 +123,6 @@ if (!empty($_GET['number'])) {
   .search-bar input { flex: 1; min-width: 200px; }
   .search-bar input:focus, .search-bar select:focus { outline: none; border-color: #2563eb; }
 
-  /* Вкладки */
   .tabs { display: flex; gap: 4px; border-bottom: 2px solid #e5e7eb; margin-bottom: 16px; flex-wrap: wrap; }
   .tab {
     padding: 10px 16px; border: none; background: transparent;
@@ -119,16 +136,13 @@ if (!empty($_GET['number'])) {
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
-  /* Поля данных */
   .field-row { display: flex; padding: 8px 0; border-bottom: 1px solid #f0f0f0; gap: 12px; font-size: 14px; }
   .field-row:last-child { border-bottom: none; }
   .field-label { color: #666; flex-shrink: 0; min-width: 200px; }
   .field-value { color: #1a1a1a; font-weight: 500; flex: 1; word-break: break-word; }
-  .field-value.empty { color: #999; font-weight: 400; }
 
   .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 20px; }
 
-  /* Секции */
   .section-title {
     font-size: 16px; font-weight: 700; color: #1e3a8a;
     margin: 20px 0 10px; padding-bottom: 6px;
@@ -139,7 +153,7 @@ if (!empty($_GET['number'])) {
   /* Баннер гарантии */
   .warranty-banner {
     padding: 14px 20px; border-radius: 12px; text-align: center;
-    font-size: 20px; font-weight: 700; margin: 16px 0;
+    font-size: 20px; font-weight: 700; margin: 12px 0;
   }
   .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
@@ -147,8 +161,11 @@ if (!empty($_GET['number'])) {
     display: block; font-size: 13px; font-weight: 500;
     color: #666; margin-top: 6px;
   }
+  .warranty-banner .banner-sub {
+    font-size: 13px; font-weight: 500; color: #555;
+    margin-top: 8px; line-height: 1.6;
+  }
 
-  /* Таблицы */
   table.doc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
   table.doc-table th {
     background: #f9fafb; color: #666; font-weight: 600;
@@ -163,7 +180,6 @@ if (!empty($_GET['number'])) {
   table.doc-table tr:last-child td { border-bottom: none; }
   table.doc-table tr:hover td { background: #fafbff; }
 
-  /* ОТМ */
   .otm-card {
     padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
     margin-bottom: 12px; background: #fff; transition: all 0.15s;
@@ -177,11 +193,9 @@ if (!empty($_GET['number'])) {
   .badge-red { background: #fef2f2; color: #dc2626; }
   .badge-yellow { background: #fffbeb; color: #b45309; }
 
-  /* Алерты */
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
 
-  /* JSON */
   .json-toggle { font-size: 13px; color: #2563eb; cursor: pointer; margin-top: 16px; display: inline-block; }
   .json-toggle:hover { text-decoration: underline; }
   .json-pre {
@@ -237,7 +251,18 @@ if (!empty($_GET['number'])) {
 
   <?php if ($car): ?>
     <?php
-      $inWarranty = !empty($car['InWarranty']);
+      // Статус основной гарантии — считаем по дате окончания
+      $mainActive = isActive($car['WarrantyExpirationDate'] ?? null);
+
+      // Гарантии на узлы — только активные
+      $nodeWarranties = $car['_other']['GuaranteesForNodes'] ?? [];
+      $activeNodes = [];
+      foreach ($nodeWarranties as $g) {
+          if (isActive($g['ExtensionPeriod'] ?? null)) {
+              $activeNodes[] = $g;
+          }
+      }
+
       $title = 'КАМАЗ ' . ($car['ShassisModel'] ?? '')
              . ' · VIN ш.: ' . ($car['VINShassis'] ?? '')
              . ' · дв: ' . ($car['NumberEngine'] ?? '');
@@ -246,13 +271,12 @@ if (!empty($_GET['number'])) {
     <div class="card">
       <h1 style="font-size:18px; color:#1e3a8a; margin-bottom:16px;"><?= e($title) ?></h1>
 
-      <!-- Вкладки -->
       <div class="tabs">
         <button type="button" class="tab active" data-tab="main">Основные сведения</button>
         <button type="button" class="tab" data-tab="otm">ОТМ и Акции</button>
       </div>
 
-      <!-- ===== ВКЛАДКА 1: Основные сведения + Гарантия ===== -->
+      <!-- ===== ВКЛАДКА 1 ===== -->
       <div class="tab-content active" id="tab-main">
 
         <div class="section-title">Основные сведения</div>
@@ -284,7 +308,7 @@ if (!empty($_GET['number'])) {
           </div>
           <div class="field-row">
             <div class="field-label">Дата изготовления</div>
-            <div class="field-value"><?= e($car['ProductionDate'] ?? '—') ?></div>
+            <div class="field-value"><?= e(fmtDate($car['ProductionDate'] ?? null)) ?></div>
           </div>
           <div class="field-row">
             <div class="field-label">Номер шасси</div>
@@ -296,51 +320,52 @@ if (!empty($_GET['number'])) {
           </div>
         </div>
 
-        <!-- Гарантия -->
+        <!-- ГАРАНТИЯ -->
         <div class="section-title">Гарантия</div>
 
-        <div class="warranty-banner <?= $inWarranty ? 'yes' : 'no' ?>">
-          <?= $inWarranty ? '✅ В ГАРАНТИИ' : '❌ НЕ В ГАРАНТИИ' ?>
-          <small><?= e($car['WarrantyIndication'] ?? '') ?></small>
-        </div>
-
-        <div class="field-grid">
-          <div class="field-row">
-            <div class="field-label">Дата начала гарантии</div>
-            <div class="field-value"><?= e($car['WarrantyStartDate'] ?? '—') ?></div>
-          </div>
-          <div class="field-row">
-            <div class="field-label">Дата окончания гарантии</div>
-            <div class="field-value"><?= e($car['WarrantyExpirationDate'] ?? '—') ?></div>
-          </div>
-          <div class="field-row">
-            <div class="field-label">Пробег окончания гарантии</div>
-            <div class="field-value"><?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</div>
-          </div>
-          <div class="field-row">
-            <div class="field-label">Наработка окончания гарантии</div>
-            <div class="field-value"><?= (int)($car['EndGuaranteeOperatingTime'] ?? 0) ?> м/час</div>
+        <!-- Баннер основной гарантии -->
+        <div class="warranty-banner <?= $mainActive ? 'yes' : 'no' ?>">
+          <?= $mainActive ? '✅ В ГАРАНТИИ' : '❌ НЕ В ГАРАНТИИ' ?>
+          <div class="banner-sub">
+            Основная гарантия:
+            с <?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?>
+            по <?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?>
+            · пробег <?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км
           </div>
         </div>
 
-        <?php if (!empty($car['_other']['GuaranteesForNodes'])): ?>
-          <div class="section-title" style="font-size:14px;">Гарантия на узлы</div>
+        <!-- Баннер гарантии на узлы -->
+        <?php foreach ($activeNodes as $g): ?>
+          <div class="warranty-banner yes">
+            ✅ ГАРАНТИЯ НА УЗЛЫ
+            <div class="banner-sub">
+              <b><?= e($g['Name'] ?? 'Узел') ?></b> (<?= e($g['NameDefectiveNode'] ?? '—') ?>):
+              действует до <?= e(fmtDate($g['ExtensionPeriod'] ?? null)) ?>
+              · пробег <?= number_format((int)($g['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км
+              · наработка <?= (int)($g['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч
+            </div>
+          </div>
+        <?php endforeach; ?>
+
+        <!-- Таблица всех гарантий на узлы -->
+        <?php if (!empty($nodeWarranties)): ?>
+          <div class="section-title" style="font-size:14px;">Все гарантии на узлы</div>
           <table class="doc-table">
             <thead>
               <tr>
                 <th>Наименование</th>
-                <th>Обозначение узла</th>
+                <th>Узел</th>
                 <th>Дата окончания</th>
                 <th>Пробег</th>
                 <th>Наработка</th>
               </tr>
             </thead>
             <tbody>
-              <?php foreach ($car['_other']['GuaranteesForNodes'] as $g): ?>
+              <?php foreach ($nodeWarranties as $g): ?>
                 <tr>
                   <td><?= e($g['Name'] ?? '—') ?></td>
                   <td><?= e($g['NameDefectiveNode'] ?? '—') ?></td>
-                  <td><?= e($g['ExtensionPeriod'] ?? '—') ?></td>
+                  <td><?= e(fmtDate($g['ExtensionPeriod'] ?? null)) ?></td>
                   <td><?= number_format((int)($g['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</td>
                   <td><?= (int)($g['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч</td>
                 </tr>
@@ -374,11 +399,11 @@ if (!empty($_GET['number'])) {
                 </div>
                 <div class="field-row">
                   <div class="field-label">Начало</div>
-                  <div class="field-value"><?= e($s['StartDateCampaign'] ?? '—') ?></div>
+                  <div class="field-value"><?= e(fmtDate($s['StartDateCampaign'] ?? null)) ?></div>
                 </div>
                 <div class="field-row">
                   <div class="field-label">Окончание</div>
-                  <div class="field-value"><?= e($s['EndDateCampaign'] ?? '—') ?></div>
+                  <div class="field-value"><?= e(fmtDate($s['EndDateCampaign'] ?? null)) ?></div>
                 </div>
                 <div class="field-row">
                   <div class="field-label">Выполнено</div>
@@ -429,8 +454,8 @@ if (!empty($_GET['number'])) {
                   <td><?= e($a['Name'] ?? '—') ?></td>
                   <td><?= e($a['TypeAction'] ?? '—') ?></td>
                   <td><?= e($a['KindAction'] ?? '—') ?></td>
-                  <td><?= e($a['StartDateAction'] ?? '—') ?></td>
-                  <td><?= e($a['EndDateAction'] ?? '—') ?></td>
+                  <td><?= e(fmtDate($a['StartDateAction'] ?? null)) ?></td>
+                  <td><?= e(fmtDate($a['EndDateAction'] ?? null)) ?></td>
                 </tr>
               <?php endforeach; ?>
             </tbody>
@@ -463,7 +488,6 @@ if (!empty($_GET['number'])) {
 
     </div>
 
-    <!-- Кнопки -->
     <div class="card">
       <div class="btn-row">
         <a href="gallery.php?key_type=vin&key_value=<?= urlencode($car['VINShassis'] ?? $car['NumberShassis'] ?? $searchValue) ?>" class="btn btn-green">📷 Фото по этому VIN</a>
@@ -471,7 +495,6 @@ if (!empty($_GET['number'])) {
       </div>
     </div>
 
-    <!-- JSON -->
     <div class="card">
       <span class="json-toggle" onclick="toggleJson()">Показать полный ответ 1С (JSON)</span>
       <pre class="json-pre" id="jsonBox"><?= e(json_encode($car, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
