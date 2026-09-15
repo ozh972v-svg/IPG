@@ -49,7 +49,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_TIMEOUT        => 180,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_HTTPHEADER     => [
@@ -73,7 +73,7 @@ function onec_call(string $operation, array $params = []): string {
 }
 
 /**
- * Проверяет, есть ли в SOAP-ответе Fault (ошибка).
+ * Проверяет SOAP Fault.
  */
 function check_soap_fault(string $xml): void {
     if (stripos($xml, 'Fault') !== false && stripos($xml, '<faultcode') !== false) {
@@ -85,21 +85,48 @@ function check_soap_fault(string $xml): void {
 }
 
 /**
- * Извлекает один элемент из SOAP-ответа.
+ * Разбирает SOAP-ответ. Возвращает SimpleXMLElement или бросает исключение.
+ * Убирает BOM, декларацию XML, работает через namespace-agnostic xpath.
+ */
+function parse_soap(string $xml): SimpleXMLElement {
+    // Убираем BOM
+    $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
+    // Убираем xml-декларацию (SimpleXML спотыкается, если она внутри строки)
+    $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
+
+    $prev = libxml_use_internal_errors(true);
+    libxml_clear_errors();
+    $sx = simplexml_load_string($xml);
+    $errs = libxml_get_errors();
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+
+    if (!$sx) {
+        $preview = substr(preg_replace('/\s+/', ' ', trim($xml)), 0, 700);
+        $errMsg  = $errs ? (' | libxml: ' . trim($errs[0]->message)) : '';
+        throw new RuntimeException('Не удалось разобрать ответ 1С.' . $errMsg . ' Ответ: ' . $preview);
+    }
+    return $sx;
+}
+
+/**
+ * Извлекает текст элемента (без учёта namespace).
  */
 function first_text(SimpleXMLElement $el, string $tag): ?string {
-    if (!isset($el->$tag)) return null;
-    $v = trim((string)$el->$tag);
+    $nodes = $el->xpath('./*[local-name()="' . $tag . '"]');
+    if (!$nodes || !isset($nodes[0])) return null;
+    $v = trim((string)$nodes[0]);
     return $v === '' ? null : $v;
 }
 
 /**
- * Диагностика: короткое описание того, что вернула 1С.
+ * Достаёт Description из ответа (это текстовое сообщение от 1С).
  */
-function describe_response(string $xml): string {
-    $trimmed = ltrim($xml);
-    $head = substr(preg_replace('/\s+/', ' ', $trimmed), 0, 700);
-    return 'Ответ 1С (' . strlen($xml) . ' байт): ' . $head;
+function extract_description(SimpleXMLElement $sx): ?string {
+    $nodes = $sx->xpath('//*[local-name()="Description"]');
+    if (!$nodes || !isset($nodes[0])) return null;
+    $v = trim((string)$nodes[0]);
+    return $v === '' ? null : $v;
 }
 
 function do_sync_works(PDO $pdo): array {
@@ -107,19 +134,27 @@ function do_sync_works(PDO $pdo): array {
     $kpp = getenv('ONEC_KPP');
     if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
 
-    $xml = onec_call('UnloadWorkOperationsUpdates', ['INN' => $inn, 'KPP' => $kpp]);
+    // Для первоначальной загрузки — используем UnloadWorkOperations с широким периодом
+    $xml = onec_call('UnloadWorkOperations', [
+        'INN'       => $inn,
+        'KPP'       => $kpp,
+        'StartDate' => '2000-01-01T00:00:00',
+        'EndDate'   => '2099-12-31T23:59:59',
+    ]);
     check_soap_fault($xml);
-
-    $prev = libxml_use_internal_errors(true);
-    $sx = simplexml_load_string($xml);
-    libxml_clear_errors();
-    libxml_use_internal_errors($prev);
-    if (!$sx) {
-        throw new RuntimeException('Не удалось разобрать ответ 1С (XML). ' . describe_response($xml));
-    }
+    $sx = parse_soap($xml);
 
     $nodes = $sx->xpath('//*[local-name()="WorkOperation"]');
     if ($nodes === false) $nodes = [];
+
+    $description = extract_description($sx);
+
+    if (count($nodes) === 0) {
+        return [
+            'total'   => 0,
+            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)'),
+        ];
+    }
 
     $stmt = $pdo->prepare("
         INSERT INTO work_operations (code, parent_code, it_is_group, name, operation_code, name_work, eng_name, description, guard_work, fact_work, deleted, updated_at)
@@ -165,7 +200,7 @@ function do_sync_works(PDO $pdo): array {
         ]);
         $total++;
     }
-    return ['total' => $total];
+    return ['total' => $total, 'message' => null];
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
@@ -173,19 +208,26 @@ function do_sync_nomenclature(PDO $pdo): array {
     $kpp = getenv('ONEC_KPP');
     if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
 
-    $xml = onec_call('UnloadNomenclatureUpdates', ['INN' => $inn, 'KPP' => $kpp]);
+    $xml = onec_call('UnloadNomenclature', [
+        'INN'       => $inn,
+        'KPP'       => $kpp,
+        'StartDate' => '2000-01-01T00:00:00',
+        'EndDate'   => '2099-12-31T23:59:59',
+    ]);
     check_soap_fault($xml);
-
-    $prev = libxml_use_internal_errors(true);
-    $sx = simplexml_load_string($xml);
-    libxml_clear_errors();
-    libxml_use_internal_errors($prev);
-    if (!$sx) {
-        throw new RuntimeException('Не удалось разобрать ответ 1С (XML). ' . describe_response($xml));
-    }
+    $sx = parse_soap($xml);
 
     $nodes = $sx->xpath('//*[local-name()="Nomenclature"]');
     if ($nodes === false) $nodes = [];
+
+    $description = extract_description($sx);
+
+    if (count($nodes) === 0) {
+        return [
+            'total'   => 0,
+            'message' => '1С вернула 0 записей. ' . ($description ? 'Сообщение: ' . $description : '(без описания)'),
+        ];
+    }
 
     $stmt = $pdo->prepare("
         INSERT INTO nomenclatures (code, name, full_name, eng_name, base_measure, code_1c, parent, deleted, updated_at)
@@ -225,7 +267,7 @@ function do_sync_nomenclature(PDO $pdo): array {
         ]);
         $total++;
     }
-    return ['total' => $total];
+    return ['total' => $total, 'message' => null];
 }
 
 function run_sync(PDO $pdo, string $syncType, callable $fn): array {
@@ -235,9 +277,11 @@ function run_sync(PDO $pdo, string $syncType, callable $fn): array {
 
     try {
         $result = $fn($pdo);
-        $pdo->prepare("UPDATE sync_log SET status='ok', finished_at=NOW(), items_total=:n, items_updated=:n WHERE id=:id")
-            ->execute([':n' => $result['total'], ':id' => $logId]);
-        return ['ok' => true, 'total' => $result['total']];
+        $msg = $result['total'] . ' записей';
+        if (!empty($result['message'])) $msg .= '. ' . $result['message'];
+        $pdo->prepare("UPDATE sync_log SET status='ok', finished_at=NOW(), items_total=:n, error_message=:m WHERE id=:id")
+            ->execute([':n' => $result['total'], ':m' => $result['message'] ?: null, ':id' => $logId]);
+        return ['ok' => true, 'total' => $result['total'], 'message' => $result['message']];
     } catch (Throwable $e) {
         $pdo->prepare("UPDATE sync_log SET status='error', finished_at=NOW(), error_message=:m WHERE id=:id")
             ->execute([':m' => $e->getMessage(), ':id' => $logId]);
@@ -250,13 +294,15 @@ if ($running && $type) {
         $r = run_sync($pdo, 'works', 'do_sync_works');
     } elseif ($type === 'nomenclature') {
         $r = run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
-    } else { // all
+    } else {
         $r1 = run_sync($pdo, 'works', 'do_sync_works');
         $r2 = run_sync($pdo, 'nomenclature', 'do_sync_nomenclature');
-        $r = ['ok' => ($r1['ok'] && $r2['ok'])];
+        $r = ['ok' => ($r1['ok'] && $r2['ok']), 'total' => ($r1['total'] ?? 0) + ($r2['total'] ?? 0)];
     }
     if (!empty($r['ok'])) {
-        $messages[] = 'Синхронизация выполнена. Записей: ' . ($r['total'] ?? '—');
+        $msg = 'Синхронизация выполнена. Записей: ' . ($r['total'] ?? '—');
+        if (!empty($r['message'])) $msg .= '. ' . $r['message'];
+        $messages[] = $msg;
     } else {
         $error = $r['error'] ?? 'Ошибка синхронизации';
     }
@@ -337,7 +383,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Синхронизация может занять до нескольких минут. Не закрывайте вкладку во время работы.
+      Используется операция выгрузки за весь период (2000 – 2099). Может занять до нескольких минут.
     </p>
   </div>
 
@@ -354,7 +400,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
             <th>Начало</th>
             <th>Окончание</th>
             <th>Записей</th>
-            <th>Ошибка</th>
+            <th>Ошибка / Сообщение</th>
           </tr>
         </thead>
         <tbody>
