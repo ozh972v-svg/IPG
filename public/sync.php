@@ -57,7 +57,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 45,
+        CURLOPT_TIMEOUT        => 110,        // увеличен с 45
         CURLOPT_CONNECTTIMEOUT => 15,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
@@ -198,16 +198,6 @@ function diag_variant(int $n): ?array {
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
         ],
-        2 => [
-            'label' => 'UnloadWorkOperations, OperationCode=null, даты без tz',
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
-        ],
-        3 => [
-            'label' => 'UnloadWorkOperations, все null',
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => null, 'StartDate' => null, 'EndDate' => null],
-        ],
         4 => [
             'label' => 'UnloadWorkOperationsUpdates с INN/KPP',
             'op' => 'UnloadWorkOperationsUpdates',
@@ -247,8 +237,7 @@ function do_sync_works(PDO $pdo): array {
         return [
             'total'   => 0,
             'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
-                       . ' | Длина ответа: ' . strlen($xml) . ' байт'
-                       . ' | Ответ: ' . raw_preview($xml, 400),
+                       . ' | Длина ответа: ' . strlen($xml) . ' байт',
         ];
     }
 
@@ -305,8 +294,7 @@ function do_sync_nomenclature(PDO $pdo): array {
     if (count($parsed) === 0) {
         return [
             'total'   => 0,
-            'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
-                       . ' | Ответ: ' . raw_preview($xml, 400),
+            'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)'),
         ];
     }
 
@@ -468,26 +456,18 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       <div style="font-weight:700;margin-bottom:6px;"><?= e($diagResult['label']) ?></div>
       <div style="font-size:11px;color:#666;margin-bottom:10px;">
         Метод: <code><?= e($diagResult['op']) ?></code><br>
-        SOAPAction: <code><?= e($diagResult['soap_action']) ?></code><br>
         Параметры: <code><?= e(json_encode($diagResult['params'], JSON_UNESCAPED_UNICODE)) ?></code>
       </div>
       <?php if (isset($diagResult['error'])): ?>
-        <div style="background:#fef2f2;color:#dc2626;padding:10px;border-radius:6px;font-size:12px;word-break:break-all;">
+        <div style="background:#fef2f2;color:#dc2626;padding:10px;border-radius:6px;font-size:12px;">
           ❌ Ошибка: <?= e($diagResult['error']) ?>
         </div>
       <?php else: ?>
         <div style="background:<?= ($diagResult['parsed_count'] ?? 0) > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:10px;border-radius:6px;font-size:14px;font-weight:700;">
-          ✅ HTTP 200 · Ответ <?= (int)$diagResult['raw_len'] ?> байт · Распознано записей: <?= (int)$diagResult['parsed_count'] ?>
-          <?php if ($diagResult['desc']): ?> · Описание: <?= e(substr($diagResult['desc'], 0, 300)) ?><?php endif; ?>
+          ✅ HTTP 200 · Ответ <?= (int)$diagResult['raw_len'] ?> байт · Распознано: <?= (int)$diagResult['parsed_count'] ?>
         </div>
-
-        <h3>Сырой ответ 1С (первые 20000 символов, пробелы сохранены)</h3>
+        <h3>Сырой ответ 1С (первые 20000 символов)</h3>
         <pre style="background:#fffbe6;padding:12px;border-radius:6px;font-size:11px;overflow:auto;max-height:700px;border:1px solid #fcd34d;white-space:pre-wrap;word-break:break-all;"><?= e($diagResult['preview']) ?></pre>
-
-        <?php if (!empty($diagResult['parsed_sample'])): ?>
-          <h3>Примеры распознанных записей</h3>
-          <pre style="background:#f9fafb;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:500px;"><?= e(json_encode($diagResult['parsed_sample'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
-        <?php endif; ?>
       <?php endif; ?>
     </div>
   <?php endif; ?>
@@ -496,7 +476,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <h2>Что синхронизировать</h2>
     <div class="btn-row">
       <a href="sync.php?type=works&run=1" class="btn btn-green"
-         onclick="return confirm('Запустить синхронизацию справочника работ?')">
+         onclick="return confirm('Запустить синхронизацию справочника работ? Может занять до 2 минут.')">
         🔧 Обновить работы
       </a>
       <a href="sync.php?type=nomenclature&run=1" class="btn btn-green"
@@ -509,21 +489,8 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Работает через <code>UnloadWorkOperations</code> с SOAPAction из WSDL.
+      Таймаут запроса к 1С — 110 секунд. Если упрётся в nginx — сообщи.
     </p>
-  </div>
-
-  <div class="card">
-    <h2>🔬 Диагностика (по одному варианту за клик)</h2>
-    <p style="font-size:13px;color:#666;">Nginx рубит долгие запросы — делаем по одному. Нажми по очереди.</p>
-    <div class="btn-row">
-      <a href="sync.php?diag=1" class="btn" style="background:#b45309;">Вариант 1: nillable + даты с tz</a>
-      <a href="sync.php?diag=2" class="btn" style="background:#b45309;">Вариант 2: nillable + даты без tz</a>
-      <a href="sync.php?diag=3" class="btn" style="background:#b45309;">Вариант 3: всё null</a>
-      <a href="sync.php?diag=4" class="btn" style="background:#b45309;">Вариант 4: Updates с INN/KPP</a>
-      <a href="sync.php?diag=5" class="btn" style="background:#dc2626;">🔥 Вариант 5: СЫРОЙ XML (работы)</a>
-      <a href="sync.php?diag=6" class="btn" style="background:#dc2626;">🔥 Вариант 6: СЫРОЙ XML (Updates)</a>
-    </div>
   </div>
 
   <div class="card">
