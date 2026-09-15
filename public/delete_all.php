@@ -19,21 +19,56 @@ if (!$keyType || !$keyValue) {
 
 $pdo = get_db();
 
-$stmt = $pdo->prepare('SELECT id, file_path, user_id FROM photos WHERE key_type = :kt AND key_value = :kv');
+$stmt = $pdo->prepare('SELECT id, file_path, storage_path, user_id FROM photos WHERE key_type = :kt AND key_value = :kv');
 $stmt->execute([':kt' => $keyType, ':kv' => $keyValue]);
 $photos = $stmt->fetchAll();
 
+$storageKey = getenv('STORAGE_API_KEY');
+$deleted = 0;
+
 foreach ($photos as $p) {
-    if ((int)$p['user_id'] !== (int)$user['id']) continue;
-    $path = __DIR__ . '/' . $p['file_path'];
-    if (file_exists($path)) @unlink($path);
+    // Автор или админ могут удалять
+    $isAuthor = ((int)$p['user_id'] === (int)$user['id']);
+    if (!$isAuthor && !$user['is_admin']) continue;
+
+    // 1. Удалить из хранилища IzIPost
+    if ($storageKey && !empty($p['storage_path'])) {
+        $pathForUrl = str_replace(
+            [' ', '&', '#', '?', '+'],
+            ['%20', '%26', '%23', '%3F', '%2B'],
+            $p['storage_path']
+        );
+        $apiUrl = 'https://relaxdev.ru/api/v1/storage/files?path=' . $pathForUrl;
+        $ch = curl_init($apiUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $storageKey,
+            ],
+            CURLOPT_TIMEOUT => 30,
+        ]);
+        curl_exec($ch);
+        curl_close($ch);
+    }
+
+    // 2. Удалить старый файл с диска
+    if (empty($p['storage_path'])) {
+        $path = __DIR__ . '/' . $p['file_path'];
+        if (file_exists($path)) @unlink($path);
+    }
+
+    // 3. Удалить запись из БД
     $stmt = $pdo->prepare('DELETE FROM photos WHERE id = :id');
     $stmt->execute([':id' => $p['id']]);
+    $deleted++;
 }
 
+// Если надо удалить и сам ключ
 if ($removeKey) {
     $stmt = $pdo->prepare('DELETE FROM keys WHERE key_type = :kt AND key_value = :kv');
     $stmt->execute([':kt' => $keyType, ':kv' => $keyValue]);
+
     header('Location: gallery.php?deleted_all_key=1');
     exit;
 }
