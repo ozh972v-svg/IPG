@@ -1,7 +1,6 @@
 <?php
 /**
- * Показывает результат dry-разбора.
- * Если результат старый (>10 мин) или его нет — можно запустить заново.
+ * DRY-разбор XML от 1С — показать, что распарсилось, без записи в БД.
  */
 require __DIR__ . '/db.php';
 start_session();
@@ -41,6 +40,7 @@ $autoReload = !empty($_GET['wait']);
   .alert-success{background:#f0fdf4;color:#16a34a;border-left:4px solid #16a34a}
   .alert-error{background:#fef2f2;color:#dc2626;border-left:4px solid #dc2626}
   .alert-info{background:#eff6ff;color:#2563eb;border-left:4px solid #2563eb}
+  .alert-warn{background:#fffbeb;color:#b45309;border-left:4px solid #b45309}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th{background:#f9fafb;text-align:left;padding:8px 10px;font-size:11px;color:#666;text-transform:uppercase}
   td{padding:8px 10px;border-bottom:1px solid #f0f0f0}
@@ -65,17 +65,15 @@ $autoReload = !empty($_GET['wait']);
       </p>
     <?php endif; ?>
     <div style="margin-top:12px;">
-      <a href="?wait=1" class="btn btn-green" onclick="
-        var img = new Image();
-        img.src = 'sync_worker_http.php?dry=works&t=' + Date.now();
-        return true;
-      ">🚀 Запустить DRY-разбор</a>
+      <a href="?wait=1" class="btn btn-green">🚀 Запустить DRY-разбор</a>
       <a href="?" class="btn btn-secondary">🔄 Обновить</a>
     </div>
     <?php if ($autoReload): ?>
       <div class="alert alert-info" style="margin-top:12px;">
         ⏳ Разбор идёт в фоне. Страница обновится через 10 секунд автоматически.
       </div>
+      <!-- Невидимая картинка запускает фоновый воркер -->
+      <img src="sync_worker_http.php?dry=works&t=<?= time() ?>" width="1" height="1" alt="" style="position:fixed;left:-100px;top:-100px;opacity:0;">
     <?php endif; ?>
   </div>
 
@@ -85,14 +83,25 @@ $autoReload = !empty($_GET['wait']);
     </div>
   <?php elseif (!empty($result['error'])): ?>
     <div class="card">
-      <div class="alert alert-error">❌ Ошибка: <?= htmlspecialchars($result['error']) ?></div>
+      <div class="alert alert-error">❌ Ошибка 1С: <?= htmlspecialchars($result['error']) ?></div>
+    </div>
+  <?php elseif (!empty($result['parse_error'])): ?>
+    <div class="card">
+      <h2>❌ Ошибка парсинга SimpleXML</h2>
+      <div class="alert alert-error">
+        <b>Длина XML:</b> <?= (int)($result['xml_len'] ?? 0) ?> байт<br>
+        <b>Ошибка:</b> <?= htmlspecialchars($result['parse_error']) ?>
+      </div>
+      <p style="color:#666;font-size:13px;">
+        Это ключевая информация для отладки. Скинь скриншот.
+      </p>
     </div>
   <?php else: ?>
     <div class="card">
       <h2>Статистика</h2>
       <div class="stats">
-        <div class="stat"><b><?= (int)($result['xml_len'] ?? 0) ?></b>длина XML</div>
-        <div class="stat"><b><?= $result['simplexml_ok'] ? '✅' : '❌' ?></b>SimpleXML</div>
+        <div class="stat"><b><?= number_format((int)($result['xml_len'] ?? 0), 0, '.', ' ') ?></b>длина XML (байт)</div>
+        <div class="stat"><b><?= !empty($result['simplexml_ok']) ? '✅' : '❌' ?></b>SimpleXML</div>
         <div class="stat"><b><?= (int)($result['stats']['total'] ?? 0) ?></b>всего</div>
         <div class="stat"><b><?= (int)($result['stats']['groups'] ?? 0) ?></b>групп</div>
         <div class="stat"><b><?= (int)($result['stats']['works'] ?? 0) ?></b>работ</div>
