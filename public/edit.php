@@ -10,7 +10,7 @@ if (!$user) {
 
 $id = isset($_GET['id']) ? (int)$_GET['id'] : (int)($_POST['id'] ?? 0);
 if ($id <= 0) {
-    header('Location: index.php');
+    header('Location: gallery.php');
     exit;
 }
 
@@ -19,8 +19,15 @@ $stmt = $pdo->prepare('SELECT * FROM photos WHERE id = :id');
 $stmt->execute([':id' => $id]);
 $photo = $stmt->fetch();
 
-if (!$photo || (int)$photo['user_id'] !== (int)$user['id']) {
-    header('Location: index.php?error=' . urlencode('Фото не найдено или нет прав'));
+if (!$photo) {
+    header('Location: gallery.php?error=' . urlencode('Фото не найдено'));
+    exit;
+}
+
+// Автор или админ могут редактировать
+$isAuthor = ((int)$photo['user_id'] === (int)$user['id']);
+if (!$isAuthor && !$user['is_admin']) {
+    header('Location: gallery.php?error=' . urlencode('Нет прав на редактирование'));
     exit;
 }
 
@@ -35,6 +42,8 @@ $PHOTO_TYPES = [
     'numbered_unit' => 'Номерной агрегат'
 ];
 
+$error = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $keyValue = trim($_POST['key_value'] ?? '');
     $photoType = $_POST['photo_type'] ?? '';
@@ -44,8 +53,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Заполните все поля';
     } else {
         $stmt = $pdo->prepare('UPDATE photos SET key_value = :kv, photo_type = :pt, comment = :c WHERE id = :id');
-        $stmt->execute([':kv' => $keyValue, ':pt' => $photoType, ':c' => $comment ?: null, ':id' => $id]);
-        header('Location: index.php?edited=1');
+        $stmt->execute([
+            ':kv' => $keyValue,
+            ':pt' => $photoType,
+            ':c'  => $comment ?: null,
+            ':id' => $id,
+        ]);
+
+        // Возврат в РА
+        header('Location: gallery.php?key_type=' . urlencode($photo['key_type'])
+             . '&key_value=' . urlencode($keyValue)
+             . '&edited=1');
         exit;
     }
 }
@@ -70,12 +88,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   button { background: #2563eb; color: #fff; }
   a.btn { background: #fff; color: #2563eb; border: 1.5px solid #2563eb; }
   .error { background: #fef2f2; color: #dc2626; padding: 12px; border-radius: 8px; font-size: 14px; margin-bottom: 12px; }
+  .author { font-size: 13px; color: #666; margin-bottom: 12px; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Редактирование фото</h1>
-  <?php if (!empty($error)): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
+  <?php if ($error): ?><div class="error"><?= e($error) ?></div><?php endif; ?>
   <img src="<?= e($photo['file_path']) ?>" alt="Фото">
   <form method="post">
     <input type="hidden" name="id" value="<?= (int)$photo['id'] ?>">
@@ -83,14 +102,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <input type="text" name="key_value" value="<?= e($photo['key_value']) ?>" required>
     <label>Тип фото</label>
     <select name="photo_type">
-      <?php foreach ($PHOTO_TYPES as $id2 => $name): ?>
-        <option value="<?= e($id2) ?>" <?= $photo['photo_type'] === $id2 ? 'selected' : '' ?>><?= e($name) ?></option>
+      <?php foreach ($PHOTO_TYPES as $tid => $tname): ?>
+        <option value="<?= e($tid) ?>" <?= $photo['photo_type'] === $tid ? 'selected' : '' ?>><?= e($tname) ?></option>
       <?php endforeach; ?>
     </select>
     <label>Комментарий</label>
     <textarea name="comment"><?= e($photo['comment'] ?? '') ?></textarea>
     <div class="btn-row">
-      <a href="index.php" class="btn">Отмена</a>
+      <a href="gallery.php?key_type=<?= e($photo['key_type']) ?>&key_value=<?= urlencode($photo['key_value']) ?>" class="btn">Отмена</a>
       <button type="submit">Сохранить</button>
     </div>
   </form>
