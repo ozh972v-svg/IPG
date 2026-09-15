@@ -47,7 +47,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_TIMEOUT        => 180,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_HTTPHEADER     => [
@@ -131,52 +131,115 @@ function date_params(): array {
     ];
 }
 
-function raw_preview(string $xml): string {
+function raw_preview(string $xml, int $len = 400): string {
     $v = preg_replace('/\s+/', ' ', $xml);
-    return substr(trim($v), 0, 400);
+    return substr(trim($v), 0, $len);
 }
 
 /**
- * Диагностика: перебирает разные варианты вызова UnloadWorkOperations,
- * чтобы найти тот, который возвращает данные.
+ * Парсит ответ UnloadWorkOperationsUpdates.
+ * Структура: <WorkOperations><Parent>...fields...</Parent>...</WorkOperations>
+ * (элементы — тег Parent, поля внутри: ItIsGroup, Code, Name, FullName, OperationCode,
+ *  NameWork, EngName, Description, GuardWork, FactWork, Deleted).
+ * Также бывает вложенный <Parent> — ссылка на родителя (берём его Code).
+ *
+ * Стратегия: находим все <Code>...</Code>, для каждого берём окно до следующего Code
+ * (плюс немного назад), и из окна извлекаем поля. Используем Code как ключ.
  */
+function parse_work_operations(string $xml): array {
+    $items = [];
+
+    // Все Code с позициями
+    $re = '~<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?Code>~i';
+    if (!preg_match_all($re, $xml, $m, PREG_OFFSET_CAPTURE)) {
+        return $items;
+    }
+
+    $codes = $m[1];
+    $positions = $m[0];
+    $n = count($codes);
+
+    // Границы контейнера WorkOperations — чтобы не выйти за его пределы
+    $containerStart = 0;
+    $containerEnd = strlen($xml);
+    if (preg_match('~<(?:[^:>\s]+:)?WorkOperations(?:\s[^>]*)?>~i', $xml, $cm, PREG_OFFSET_CAPTURE)) {
+        $containerStart = $cm[0][1];
+    }
+
+    for ($i = 0; $i < $n; $i++) {
+        $code = trim(html_entity_decode($codes[$i][0], ENT_XML1, 'UTF-8'));
+        if ($code === '') continue;
+
+        $startPos = $positions[$i][1];
+        $endPos   = ($i + 1 < $n) ? $positions[$i + 1][1] : min($containerEnd, strlen($xml));
+
+        // Окно: 600 символов назад (вдруг Name/ItIsGroup идут до Code) + до следующего Code
+        $windowStart = max($containerStart, $startPos - 600);
+        $window = substr($xml, $windowStart, $endPos - $windowStart + 400);
+
+        // Парсим поля — берём ПОСЛЕДНЕЕ вхождение в окне, чтобы не спутать с вложенным Parent
+        $getLast = function(string $tag) use ($window) {
+            $t = preg_quote($tag, '~');
+            $re = '~<(?:[^:>\s]+:)?' . $t . '(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?' . $t . '>~i';
+            if (preg_match_all($re, $window, $mm)) {
+                $v = trim(html_entity_decode(end($mm[1]), ENT_XML1, 'UTF-8'));
+                return $v === '' ? null : $v;
+            }
+            return null;
+        };
+
+        $itIsGroup  = strtolower($getLast('ItIsGroup') ?? 'false') === 'true';
+        $guardWork  = strtolower($getLast('GuardWork') ?? 'false') === 'true';
+        $factWork   = strtolower($getLast('FactWork') ?? 'false') === 'true';
+        $deleted    = strtolower($getLast('Deleted') ?? 'false') === 'true';
+
+        // Родитель: ищем <Parent>...</Parent> в окне и достаём его Code
+        $parentCode = null;
+        if (preg_match_all('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $window, $pm)) {
+            foreach ($pm[1] as $parentBlock) {
+                $pc = xml_tag($parentBlock, 'Code');
+                if ($pc !== null && $pc !== $code) {
+                    $parentCode = $pc;
+                    break;
+                }
+            }
+        }
+
+        $items[$code] = [
+            'code'           => $code,
+            'parent_code'    => $parentCode,
+            'it_is_group'    => $itIsGroup,
+            'name'           => $getLast('Name'),
+            'operation_code' => $getLast('OperationCode'),
+            'name_work'      => $getLast('NameWork'),
+            'eng_name'       => $getLast('EngName'),
+            'description'    => $getLast('Description'),
+            'guard_work'     => $guardWork,
+            'fact_work'      => $factWork,
+            'deleted'        => $deleted,
+        ];
+    }
+
+    return array_values($items);
+}
+
 function diagnose_works(PDO $pdo): array {
-    $tz = date_tz();
+    $tz  = date_tz();
     $inn = getenv('ONEC_INN') ?: '';
     $kpp = getenv('ONEC_KPP') ?: '';
 
     $variants = [
-        'V1: OperationCode="", даты xs:date с tz' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
-        ],
-        'V2: без OperationCode, даты xs:date с tz' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
-        ],
-        'V3: только OperationCode=""' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => ''],
-        ],
-        'V4: даты xs:dateTime с tz' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01T00:00:00' . $tz, 'EndDate' => '2099-12-31T23:59:59' . $tz],
-        ],
-        'V5: даты без tz' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => '', 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
-        ],
-        'V6: узкий период (2015-2030)' => [
-            'op' => 'UnloadWorkOperations',
-            'params' => ['OperationCode' => '', 'StartDate' => '2015-01-01' . $tz, 'EndDate' => '2030-12-31' . $tz],
-        ],
-        'V7: UnloadWorkOperationsUpdates c INN/KPP' => [
+        'V1: UnloadWorkOperationsUpdates c INN/KPP' => [
             'op' => 'UnloadWorkOperationsUpdates',
             'params' => ['INN' => $inn, 'KPP' => $kpp],
         ],
-        'V8: UnloadWorkOperationsUpdates без параметров' => [
+        'V2: UnloadWorkOperationsUpdates с INN/KPP и датами' => [
             'op' => 'UnloadWorkOperationsUpdates',
-            'params' => [],
+            'params' => ['INN' => $inn, 'KPP' => $kpp, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
+        ],
+        'V3: UnloadNomenclatureUpdates c INN/KPP' => [
+            'op' => 'UnloadNomenclatureUpdates',
+            'params' => ['INN' => $inn, 'KPP' => $kpp],
         ],
     ];
 
@@ -185,14 +248,14 @@ function diagnose_works(PDO $pdo): array {
         $entry = ['label' => $label, 'op' => $cfg['op'], 'params' => $cfg['params']];
         try {
             $xml = onec_call($cfg['op'], $cfg['params']);
-            $entry['http']    = 200;
-            $entry['desc']    = xml_tag($xml, 'Description');
-            $blocks           = xml_blocks($xml, 'WorkOperation');
-            $entry['count']   = count($blocks);
-            $entry['preview'] = substr(preg_replace('/\s+/', ' ', $xml), 0, 500);
-            if ($entry['count'] > 0) {
-                $entry['sample'] = substr(preg_replace('/\s+/', ' ', $blocks[0]), 0, 800);
-            }
+            $entry['http']  = 200;
+            $entry['desc']  = xml_tag($xml, 'Description');
+            $entry['codes'] = count(xml_blocks($xml, 'Code'));
+            $entry['preview'] = raw_preview($xml, 3000);
+            // Первые 3 элемента из парсера
+            $parsed = parse_work_operations($xml);
+            $entry['parsed_count'] = count($parsed);
+            $entry['parsed_sample'] = array_slice($parsed, 0, 3);
         } catch (Throwable $e) {
             $entry['error'] = $e->getMessage();
         }
@@ -202,21 +265,23 @@ function diagnose_works(PDO $pdo): array {
 }
 
 function do_sync_works(PDO $pdo): array {
-    $dates = date_params();
-    $params = array_merge(['OperationCode' => ''], $dates);
+    $inn = getenv('ONEC_INN');
+    $kpp = getenv('ONEC_KPP');
+    if (!$inn || !$kpp) {
+        throw new RuntimeException('Для выгрузки работ нужны ONEC_INN и ONEC_KPP');
+    }
 
-    $xml = onec_call('UnloadWorkOperations', $params);
+    $xml = onec_call('UnloadWorkOperationsUpdates', ['INN' => $inn, 'KPP' => $kpp]);
     check_soap_fault($xml);
 
     $description = xml_tag($xml, 'Description');
-    $blocks = xml_blocks($xml, 'WorkOperation');
+    $parsed = parse_work_operations($xml);
 
-    if (count($blocks) === 0) {
+    if (count($parsed) === 0) {
         return [
             'total'   => 0,
-            'message' => 'Записей 0. ' . ($description ? 'Описание от 1С: ' . $description : '(описание отсутствует)')
-                       . ' | Отправлено: OperationCode="", StartDate=' . $dates['StartDate'] . ', EndDate=' . $dates['EndDate']
-                       . ' | Ответ: ' . raw_preview($xml),
+            'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
+                       . ' | Ответ: ' . raw_preview($xml, 400),
         ];
     }
 
@@ -238,25 +303,19 @@ function do_sync_works(PDO $pdo): array {
     ");
 
     $total = 0;
-    foreach ($blocks as $b) {
-        $code = block_field($b, 'Code');
-        if (!$code) continue;
-        if (preg_match('~^.*?<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Code>~is', $b, $cm)) {
-            $code = trim(html_entity_decode($cm[1], ENT_XML1, 'UTF-8'));
-        }
-
+    foreach ($parsed as $p) {
         $stmt->execute([
-            ':code'           => $code,
-            ':parent_code'    => block_parent_code($b),
-            ':it_is_group'    => (strtolower(block_field($b, 'ItIsGroup') ?? 'false') === 'true') ? 1 : 0,
-            ':name'           => block_field($b, 'Name'),
-            ':operation_code' => block_field($b, 'OperationCode'),
-            ':name_work'      => block_field($b, 'NameWork'),
-            ':eng_name'       => block_field($b, 'EngName'),
-            ':description'    => block_field($b, 'Description'),
-            ':guard_work'     => (strtolower(block_field($b, 'GuardWork') ?? 'false') === 'true') ? 1 : 0,
-            ':fact_work'      => (strtolower(block_field($b, 'FactWork') ?? 'false') === 'true') ? 1 : 0,
-            ':deleted'        => (strtolower(block_field($b, 'Deleted') ?? 'false') === 'true') ? 1 : 0,
+            ':code'           => $p['code'],
+            ':parent_code'    => $p['parent_code'],
+            ':it_is_group'    => $p['it_is_group'] ? 1 : 0,
+            ':name'           => $p['name'],
+            ':operation_code' => $p['operation_code'],
+            ':name_work'      => $p['name_work'],
+            ':eng_name'       => $p['eng_name'],
+            ':description'    => $p['description'],
+            ':guard_work'     => $p['guard_work'] ? 1 : 0,
+            ':fact_work'      => $p['fact_work'] ? 1 : 0,
+            ':deleted'        => $p['deleted'] ? 1 : 0,
         ]);
         $total++;
     }
@@ -264,20 +323,26 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $dates = date_params();
-    $params = array_merge(['OperationCode' => ''], $dates);
+    $inn = getenv('ONEC_INN');
+    $kpp = getenv('ONEC_KPP');
+    if (!$inn || !$kpp) {
+        throw new RuntimeException('Для выгрузки номенклатуры нужны ONEC_INN и ONEC_KPP');
+    }
 
-    $xml = onec_call('UnloadNomenclature', $params);
+    $xml = onec_call('UnloadNomenclatureUpdates', ['INN' => $inn, 'KPP' => $kpp]);
     check_soap_fault($xml);
 
     $description = xml_tag($xml, 'Description');
-    $blocks = xml_blocks($xml, 'Nomenclature');
 
-    if (count($blocks) === 0) {
+    // Для номенклатуры структура похожая, но элементы могут называться иначе.
+    // Используем тот же парсер по Code — он найдёт все <Code> в ответе.
+    $parsed = parse_work_operations($xml);
+
+    if (count($parsed) === 0) {
         return [
             'total'   => 0,
-            'message' => 'Записей 0. ' . ($description ? 'Описание от 1С: ' . $description : '(описание отсутствует)')
-                       . ' | Ответ: ' . raw_preview($xml),
+            'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
+                       . ' | Ответ: ' . raw_preview($xml, 400),
         ];
     }
 
@@ -296,25 +361,16 @@ function do_sync_nomenclature(PDO $pdo): array {
     ");
 
     $total = 0;
-    foreach ($blocks as $b) {
-        $code = block_field($b, 'Code');
-        if (!$code) continue;
-
-        $baseMeasure = null;
-        if (preg_match('~<(?:[^:>\s]+:)?BaseMeasure(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?BaseMeasure>~is', $b, $bm)) {
-            $inner = $bm[1];
-            $baseMeasure = xml_tag($inner, 'Name') ?: xml_tag($inner, 'Code');
-        }
-
+    foreach ($parsed as $p) {
         $stmt->execute([
-            ':code'         => $code,
-            ':name'         => block_field($b, 'Name'),
-            ':full_name'    => block_field($b, 'FullName'),
-            ':eng_name'     => block_field($b, 'EngName'),
-            ':base_measure' => $baseMeasure,
-            ':code_1c'      => block_field($b, 'Code1C'),
-            ':parent'       => block_field($b, 'Parent'),
-            ':deleted'      => (strtolower(block_field($b, 'Deleted') ?? 'false') === 'true') ? 1 : 0,
+            ':code'         => $p['code'],
+            ':name'         => $p['name'],
+            ':full_name'    => $p['name'] !== null && $p['name_work'] === null ? $p['name'] : null, // временно
+            ':eng_name'     => $p['eng_name'],
+            ':base_measure' => null,
+            ':code_1c'      => null,
+            ':parent'       => $p['parent_code'],
+            ':deleted'      => $p['deleted'] ? 1 : 0,
         ]);
         $total++;
     }
@@ -394,6 +450,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   code { background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; }
   .err-cell { color:#555; font-size:11px; word-break:break-all; max-width:480px; }
   .diag-item { border:1.5px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:12px; }
+  pre { white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
 <body>
@@ -433,19 +490,19 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
               ❌ Ошибка: <?= e(substr($r['error'], 0, 500)) ?>
             </div>
           <?php else: ?>
-            <div style="background:<?= $r['count'] > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:8px;border-radius:6px;font-size:13px;font-weight:600;">
-              ✅ HTTP 200 · Найдено записей: <?= (int)$r['count'] ?>
-              <?php if ($r['desc']): ?> · Описание: <?= e($r['desc']) ?><?php endif; ?>
+            <div style="background:<?= ($r['parsed_count'] ?? 0) > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:8px;border-radius:6px;font-size:13px;font-weight:600;">
+              ✅ HTTP 200 · Распознано записей: <?= (int)($r['parsed_count'] ?? 0) ?>
+              <?php if ($r['desc']): ?> · Описание: <?= e(substr($r['desc'], 0, 200)) ?><?php endif; ?>
             </div>
-            <?php if (!empty($r['sample'])): ?>
-              <details style="margin-top:8px;">
-                <summary style="cursor:pointer;color:#2563eb;font-size:12px;">Пример первой записи</summary>
-                <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;white-space:pre-wrap;"><?= e($r['sample']) ?></pre>
+            <?php if (!empty($r['parsed_sample'])): ?>
+              <details style="margin-top:8px;" open>
+                <summary style="cursor:pointer;color:#2563eb;font-size:12px;">Примеры распознанных записей</summary>
+                <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:400px;"><?= e(json_encode($r['parsed_sample'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
               </details>
             <?php endif; ?>
             <details style="margin-top:8px;">
-              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 500 символов)</summary>
-              <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:150px;white-space:pre-wrap;"><?= e($r['preview']) ?></pre>
+              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 3000 символов)</summary>
+              <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:300px;"><?= e($r['preview']) ?></pre>
             </details>
           <?php endif; ?>
         </div>
@@ -469,13 +526,12 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
          onclick="return confirm('Обновить всё?')">
         🔄 Обновить всё
       </a>
-      <a href="sync.php?diagnose=1" class="btn" style="background:#b45309;"
-         onclick="return confirm('Перебрать 8 вариантов вызова 1С? Займёт ~30 секунд.')">
-        🔬 Диагностика (перебрать варианты)
+      <a href="sync.php?diagnose=1" class="btn" style="background:#b45309;">
+        🔬 Диагностика
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      POST идёт на <code>/ws/Zakaz</code>. Диагностика покажет, какой набор параметров даёт результат.
+      Работает через <code>UnloadWorkOperationsUpdates</code> и <code>UnloadNomenclatureUpdates</code> с INN/KPP.
     </p>
   </div>
 
@@ -517,20 +573,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
         </tbody>
       </table>
     <?php endif; ?>
-  </div>
-
-  <div class="card">
-    <h2>Диагностика окружения</h2>
-    <table class="doc-table">
-      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
-      <tbody>
-        <tr><td><code>PHP</code></td><td><?= e(PHP_VERSION) ?></td></tr>
-        <tr><td><code>ONEC_LOGIN</code></td><td><?= getenv('ONEC_LOGIN') ? '✅' : '❌' ?></td></tr>
-        <tr><td><code>ONEC_PASSWORD</code></td><td><?= getenv('ONEC_PASSWORD') ? '✅' : '❌' ?></td></tr>
-        <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (по умолчанию: /GOA/ws/Zakaz)' ?></td></tr>
-        <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (+05:00)' ?></td></tr>
-      </tbody>
-    </table>
   </div>
 
 </div>
