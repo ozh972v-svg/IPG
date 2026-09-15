@@ -1,7 +1,7 @@
 <?php
 /**
  * HTTP-воркер синхронизации с 1С:ГОА.
- * SAX-парсер с очисткой XML и чанковой обработкой.
+ * Построчный парсер — не зависит от libxml, не падает на мусорных символах.
  */
 
 set_time_limit(0);
@@ -78,153 +78,97 @@ function cut(?string $s, int $max): ?string {
 function date_tz(): string { return getenv('ONEC_DATE_TZ') ?: '+05:00'; }
 
 /**
- * SAX-парсер с очисткой XML и чанковой обработкой.
- * При ошибке парсинга возвращает то, что успел распарсить.
+ * ПОСТРОЧНЫЙ ПАРСЕР. Не использует xml_parser (не падает на мусоре).
+ *
+ * Структура ответа 1С:
+ *   <WorkOperations>
+ *     <m:Parent>              ← ЗАПИСЬ (уровень 1)
+ *       <m:Parent>            ← ССЫЛКА на родителя (уровень 2)
+ *         <m:Code>10</m:Code> ← Code родителя → записываем как _parent_code
+ *         ...
+ *       </m:Parent>
+ *       <m:ItIsGroup>...</m:ItIsGroup>  ← поля САМОЙ записи (уровень 1)
+ *       <m:Code>1002</m:Code>
+ *       ...
+ *     </m:Parent>
+ *   </WorkOperations>
  */
-function parse_works_sax(string $xml, ?string &$err = null): array {
-    if (!function_exists('xml_parser_create')) {
-        $err = 'xml_parser_create отсутствует';
-        return [];
-    }
-
-    // ============ ОЧИСТКА XML ============
+function parse_works_lines(string $xml, ?string &$err = null): array {
+    // ========== ОЧИСТКА ==========
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
     $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
-    // Control-символы, кроме tab/LF/CR
+    // Control-символы (кроме tab/LF/CR)
     $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
-    // BOM в середине
+    // BOM в середине, surrogate-пары
     $xml = str_replace("\xEF\xBB\xBF", '', $xml);
-    // Surrogate-пары
     $xml = preg_replace('/\xED[\xA0-\xBF][\x80-\xBF]/', '', $xml);
-    // U+FFFE, U+FFFF
-    $xml = str_replace(["\xEF\xBF\xBE", "\xEF\xBF\xBF"], '', $xml);
 
-    $parser = xml_parser_create('UTF-8');
-    xml_parser_set_option($parser, XML_OPTION_CASE_FOLDING, 0);
-    xml_parser_set_option($parser, XML_OPTION_SKIP_WHITE, 1);
+    // ========== НОРМАЛИЗАЦИЯ ==========
+    // Превращаем любой XML в построчный: между > и < ставим перевод строки.
+    // Внутри текстовых значений > и < не трогаем, потому что они там редки.
+    $xml = preg_replace('/>\s*</', ">\n<", $xml);
 
-    $stack = [];
+    // ========== ПАРСИНГ ==========
     $items = [];
     $current = null;
-    $currentDepth = 0;
-    $innerParentDepth = null;
+    $level = 0;
+    $lines = explode("\n", $xml);
 
-    $local = function(string $name): string {
-        $pos = strrpos($name, ':');
-        return $pos !== false ? substr($name, $pos + 1) : $name;
-    };
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '') continue;
 
-    xml_set_element_handler(
-        $parser,
-        function($parser, $name, $attrs) use (&$stack, &$current, &$currentDepth, &$innerParentDepth, $local) {
-            $localName = $local($name);
-            $stack[] = $localName;
-            $depth = count($stack);
-
-            if ($current === null
-                && $depth === 2
-                && isset($stack[0]) && $stack[0] === 'WorkOperations'
-            ) {
+        // Открытие <Parent> (с любым namespace-префиксом)
+        if (preg_match('~^<(?:[a-zA-Z0-9]+:)?Parent>$~i', $line)) {
+            $level++;
+            if ($level === 1) {
                 $current = [];
-                $currentDepth = $depth;
-                $innerParentDepth = null;
-                return;
             }
+            continue;
+        }
 
-            if ($current !== null
-                && $localName === 'Parent'
-                && $depth === $currentDepth + 1
-            ) {
-                $innerParentDepth = $depth;
-            }
-        },
-        function($parser, $name) use (&$stack, &$items, &$current, &$currentDepth, &$innerParentDepth, $local) {
-            $localName = $local($name);
-            $depth = count($stack);
-
-            if ($innerParentDepth !== null && $depth === $innerParentDepth && $localName === 'Parent') {
-                $innerParentDepth = null;
-            }
-
-            if ($current !== null && $depth === $currentDepth
-                && ($localName === 'Parent' || $localName === 'WorkOperation')
-            ) {
-                foreach ($current as $k => $v) {
-                    $v = trim((string)$v);
-                    $current[$k] = $v === '' ? null : $v;
-                }
+        // Закрытие </Parent>
+        if (preg_match('~^</(?:[a-zA-Z0-9]+:)?Parent>$~i', $line)) {
+            if ($level === 1 && $current !== null) {
                 if (!empty($current['Code'])) {
                     $items[] = $current;
                 }
                 $current = null;
-                $currentDepth = 0;
             }
-
-            array_pop($stack);
+            $level--;
+            if ($level < 0) $level = 0;
+            continue;
         }
-    );
 
-    xml_set_character_data_handler(
-        $parser,
-        function($parser, $data) use (&$stack, &$current, &$currentDepth, &$innerParentDepth) {
-            if ($current === null) return;
-            $depth = count($stack);
-            if ($depth < 1) return;
+        // Поле <m:Tag>значение</m:Tag>
+        if ($current !== null
+            && preg_match('~^<(?:[a-zA-Z0-9]+:)?([A-Za-z][A-Za-z0-9_]*)(?:\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9]+:)?\1>$~s', $line, $m)
+        ) {
+            $fieldName = $m[1];
+            $value = trim($m[2]);
+            if ($value === '') continue;
 
-            $fieldName = $stack[$depth - 1];
-
-            if ($depth === $currentDepth + 1) {
-                if (!array_key_exists($fieldName, $current)) $current[$fieldName] = '';
-                $current[$fieldName] .= $data;
-                return;
+            if ($level === 1) {
+                // Поле самой записи
+                $current[$fieldName] = $value;
+            } elseif ($level === 2 && $fieldName === 'Code') {
+                // Code вложенного Parent = ссылка на настоящего родителя
+                if (empty($current['_parent_code'])) {
+                    $current['_parent_code'] = $value;
+                }
             }
-
-            if ($innerParentDepth !== null && $depth === $innerParentDepth + 1) {
-                $key = 'Parent_' . $fieldName;
-                if (!array_key_exists($key, $current)) $current[$key] = '';
-                $current[$key] .= $data;
-            }
-        }
-    );
-
-    // Чанковый парсинг — 1 МБ за раз
-    $chunkSize = 1024 * 1024;
-    $totalLen = strlen($xml);
-    $offset = 0;
-    $parseOk = true;
-    $err = null;
-
-    while ($offset < $totalLen) {
-        $chunk = substr($xml, $offset, $chunkSize);
-        $offset += $chunkSize;
-        $isLast = ($offset >= $totalLen);
-
-        $result = @xml_parse($parser, $chunk, $isLast);
-        if ($result === 0) {
-            $xmlError = xml_get_error_code($parser);
-            $line = xml_get_current_line_number($parser);
-            $col  = xml_get_current_column_number($parser);
-            $err = 'SAX error на строке ' . $line . ' (колонка ' . $col . '): ' . xml_error_string($xmlError);
-            $parseOk = false;
-            break;
         }
     }
 
-    if (!$parseOk) {
-        $err = ($err ?: 'SAX error') . ' [распаршено записей: ' . count($items) . ']';
-    }
-
-    xml_parser_free($parser);
-
-    // Нормализуем результат
+    // ========== НОРМАЛИЗАЦИЯ ==========
     $result = [];
     foreach ($items as $item) {
         $code = trim((string)($item['Code'] ?? ''));
         if ($code === '') continue;
 
         $parentCode = null;
-        if (!empty($item['Parent_Code'])) {
-            $pc = trim((string)$item['Parent_Code']);
+        if (!empty($item['_parent_code'])) {
+            $pc = trim((string)$item['_parent_code']);
             if ($pc !== '' && $pc !== $code) $parentCode = $pc;
         }
 
@@ -242,11 +186,15 @@ function parse_works_sax(string $xml, ?string &$err = null): array {
             'deleted'        => strtolower(trim((string)($item['Deleted'] ?? 'false'))) === 'true',
         ];
     }
+
+    if (empty($result)) {
+        $err = 'Построчный парсер вернул 0 записей (XML ' . number_format(strlen($xml), 0, '.', ' ') . ' байт)';
+    }
     return $result;
 }
 
 /**
- * Вычисляет parent_code для групп и работ (если в XML нет вложенного Parent).
+ * Если у элемента parent_code пустой — пробуем вычислить по коду.
  */
 function compute_parents(array $items): array {
     $groupCodes = [];
@@ -293,7 +241,7 @@ if ($dry === 'works') {
         $result['raw_xml'] = substr($xml, 0, 100000);
 
         $parseErr = null;
-        $parsed = parse_works_sax($xml, $parseErr);
+        $parsed = parse_works_lines($xml, $parseErr);
         $result['simplexml_ok'] = !empty($parsed);
         $result['parse_error']  = $parseErr;
 
@@ -338,9 +286,9 @@ function do_sync_works(PDO $pdo): array {
     ]);
 
     $parseErr = null;
-    $parsed = parse_works_sax($xml, $parseErr);
+    $parsed = parse_works_lines($xml, $parseErr);
     if (empty($parsed)) {
-        throw new RuntimeException('SAX вернул 0 записей. ' . ($parseErr ?: ''));
+        throw new RuntimeException('Парсер вернул 0 записей. ' . ($parseErr ?: ''));
     }
 
     $parsed = compute_parents($parsed);
@@ -384,9 +332,10 @@ function do_sync_works(PDO $pdo): array {
         ]);
         $total++;
     }
-    $msg = 'SAX. Удалено: ' . $skippedDeleted . '. Дублей: ' . $skippedDup;
-    if ($parseErr) $msg .= ' | ' . $parseErr;
-    return ['total' => $total, 'message' => $msg];
+    return [
+        'total' => $total,
+        'message' => 'Построчный парсер. Удалено: ' . $skippedDeleted . '. Дублей: ' . $skippedDup,
+    ];
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
@@ -394,8 +343,8 @@ function do_sync_nomenclature(PDO $pdo): array {
     if (!$inn || !$kpp) throw new RuntimeException('Нужны ONEC_INN и ONEC_KPP');
     $xml = onec_call('UnloadNomenclatureUpdates', ['INN' => $inn, 'KPP' => $kpp]);
     $parseErr = null;
-    $parsed = parse_works_sax($xml, $parseErr);
-    if (empty($parsed)) return ['total' => 0, 'message' => 'SAX 0. ' . ($parseErr ?: '')];
+    $parsed = parse_works_lines($xml, $parseErr);
+    if (empty($parsed)) return ['total' => 0, 'message' => '0 записей. ' . ($parseErr ?: '')];
     $stmt = $pdo->prepare("
         INSERT INTO nomenclatures (code, name, full_name, eng_name, base_measure, code_1c, parent, deleted, updated_at)
         VALUES (:code, :name, :full_name, :eng_name, :base_measure, :code_1c, :parent, :deleted, NOW())
@@ -409,7 +358,7 @@ function do_sync_nomenclature(PDO $pdo): array {
             ':parent' => $p['parent_code'], ':deleted' => $p['deleted'] ? 1 : 0]);
         $total++;
     }
-    return ['total' => $total, 'message' => 'SAX'];
+    return ['total' => $total, 'message' => 'Построчный парсер'];
 }
 
 function run_sync(PDO $pdo, string $t, callable $fn): array {
