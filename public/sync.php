@@ -13,12 +13,11 @@ $type = $_GET['type'] ?? '';
 if (!in_array($type, ['works', 'nomenclature', 'all'], true)) $type = '';
 
 $running   = !empty($_GET['run']);
-$diagnose  = !empty($_GET['diagnose']);
+$diagN     = isset($_GET['diag']) ? (int)$_GET['diag'] : 0;
 $messages  = [];
 $error     = null;
 
 /**
- * Правильный SOAPAction: с префиксом Zakaz:
  * Из WSDL: soapAction="http://1c.kamaz.ru/zakaz#Zakaz:UnloadWorkOperations"
  */
 function soap_action(string $operation): string {
@@ -61,7 +60,8 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_POSTFIELDS     => $envelope,
         CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
         CURLOPT_USERPWD        => $login . ':' . $password,
-        CURLOPT_TIMEOUT        => 180,
+        CURLOPT_TIMEOUT        => 45,  // было 180 — уменьшили, чтобы уложиться в nginx
+        CURLOPT_CONNECTTIMEOUT => 15,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_HTTPHEADER     => [
@@ -107,28 +107,17 @@ function xml_tag(string $xml, string $tag): ?string {
     return null;
 }
 
-function xml_blocks(string $xml, string $tag): array {
-    $t = preg_quote($tag, '~');
-    $re = '~<[^:>\s]+:' . $t . '(?:\s[^>]*)?>(.*?)</[^:>\s]+:' . $t . '>~is';
-    if (preg_match_all($re, $xml, $m)) return $m[1];
-    $re = '~<' . $t . '(?:\s[^>]*)?>(.*?)</' . $t . '>~is';
-    if (preg_match_all($re, $xml, $m)) return $m[1];
-    return [];
-}
-
-function raw_preview(string $xml, int $len = 400): string {
+function raw_preview(string $xml, int $len = 2000): string {
     $v = preg_replace('/\s+/', ' ', $xml);
     return substr(trim($v), 0, $len);
 }
 
 /**
  * Парсит ответ с элементами WorkOperation (внутри <WorkOperations>).
- * Стратегия: режем по <Code>, для каждого берём окно и вытаскиваем поля.
  */
 function parse_work_operations(string $xml): array {
     $items = [];
 
-    // Все Code с позициями (первый Code в каждом <WorkOperation> = код самой записи)
     $re = '~<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?Code>~i';
     if (!preg_match_all($re, $xml, $m, PREG_OFFSET_CAPTURE)) {
         return $items;
@@ -169,7 +158,6 @@ function parse_work_operations(string $xml): array {
         $factWork   = strtolower($getLast('FactWork') ?? 'false') === 'true';
         $deleted    = strtolower($getLast('Deleted') ?? 'false') === 'true';
 
-        // Родитель: находим <Parent> в окне, берём первый Code внутри
         $parentCode = null;
         if (preg_match('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $window, $pm)) {
             $pc = xml_tag($pm[1], 'Code');
@@ -198,48 +186,39 @@ function date_tz(): string {
     return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
-function diagnose_works(PDO $pdo): array {
+/**
+ * Возвращает описание одного диагностического варианта по номеру.
+ * Каждый вариант — ОДИН запрос (чтобы уложиться в nginx-таймаут).
+ */
+function diag_variant(int $n): ?array {
     $tz  = date_tz();
     $inn = getenv('ONEC_INN') ?: '';
     $kpp = getenv('ONEC_KPP') ?: '';
 
     $variants = [
-        'V1: UnloadWorkOperations, OperationCode=null, даты (xs:date)' => [
+        1 => [
+            'label' => 'UnloadWorkOperations с nillable (OperationCode=null, даты с tz)',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
         ],
-        'V2: UnloadWorkOperations, OperationCode=null, даты без tz' => [
+        2 => [
+            'label' => 'UnloadWorkOperations с nillable (даты без tz)',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
         ],
-        'V3: UnloadWorkOperations, все null' => [
+        3 => [
+            'label' => 'UnloadWorkOperations все null',
             'op' => 'UnloadWorkOperations',
             'params' => ['OperationCode' => null, 'StartDate' => null, 'EndDate' => null],
         ],
-        'V4: UnloadWorkOperationsUpdates с INN/KPP (проверка, что тоже работает)' => [
+        4 => [
+            'label' => 'UnloadWorkOperationsUpdates с INN/KPP (проверка)',
             'op' => 'UnloadWorkOperationsUpdates',
             'params' => ['INN' => $inn, 'KPP' => $kpp],
         ],
     ];
 
-    $results = [];
-    foreach ($variants as $label => $cfg) {
-        $entry = ['label' => $label, 'op' => $cfg['op'], 'params' => $cfg['params'], 'soap_action' => soap_action($cfg['op'])];
-        try {
-            $xml = onec_call($cfg['op'], $cfg['params']);
-            $entry['http']   = 200;
-            $entry['raw_len'] = strlen($xml);
-            $entry['desc']   = xml_tag($xml, 'Description');
-            $entry['preview'] = raw_preview($xml, 2000);
-            $parsed = parse_work_operations($xml);
-            $entry['parsed_count'] = count($parsed);
-            $entry['parsed_sample'] = array_slice($parsed, 0, 3);
-        } catch (Throwable $e) {
-            $entry['error'] = $e->getMessage();
-        }
-        $results[] = $entry;
-    }
-    return $results;
+    return $variants[$n] ?? null;
 }
 
 function do_sync_works(PDO $pdo): array {
@@ -389,6 +368,26 @@ if ($running && $type) {
     }
 }
 
+// Результат одного диагностического варианта
+$diagResult = null;
+if ($diagN > 0) {
+    $cfg = diag_variant($diagN);
+    if ($cfg) {
+        $diagResult = ['n' => $diagN, 'label' => $cfg['label'], 'op' => $cfg['op'], 'params' => $cfg['params'], 'soap_action' => soap_action($cfg['op'])];
+        try {
+            $xml = onec_call($cfg['op'], $cfg['params']);
+            $diagResult['raw_len']  = strlen($xml);
+            $diagResult['desc']     = xml_tag($xml, 'Description');
+            $diagResult['preview']  = raw_preview($xml, 3000);
+            $parsed = parse_work_operations($xml);
+            $diagResult['parsed_count']  = count($parsed);
+            $diagResult['parsed_sample'] = array_slice($parsed, 0, 3);
+        } catch (Throwable $e) {
+            $diagResult['error'] = $e->getMessage();
+        }
+    }
+}
+
 $history = $pdo->query("
     SELECT * FROM sync_log ORDER BY started_at DESC LIMIT 20
 ")->fetchAll();
@@ -425,7 +424,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .badge-blue { background:#eff6ff; color:#2563eb; }
   code { background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; }
   .err-cell { color:#555; font-size:11px; word-break:break-all; max-width:480px; }
-  .diag-item { border:1.5px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:12px; }
   pre { white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
@@ -448,42 +446,31 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <div class="alert alert-success">✅ <?= e($m) ?></div>
   <?php endforeach; ?>
 
-  <?php if ($diagnose): ?>
-    <?php $diagResults = diagnose_works($pdo); ?>
+  <?php if ($diagResult): ?>
     <div class="card">
-      <h2>🔬 Результаты диагностики</h2>
-      <p style="font-size:12px;color:#666;">SOAPAction теперь с префиксом <code>Zakaz:</code> — как указано в WSDL.</p>
-      <?php foreach ($diagResults as $i => $r): ?>
-        <div class="diag-item">
-          <div style="font-weight:700;margin-bottom:6px;"><?= ($i + 1) ?>. <?= e($r['label']) ?></div>
-          <div style="font-size:11px;color:#666;margin-bottom:6px;">
-            Метод: <code><?= e($r['op']) ?></code><br>
-            SOAPAction: <code><?= e($r['soap_action']) ?></code><br>
-            Параметры: <code><?= e(json_encode($r['params'], JSON_UNESCAPED_UNICODE)) ?></code>
-          </div>
-          <?php if (isset($r['error'])): ?>
-            <div style="background:#fef2f2;color:#dc2626;padding:8px;border-radius:6px;font-size:12px;word-break:break-all;">
-              ❌ Ошибка: <?= e(substr($r['error'], 0, 600)) ?>
-            </div>
-          <?php else: ?>
-            <div style="background:<?= ($r['parsed_count'] ?? 0) > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:8px;border-radius:6px;font-size:13px;font-weight:600;">
-              ✅ HTTP 200 · Ответ <?= (int)($r['raw_len'] ?? 0) ?> байт · Распознано: <?= (int)($r['parsed_count'] ?? 0) ?>
-              <?php if ($r['desc']): ?> · Описание: <?= e(substr($r['desc'], 0, 200)) ?><?php endif; ?>
-            </div>
-            <?php if (!empty($r['parsed_sample'])): ?>
-              <details style="margin-top:8px;" open>
-                <summary style="cursor:pointer;color:#2563eb;font-size:12px;">Примеры распознанных записей</summary>
-                <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:400px;"><?= e(json_encode($r['parsed_sample'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
-              </details>
-            <?php endif; ?>
-            <details style="margin-top:8px;">
-              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 2000 символов)</summary>
-              <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:300px;"><?= e($r['preview']) ?></pre>
-            </details>
-          <?php endif; ?>
+      <h2>🔬 Диагностика — вариант <?= (int)$diagResult['n'] ?></h2>
+      <div style="font-weight:700;margin-bottom:6px;"><?= e($diagResult['label']) ?></div>
+      <div style="font-size:11px;color:#666;margin-bottom:10px;">
+        Метод: <code><?= e($diagResult['op']) ?></code><br>
+        SOAPAction: <code><?= e($diagResult['soap_action']) ?></code><br>
+        Параметры: <code><?= e(json_encode($diagResult['params'], JSON_UNESCAPED_UNICODE)) ?></code>
+      </div>
+      <?php if (isset($diagResult['error'])): ?>
+        <div style="background:#fef2f2;color:#dc2626;padding:10px;border-radius:6px;font-size:12px;word-break:break-all;">
+          ❌ Ошибка: <?= e($diagResult['error']) ?>
         </div>
-      <?php endforeach; ?>
-      <a href="sync.php" class="btn btn-secondary">← Назад</a>
+      <?php else: ?>
+        <div style="background:<?= ($diagResult['parsed_count'] ?? 0) > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:10px;border-radius:6px;font-size:14px;font-weight:700;">
+          ✅ HTTP 200 · Ответ <?= (int)$diagResult['raw_len'] ?> байт · Распознано записей: <?= (int)$diagResult['parsed_count'] ?>
+          <?php if ($diagResult['desc']): ?> · Описание: <?= e(substr($diagResult['desc'], 0, 300)) ?><?php endif; ?>
+        </div>
+        <?php if (!empty($diagResult['parsed_sample'])): ?>
+          <h3 style="margin-top:14px;font-size:14px;">Примеры распознанных записей</h3>
+          <pre style="background:#f9fafb;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:500px;"><?= e(json_encode($diagResult['parsed_sample'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
+        <?php endif; ?>
+        <h3 style="margin-top:14px;font-size:14px;">Полный ответ 1С (первые 3000 символов)</h3>
+        <pre style="background:#f9fafb;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:400px;"><?= e($diagResult['preview']) ?></pre>
+      <?php endif; ?>
     </div>
   <?php endif; ?>
 
@@ -502,13 +489,21 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
          onclick="return confirm('Обновить всё?')">
         🔄 Обновить всё
       </a>
-      <a href="sync.php?diagnose=1" class="btn" style="background:#b45309;">
-        🔬 Диагностика
-      </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Работает через <code>UnloadWorkOperations</code> с правильным SOAPAction из WSDL.
+      Работает через <code>UnloadWorkOperations</code> с SOAPAction из WSDL.
     </p>
+  </div>
+
+  <div class="card">
+    <h2>🔬 Диагностика (по одному варианту за клик)</h2>
+    <p style="font-size:13px;color:#666;">Nginx рубит долгие запросы — поэтому делаем по одному. Нажми по очереди.</p>
+    <div class="btn-row">
+      <a href="sync.php?diag=1" class="btn" style="background:#b45309;">Вариант 1: nillable + даты с tz</a>
+      <a href="sync.php?diag=2" class="btn" style="background:#b45309;">Вариант 2: nillable + даты без tz</a>
+      <a href="sync.php?diag=3" class="btn" style="background:#b45309;">Вариант 3: всё null</a>
+      <a href="sync.php?diag=4" class="btn" style="background:#b45309;">Вариант 4: Updates с INN/KPP</a>
+    </div>
   </div>
 
   <div class="card">
