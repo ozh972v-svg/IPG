@@ -113,7 +113,6 @@ function formatSize($bytes) {
   .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   .user-info { font-size: 13px; color: #666; }
   .user-info b { color: #2563eb; }
-  .nav-link { text-decoration: none; font-size: 13px; margin-left: 12px; }
   .logout { color: #dc2626; text-decoration: none; font-size: 13px; margin-left: 12px; }
   .btn { display: inline-block; padding: 12px 18px; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; background: #2563eb; color: #fff; text-decoration: none; text-align: center; transition: opacity 0.2s; }
   .btn:hover { opacity: 0.9; }
@@ -183,10 +182,6 @@ function formatSize($bytes) {
       <h1>📸 <?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></h1>
       <div>
         <span class="user-info">👤 <b><?= e($user['name'] ?: $user['email']) ?></b></span>
-        <a href="profile.php" class="nav-link" style="color:#2563eb;">Профиль</a>
-        <?php if ($user['is_admin']): ?>
-          <a href="admin.php" class="nav-link" style="color:#dc2626;">🛡️ Админ</a>
-        <?php endif; ?>
         <a href="logout.php" class="logout">Выйти</a>
       </div>
     </div>
