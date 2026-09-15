@@ -85,23 +85,32 @@ function check_soap_fault(string $xml): void {
 }
 
 /**
- * Разбирает SOAP-ответ. Двумя способами: SimpleXML, потом DOMDocument как fallback.
+ * Разбирает SOAP-ответ. Возвращает SimpleXMLElement.
+ * Если SimpleXML недоступен в PHP — использует регулярки.
  */
-function parse_soap(string $xml): SimpleXMLElement {
-    // Убираем BOM и лишние пробелы
+function parse_soap(string $xml): ?SimpleXMLElement {
+    // Диагностика: есть ли модуль SimpleXML вообще
+    if (!function_exists('simplexml_load_string')) {
+        throw new RuntimeException(
+            'PHP-модуль SimpleXML НЕ УСТАНОВЛЕН. '
+            . 'Нужно добавить в Dockerfile: apt-get install -y php-xml (или php8.3-xml). '
+            . 'Без него выгрузка работать не сможет.'
+        );
+    }
+
+    // Чистим от BOM и управляющих символов
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
+    $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
     $xml = trim($xml);
 
     $prev = libxml_use_internal_errors(true);
     libxml_clear_errors();
 
-    // Первая попытка — SimpleXML
     $sx = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
     $errs = libxml_get_errors();
     libxml_clear_errors();
 
-    // Вторая попытка — через DOMDocument
-    if (!$sx) {
+    if (!$sx && class_exists('DOMDocument')) {
         $doc = new DOMDocument();
         $loaded = @$doc->loadXML($xml, LIBXML_NONET | LIBXML_NOCDATA);
         if ($loaded) {
@@ -109,18 +118,25 @@ function parse_soap(string $xml): SimpleXMLElement {
         }
     }
 
-    // Третья попытка — удаляем XML-декларацию и пробуем ещё раз
-    if (!$sx) {
-        $xmlNoDecl = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
-        $sx = simplexml_load_string(trim($xmlNoDecl), 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
-    }
-
     libxml_use_internal_errors($prev);
 
     if (!$sx) {
-        $preview = substr(preg_replace('/\s+/', ' ', $xml), 0, 700);
-        $errMsg  = $errs ? (' | libxml: ' . trim($errs[0]->message)) : '';
-        throw new RuntimeException('Не удалось разобрать ответ 1С.' . $errMsg . ' Ответ: ' . $preview);
+        // Диагностика — по байтам
+        $len = strlen($xml);
+        $hex = strtoupper(bin2hex(substr($xml, 0, 60)));
+        $hexStr = implode(' ', str_split($hex, 2));
+        $errMsg = '';
+        foreach ($errs as $e) {
+            $errMsg .= ' libxml[L' . $e->line . ':' . $e->column . ']: ' . trim($e->message) . ';';
+        }
+        $preview = substr(preg_replace('/\s+/', ' ', $xml), 0, 400);
+        throw new RuntimeException(
+            'Не удалось разобрать ответ 1С.'
+            . ' | длина=' . $len . ' байт'
+            . ' | hex начало: ' . $hexStr
+            . ($errMsg ? ' | ошибки:' . $errMsg : ' (libxml не выдал ошибок — вероятно, отключён xml-модуль)')
+            . ' | Ответ: ' . $preview
+        );
     }
     return $sx;
 }
@@ -136,7 +152,7 @@ function first_text(SimpleXMLElement $el, string $tag): ?string {
 }
 
 /**
- * Достаёт Description из ответа (может быть "Операции не найдены" и т.п.).
+ * Достаёт Description из ответа.
  */
 function extract_description(SimpleXMLElement $sx): ?string {
     $nodes = $sx->xpath('//*[local-name()="Description"]');
@@ -153,7 +169,7 @@ function date_tz(): string {
 }
 
 /**
- * Возвращает строку-превью для лога — без тегов, до 500 символов.
+ * Превью ответа для лога.
  */
 function raw_preview(string $xml): string {
     $v = preg_replace('/\s+/', ' ', $xml);
@@ -163,10 +179,10 @@ function raw_preview(string $xml): string {
 function do_sync_works(PDO $pdo): array {
     $tz = date_tz();
 
+    // Пробуем БЕЗ OperationCode — только период.
     $xml = onec_call('UnloadWorkOperations', [
-        'OperationCode' => '',
-        'StartDate'     => '2000-01-01T00:00:00' . $tz,
-        'EndDate'       => '2099-12-31T23:59:59' . $tz,
+        'StartDate' => '2000-01-01T00:00:00' . $tz,
+        'EndDate'   => '2099-12-31T23:59:59' . $tz,
     ]);
     check_soap_fault($xml);
     $sx = parse_soap($xml);
@@ -366,7 +382,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .badge-red { background:#fef2f2; color:#dc2626; }
   .badge-blue { background:#eff6ff; color:#2563eb; }
   code { background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; }
-  .err-cell { color:#dc2626; font-size:11px; word-break:break-all; max-width:400px; }
+  .err-cell { color:#dc2626; font-size:11px; word-break:break-all; max-width:450px; }
 </style>
 </head>
 <body>
@@ -404,9 +420,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
         🔄 Обновить всё
       </a>
     </div>
-    <p style="font-size:13px;color:#666;margin-top:12px;">
-      Используется выгрузка за весь период (2000 – 2099). Формат дат — с таймзоной.
-    </p>
   </div>
 
   <div class="card">
@@ -452,14 +465,19 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   <div class="card">
     <h2>Диагностика окружения</h2>
     <table class="doc-table">
-      <thead><tr><th>Переменная</th><th>Значение</th></tr></thead>
+      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
       <tbody>
+        <tr><td><code>PHP version</code></td><td><?= e(PHP_VERSION) ?></td></tr>
+        <tr><td><code>SimpleXML</code></td><td><?= function_exists('simplexml_load_string') ? '✅ есть' : '❌ ОТСУТСТВУЕТ' ?></td></tr>
+        <tr><td><code>DOMDocument</code></td><td><?= class_exists('DOMDocument') ? '✅ есть' : '❌ ОТСУТСТВУЕТ' ?></td></tr>
+        <tr><td><code>libxml</code></td><td><?= function_exists('libxml_use_internal_errors') ? '✅ есть' : '❌ ОТСУТСТВУЕТ' ?></td></tr>
+        <tr><td><code>curl</code></td><td><?= function_exists('curl_init') ? '✅ есть' : '❌ ОТСУТСТВУЕТ' ?></td></tr>
         <tr><td><code>ONEC_LOGIN</code></td><td><?= getenv('ONEC_LOGIN') ? '✅ задана' : '❌ не задана' ?></td></tr>
         <tr><td><code>ONEC_PASSWORD</code></td><td><?= getenv('ONEC_PASSWORD') ? '✅ задана' : '❌ не задана' ?></td></tr>
-        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '❌ не задана' ?></td></tr>
-        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '❌ не задана' ?></td></tr>
-        <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (используется стандартный)' ?></td></tr>
-        <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (по умолчанию +05:00)' ?></td></tr>
+        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '—' ?></td></tr>
+        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '—' ?></td></tr>
+        <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (стандартный)' ?></td></tr>
+        <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (+05:00)' ?></td></tr>
       </tbody>
     </table>
   </div>
