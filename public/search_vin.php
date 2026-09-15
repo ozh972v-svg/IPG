@@ -148,7 +148,6 @@ function isActive($d) {
   }
   .section-title:first-child { margin-top: 0; }
 
-  /* === БАННЕР ГАРАНТИИ === */
   .warranty-banner {
     padding: 20px 24px; border-radius: 12px; text-align: center;
     font-size: 22px; font-weight: 700; margin: 14px 0;
@@ -177,7 +176,6 @@ function isActive($d) {
     text-align: right;
   }
 
-  /* === ОТМ === */
   .otm-card {
     padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
     margin-bottom: 12px; background: #fff; transition: all 0.15s;
@@ -299,7 +297,6 @@ function isActive($d) {
         <button type="button" class="tab" data-tab="otm">ОТМ и Акции</button>
       </div>
 
-      <!-- ===== ВКЛАДКА 1 ===== -->
       <div class="tab-content active" id="tab-main">
 
         <div class="section-title">Основные сведения</div>
@@ -343,10 +340,8 @@ function isActive($d) {
           </div>
         </div>
 
-        <!-- ГАРАНТИЯ -->
         <div class="section-title">Гарантия</div>
 
-        <!-- Баннер основной гарантии -->
         <div class="warranty-banner <?= $mainActive ? 'yes' : 'no' ?>">
           <?= $mainActive ? '✅ В ГАРАНТИИ' : '❌ НЕ В ГАРАНТИИ' ?>
           <div class="banner-sub">
@@ -369,7 +364,6 @@ function isActive($d) {
           </div>
         </div>
 
-        <!-- Баннеры гарантии на узлы -->
         <?php foreach ($activeNodes as $g): ?>
           <div class="warranty-banner yes">
             ✅ ГАРАНТИЯ НА УЗЛЫ
@@ -400,7 +394,6 @@ function isActive($d) {
 
       </div>
 
-      <!-- ===== ВКЛАДКА 2: ОТМ и Акции ===== -->
       <div class="tab-content" id="tab-otm">
 
         <?php if (!empty($car['_other']['ServiceCampaigns'])): ?>
