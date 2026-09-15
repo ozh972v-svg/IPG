@@ -76,7 +76,6 @@ if (!empty($_GET['number'])) {
     }
 }
 
-// Формат даты: 2026-12-30 -> 30.12.2026
 function fmtDate($d) {
     if (!$d || $d === '—') return '—';
     $d = trim($d);
@@ -86,7 +85,6 @@ function fmtDate($d) {
     return $d;
 }
 
-// Проверить, активна ли дата (>= сегодня)
 function isActive($d) {
     if (!$d) return false;
     $ts = strtotime($d);
@@ -136,12 +134,12 @@ function isActive($d) {
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
-  .field-row { display: flex; padding: 8px 0; border-bottom: 1px solid #f0f0f0; gap: 12px; font-size: 14px; }
+  .field-row { display: flex; padding: 8px 0; border-bottom: 1px solid #f0f0f0; gap: 12px; font-size: 14px; align-items: flex-start; }
   .field-row:last-child { border-bottom: none; }
-  .field-label { color: #666; flex-shrink: 0; min-width: 200px; }
-  .field-value { color: #1a1a1a; font-weight: 500; flex: 1; word-break: break-word; }
+  .field-label { color: #666; flex-shrink: 0; width: 220px; }
+  .field-value { color: #1a1a1a; font-weight: 500; flex: 1; word-break: normal; overflow-wrap: anywhere; }
 
-  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 20px; }
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 0 24px; }
 
   .section-title {
     font-size: 16px; font-weight: 700; color: #1e3a8a;
@@ -150,21 +148,38 @@ function isActive($d) {
   }
   .section-title:first-child { margin-top: 0; }
 
-  /* Баннер гарантии */
   .warranty-banner {
     padding: 14px 20px; border-radius: 12px; text-align: center;
     font-size: 20px; font-weight: 700; margin: 12px 0;
   }
   .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
-  .warranty-banner small {
-    display: block; font-size: 13px; font-weight: 500;
-    color: #666; margin-top: 6px;
-  }
   .warranty-banner .banner-sub {
     font-size: 13px; font-weight: 500; color: #555;
     margin-top: 8px; line-height: 1.6;
   }
+
+  .otm-card {
+    padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
+    margin-bottom: 12px; background: #fff; transition: all 0.15s;
+  }
+  .otm-card:hover { border-color: #2563eb; }
+
+  .otm-status {
+    padding: 10px 14px; border-radius: 10px;
+    font-weight: 700; font-size: 14px;
+    margin-bottom: 14px; text-align: center;
+  }
+  .otm-status.done { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
+  .otm-status.not-done { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
+
+  .otm-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .otm-card-title { font-weight: 700; font-size: 15px; color: #1e3a8a; flex: 1; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge-blue { background: #eff6ff; color: #2563eb; }
+  .badge-green { background: #f0fdf4; color: #16a34a; }
+  .badge-red { background: #fef2f2; color: #dc2626; }
+  .badge-yellow { background: #fffbeb; color: #b45309; }
 
   table.doc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
   table.doc-table th {
@@ -180,19 +195,6 @@ function isActive($d) {
   table.doc-table tr:last-child td { border-bottom: none; }
   table.doc-table tr:hover td { background: #fafbff; }
 
-  .otm-card {
-    padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
-    margin-bottom: 12px; background: #fff; transition: all 0.15s;
-  }
-  .otm-card:hover { border-color: #2563eb; }
-  .otm-card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-  .otm-card-title { font-weight: 700; font-size: 15px; color: #1e3a8a; }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
-  .badge-blue { background: #eff6ff; color: #2563eb; }
-  .badge-green { background: #f0fdf4; color: #16a34a; }
-  .badge-red { background: #fef2f2; color: #dc2626; }
-  .badge-yellow { background: #fffbeb; color: #b45309; }
-
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
 
@@ -205,9 +207,10 @@ function isActive($d) {
     overflow: auto; margin-top: 10px; white-space: pre-wrap;
   }
 
-  @media (max-width: 600px) {
-    .field-label { min-width: 100%; }
+  @media (max-width: 700px) {
     .field-row { flex-direction: column; gap: 4px; }
+    .field-label { width: auto; }
+    .field-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -251,10 +254,8 @@ function isActive($d) {
 
   <?php if ($car): ?>
     <?php
-      // Статус основной гарантии — считаем по дате окончания
       $mainActive = isActive($car['WarrantyExpirationDate'] ?? null);
 
-      // Гарантии на узлы — только активные
       $nodeWarranties = $car['_other']['GuaranteesForNodes'] ?? [];
       $activeNodes = [];
       foreach ($nodeWarranties as $g) {
@@ -331,10 +332,11 @@ function isActive($d) {
             с <?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?>
             по <?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?>
             · пробег <?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км
+            · наработка <?= (int)($car['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч
           </div>
         </div>
 
-        <!-- Баннер гарантии на узлы -->
+        <!-- Баннеры гарантии на узлы (только активные) -->
         <?php foreach ($activeNodes as $g): ?>
           <div class="warranty-banner yes">
             ✅ ГАРАНТИЯ НА УЗЛЫ
@@ -347,33 +349,6 @@ function isActive($d) {
           </div>
         <?php endforeach; ?>
 
-        <!-- Таблица всех гарантий на узлы -->
-        <?php if (!empty($nodeWarranties)): ?>
-          <div class="section-title" style="font-size:14px;">Все гарантии на узлы</div>
-          <table class="doc-table">
-            <thead>
-              <tr>
-                <th>Наименование</th>
-                <th>Узел</th>
-                <th>Дата окончания</th>
-                <th>Пробег</th>
-                <th>Наработка</th>
-              </tr>
-            </thead>
-            <tbody>
-              <?php foreach ($nodeWarranties as $g): ?>
-                <tr>
-                  <td><?= e($g['Name'] ?? '—') ?></td>
-                  <td><?= e($g['NameDefectiveNode'] ?? '—') ?></td>
-                  <td><?= e(fmtDate($g['ExtensionPeriod'] ?? null)) ?></td>
-                  <td><?= number_format((int)($g['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</td>
-                  <td><?= (int)($g['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч</td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        <?php endif; ?>
-
       </div>
 
       <!-- ===== ВКЛАДКА 2: ОТМ и Акции ===== -->
@@ -384,7 +359,13 @@ function isActive($d) {
           <div class="section-title">Сервисные кампании (ОТМ)</div>
 
           <?php foreach ($car['_other']['ServiceCampaigns'] as $s): ?>
+            <?php $isDone = (int)($s['Сompleted'] ?? 0) > 0; ?>
             <div class="otm-card">
+
+              <div class="otm-status <?= $isDone ? 'done' : 'not-done' ?>">
+                <?= $isDone ? '✅ Мероприятие выполнено' : '❌ Мероприятие не выполнено' ?>
+              </div>
+
               <div class="otm-card-header">
                 <div class="otm-card-title"><?= e($s['Name'] ?? '—') ?></div>
                 <span class="badge <?= ($s['Type'] ?? '') === 'R' ? 'badge-red' : 'badge-yellow' ?>">
