@@ -315,7 +315,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   <?php endforeach; ?>
 
   <?php if (!$type || $type === 'all'): ?>
-    <div class="card">
+        <div class="card">
       <h2>Что синхронизировать</h2>
       <div class="btn-row">
         <a href="sync.php?type=works&run=1" class="btn btn-green"
