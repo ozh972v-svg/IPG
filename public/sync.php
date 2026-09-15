@@ -17,6 +17,14 @@ $diagnose  = !empty($_GET['diagnose']);
 $messages  = [];
 $error     = null;
 
+/**
+ * Правильный SOAPAction: с префиксом Zakaz:
+ * Из WSDL: soapAction="http://1c.kamaz.ru/zakaz#Zakaz:UnloadWorkOperations"
+ */
+function soap_action(string $operation): string {
+    return 'http://1c.kamaz.ru/zakaz#Zakaz:' . $operation;
+}
+
 function onec_call(string $operation, array $params = []): string {
     $login    = getenv('ONEC_SOAP_LOGIN')    ?: getenv('ONEC_LOGIN');
     $password = getenv('ONEC_SOAP_PASSWORD') ?: getenv('ONEC_PASSWORD');
@@ -25,15 +33,21 @@ function onec_call(string $operation, array $params = []): string {
     }
 
     $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
-    $ns = 'http://1c.kamaz.ru/zakaz';
+    $ns  = 'http://1c.kamaz.ru/zakaz';
+    $xsi = 'http://www.w3.org/2001/XMLSchema-instance';
 
     $paramsXml = '';
     foreach ($params as $k => $v) {
-        $paramsXml .= '<zak:' . $k . '>' . htmlspecialchars((string)$v, ENT_XML1) . '</zak:' . $k . '>';
+        if ($v === null) {
+            $paramsXml .= '<zak:' . $k . ' xsi:nil="true"/>';
+        } else {
+            $paramsXml .= '<zak:' . $k . '>' . htmlspecialchars((string)$v, ENT_XML1) . '</zak:' . $k . '>';
+        }
     }
 
     $envelope = '<?xml version="1.0" encoding="UTF-8"?>'
-        . '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:zak="' . $ns . '">'
+        . '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
+        . 'xmlns:zak="' . $ns . '" xmlns:xsi="' . $xsi . '">'
         . '<soapenv:Header/>'
         . '<soapenv:Body>'
         . '<zak:' . $operation . '>' . $paramsXml . '</zak:' . $operation . '>'
@@ -52,7 +66,7 @@ function onec_call(string $operation, array $params = []): string {
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: text/xml; charset=utf-8',
-            'SOAPAction: "' . $ns . '#' . $operation . '"',
+            'SOAPAction: "' . soap_action($operation) . '"',
         ],
     ]);
     $response = curl_exec($ch);
@@ -102,54 +116,19 @@ function xml_blocks(string $xml, string $tag): array {
     return [];
 }
 
-function block_field(string $block, string $tag): ?string {
-    return xml_tag($block, $tag);
-}
-
-function block_parent_code(string $block): ?string {
-    if (!preg_match('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $block, $m)) {
-        return null;
-    }
-    $parentBlock = $m[1];
-    $code = xml_tag($parentBlock, 'Code');
-    if ($code === null) {
-        $code = trim(strip_tags($parentBlock));
-        $code = $code === '' ? null : $code;
-    }
-    return $code;
-}
-
-function date_tz(): string {
-    return getenv('ONEC_DATE_TZ') ?: '+05:00';
-}
-
-function date_params(): array {
-    $tz = date_tz();
-    return [
-        'StartDate' => '2000-01-01' . $tz,
-        'EndDate'   => '2099-12-31' . $tz,
-    ];
-}
-
 function raw_preview(string $xml, int $len = 400): string {
     $v = preg_replace('/\s+/', ' ', $xml);
     return substr(trim($v), 0, $len);
 }
 
 /**
- * Парсит ответ UnloadWorkOperationsUpdates.
- * Структура: <WorkOperations><Parent>...fields...</Parent>...</WorkOperations>
- * (элементы — тег Parent, поля внутри: ItIsGroup, Code, Name, FullName, OperationCode,
- *  NameWork, EngName, Description, GuardWork, FactWork, Deleted).
- * Также бывает вложенный <Parent> — ссылка на родителя (берём его Code).
- *
- * Стратегия: находим все <Code>...</Code>, для каждого берём окно до следующего Code
- * (плюс немного назад), и из окна извлекаем поля. Используем Code как ключ.
+ * Парсит ответ с элементами WorkOperation (внутри <WorkOperations>).
+ * Стратегия: режем по <Code>, для каждого берём окно и вытаскиваем поля.
  */
 function parse_work_operations(string $xml): array {
     $items = [];
 
-    // Все Code с позициями
+    // Все Code с позициями (первый Code в каждом <WorkOperation> = код самой записи)
     $re = '~<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?Code>~i';
     if (!preg_match_all($re, $xml, $m, PREG_OFFSET_CAPTURE)) {
         return $items;
@@ -159,7 +138,6 @@ function parse_work_operations(string $xml): array {
     $positions = $m[0];
     $n = count($codes);
 
-    // Границы контейнера WorkOperations — чтобы не выйти за его пределы
     $containerStart = 0;
     $containerEnd = strlen($xml);
     if (preg_match('~<(?:[^:>\s]+:)?WorkOperations(?:\s[^>]*)?>~i', $xml, $cm, PREG_OFFSET_CAPTURE)) {
@@ -173,11 +151,9 @@ function parse_work_operations(string $xml): array {
         $startPos = $positions[$i][1];
         $endPos   = ($i + 1 < $n) ? $positions[$i + 1][1] : min($containerEnd, strlen($xml));
 
-        // Окно: 600 символов назад (вдруг Name/ItIsGroup идут до Code) + до следующего Code
-        $windowStart = max($containerStart, $startPos - 600);
-        $window = substr($xml, $windowStart, $endPos - $windowStart + 400);
+        $windowStart = max($containerStart, $startPos - 800);
+        $window = substr($xml, $windowStart, $endPos - $windowStart + 500);
 
-        // Парсим поля — берём ПОСЛЕДНЕЕ вхождение в окне, чтобы не спутать с вложенным Parent
         $getLast = function(string $tag) use ($window) {
             $t = preg_quote($tag, '~');
             $re = '~<(?:[^:>\s]+:)?' . $t . '(?:\s[^>]*)?>([^<]*)</(?:[^:>\s]+:)?' . $t . '>~i';
@@ -193,16 +169,11 @@ function parse_work_operations(string $xml): array {
         $factWork   = strtolower($getLast('FactWork') ?? 'false') === 'true';
         $deleted    = strtolower($getLast('Deleted') ?? 'false') === 'true';
 
-        // Родитель: ищем <Parent>...</Parent> в окне и достаём его Code
+        // Родитель: находим <Parent> в окне, берём первый Code внутри
         $parentCode = null;
-        if (preg_match_all('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $window, $pm)) {
-            foreach ($pm[1] as $parentBlock) {
-                $pc = xml_tag($parentBlock, 'Code');
-                if ($pc !== null && $pc !== $code) {
-                    $parentCode = $pc;
-                    break;
-                }
-            }
+        if (preg_match('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $window, $pm)) {
+            $pc = xml_tag($pm[1], 'Code');
+            if ($pc !== null && $pc !== $code) $parentCode = $pc;
         }
 
         $items[$code] = [
@@ -223,36 +194,43 @@ function parse_work_operations(string $xml): array {
     return array_values($items);
 }
 
+function date_tz(): string {
+    return getenv('ONEC_DATE_TZ') ?: '+05:00';
+}
+
 function diagnose_works(PDO $pdo): array {
     $tz  = date_tz();
     $inn = getenv('ONEC_INN') ?: '';
     $kpp = getenv('ONEC_KPP') ?: '';
 
     $variants = [
-        'V1: UnloadWorkOperationsUpdates c INN/KPP' => [
-            'op' => 'UnloadWorkOperationsUpdates',
-            'params' => ['INN' => $inn, 'KPP' => $kpp],
+        'V1: UnloadWorkOperations, OperationCode=null, даты (xs:date)' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
         ],
-        'V2: UnloadWorkOperationsUpdates с INN/KPP и датами' => [
-            'op' => 'UnloadWorkOperationsUpdates',
-            'params' => ['INN' => $inn, 'KPP' => $kpp, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
+        'V2: UnloadWorkOperations, OperationCode=null, даты без tz' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01', 'EndDate' => '2099-12-31'],
         ],
-        'V3: UnloadNomenclatureUpdates c INN/KPP' => [
-            'op' => 'UnloadNomenclatureUpdates',
+        'V3: UnloadWorkOperations, все null' => [
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => null, 'StartDate' => null, 'EndDate' => null],
+        ],
+        'V4: UnloadWorkOperationsUpdates с INN/KPP (проверка, что тоже работает)' => [
+            'op' => 'UnloadWorkOperationsUpdates',
             'params' => ['INN' => $inn, 'KPP' => $kpp],
         ],
     ];
 
     $results = [];
     foreach ($variants as $label => $cfg) {
-        $entry = ['label' => $label, 'op' => $cfg['op'], 'params' => $cfg['params']];
+        $entry = ['label' => $label, 'op' => $cfg['op'], 'params' => $cfg['params'], 'soap_action' => soap_action($cfg['op'])];
         try {
             $xml = onec_call($cfg['op'], $cfg['params']);
-            $entry['http']  = 200;
-            $entry['desc']  = xml_tag($xml, 'Description');
-            $entry['codes'] = count(xml_blocks($xml, 'Code'));
-            $entry['preview'] = raw_preview($xml, 3000);
-            // Первые 3 элемента из парсера
+            $entry['http']   = 200;
+            $entry['raw_len'] = strlen($xml);
+            $entry['desc']   = xml_tag($xml, 'Description');
+            $entry['preview'] = raw_preview($xml, 2000);
             $parsed = parse_work_operations($xml);
             $entry['parsed_count'] = count($parsed);
             $entry['parsed_sample'] = array_slice($parsed, 0, 3);
@@ -265,13 +243,13 @@ function diagnose_works(PDO $pdo): array {
 }
 
 function do_sync_works(PDO $pdo): array {
-    $inn = getenv('ONEC_INN');
-    $kpp = getenv('ONEC_KPP');
-    if (!$inn || !$kpp) {
-        throw new RuntimeException('Для выгрузки работ нужны ONEC_INN и ONEC_KPP');
-    }
+    $tz = date_tz();
 
-    $xml = onec_call('UnloadWorkOperationsUpdates', ['INN' => $inn, 'KPP' => $kpp]);
+    $xml = onec_call('UnloadWorkOperations', [
+        'OperationCode' => null,
+        'StartDate'     => '2000-01-01' . $tz,
+        'EndDate'       => '2099-12-31' . $tz,
+    ]);
     check_soap_fault($xml);
 
     $description = xml_tag($xml, 'Description');
@@ -281,6 +259,7 @@ function do_sync_works(PDO $pdo): array {
         return [
             'total'   => 0,
             'message' => 'Записей 0. ' . ($description ? 'Сообщение: ' . $description : '(без описания)')
+                       . ' | Длина ответа: ' . strlen($xml) . ' байт'
                        . ' | Ответ: ' . raw_preview($xml, 400),
         ];
     }
@@ -333,9 +312,6 @@ function do_sync_nomenclature(PDO $pdo): array {
     check_soap_fault($xml);
 
     $description = xml_tag($xml, 'Description');
-
-    // Для номенклатуры структура похожая, но элементы могут называться иначе.
-    // Используем тот же парсер по Code — он найдёт все <Code> в ответе.
     $parsed = parse_work_operations($xml);
 
     if (count($parsed) === 0) {
@@ -365,7 +341,7 @@ function do_sync_nomenclature(PDO $pdo): array {
         $stmt->execute([
             ':code'         => $p['code'],
             ':name'         => $p['name'],
-            ':full_name'    => $p['name'] !== null && $p['name_work'] === null ? $p['name'] : null, // временно
+            ':full_name'    => null,
             ':eng_name'     => $p['eng_name'],
             ':base_measure' => null,
             ':code_1c'      => null,
@@ -476,22 +452,22 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <?php $diagResults = diagnose_works($pdo); ?>
     <div class="card">
       <h2>🔬 Результаты диагностики</h2>
+      <p style="font-size:12px;color:#666;">SOAPAction теперь с префиксом <code>Zakaz:</code> — как указано в WSDL.</p>
       <?php foreach ($diagResults as $i => $r): ?>
         <div class="diag-item">
-          <div style="font-weight:700;margin-bottom:6px;">
-            <?= ($i + 1) ?>. <?= e($r['label']) ?>
-          </div>
-          <div style="font-size:12px;color:#666;margin-bottom:6px;">
-            Метод: <code><?= e($r['op']) ?></code> ·
+          <div style="font-weight:700;margin-bottom:6px;"><?= ($i + 1) ?>. <?= e($r['label']) ?></div>
+          <div style="font-size:11px;color:#666;margin-bottom:6px;">
+            Метод: <code><?= e($r['op']) ?></code><br>
+            SOAPAction: <code><?= e($r['soap_action']) ?></code><br>
             Параметры: <code><?= e(json_encode($r['params'], JSON_UNESCAPED_UNICODE)) ?></code>
           </div>
           <?php if (isset($r['error'])): ?>
             <div style="background:#fef2f2;color:#dc2626;padding:8px;border-radius:6px;font-size:12px;word-break:break-all;">
-              ❌ Ошибка: <?= e(substr($r['error'], 0, 500)) ?>
+              ❌ Ошибка: <?= e(substr($r['error'], 0, 600)) ?>
             </div>
           <?php else: ?>
             <div style="background:<?= ($r['parsed_count'] ?? 0) > 0 ? '#f0fdf4;color:#16a34a' : '#fffbeb;color:#b45309' ?>;padding:8px;border-radius:6px;font-size:13px;font-weight:600;">
-              ✅ HTTP 200 · Распознано записей: <?= (int)($r['parsed_count'] ?? 0) ?>
+              ✅ HTTP 200 · Ответ <?= (int)($r['raw_len'] ?? 0) ?> байт · Распознано: <?= (int)($r['parsed_count'] ?? 0) ?>
               <?php if ($r['desc']): ?> · Описание: <?= e(substr($r['desc'], 0, 200)) ?><?php endif; ?>
             </div>
             <?php if (!empty($r['parsed_sample'])): ?>
@@ -501,7 +477,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
               </details>
             <?php endif; ?>
             <details style="margin-top:8px;">
-              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 3000 символов)</summary>
+              <summary style="cursor:pointer;color:#666;font-size:12px;">Полный ответ 1С (первые 2000 символов)</summary>
               <pre style="background:#f9fafb;padding:8px;border-radius:6px;font-size:11px;overflow:auto;max-height:300px;"><?= e($r['preview']) ?></pre>
             </details>
           <?php endif; ?>
@@ -531,7 +507,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Работает через <code>UnloadWorkOperationsUpdates</code> и <code>UnloadNomenclatureUpdates</code> с INN/KPP.
+      Работает через <code>UnloadWorkOperations</code> с правильным SOAPAction из WSDL.
     </p>
   </div>
 
