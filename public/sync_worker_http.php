@@ -4,8 +4,8 @@
  * Отдаёт клиенту 1x1 GIF сразу (fastcgi_finish_request), продолжает в фоне.
  *
  * Режимы:
- *   ?type=works|nomenclature|all  — синхронизация
- *   ?dry=works                    — БЕЗ записи в БД, только показать, что распарсилось
+ *   ?type=works|nomenclature|all  — синхронизация (в фоне)
+ *   ?dry=works                    — dry-разбор: сохраняет результат в uploads/dry_result.json
  */
 
 set_time_limit(0);
@@ -20,21 +20,17 @@ $type = $_GET['type'] ?? '';
 $dry  = $_GET['dry'] ?? '';
 
 $GIF = base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
-
-// Режим dry — отдаём HTML, а не GIF
-if ($dry === '') {
-    header('Content-Type: image/gif');
-    header('Content-Length: ' . strlen($GIF));
-    header('Cache-Control: no-store');
-    header('Connection: close');
-    if (function_exists('fastcgi_finish_request')) {
-        echo $GIF;
-        fastcgi_finish_request();
-    } else {
-        echo $GIF;
-        @ob_end_flush();
-        @flush();
-    }
+header('Content-Type: image/gif');
+header('Content-Length: ' . strlen($GIF));
+header('Cache-Control: no-store');
+header('Connection: close');
+if (function_exists('fastcgi_finish_request')) {
+    echo $GIF;
+    fastcgi_finish_request();
+} else {
+    echo $GIF;
+    @ob_end_flush();
+    @flush();
 }
 
 if (!$user || !$user['is_admin']) exit;
@@ -48,7 +44,7 @@ function onec_call(string $operation, array $params = []): string {
     $password = getenv('ONEC_SOAP_PASSWORD') ?: getenv('ONEC_PASSWORD');
     if (!$login || !$password) throw new RuntimeException('Не заданы ONEC_LOGIN / ONEC_PASSWORD');
     $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
-    $ns = 'http://1c.kamaz.ru/zakaz';
+    $ns  = 'http://1c.kamaz.ru/zakaz';
     $xsi = 'http://www.w3.org/2001/XMLSchema-instance';
     $paramsXml = '';
     foreach ($params as $k => $v) {
@@ -102,7 +98,6 @@ function parse_works_simplexml(string $xml): array {
 
     $items = [];
     foreach ($containers as $container) {
-        // Прямые дети через xpath (игнорирует namespace)
         $children = $container->xpath('./*');
         if (!$children) continue;
 
@@ -159,7 +154,6 @@ function compute_parents(array $items): array {
     }
 
     foreach ($items as &$item) {
-        // Если parent уже вычислен (вложенный Parent был) — не трогаем
         if (!empty($item['parent_code'])) continue;
 
         if (!empty($item['it_is_group'])) {
@@ -185,74 +179,41 @@ function compute_parents(array $items): array {
     return $items;
 }
 
-// ========== DRY-режим — показать что распарсилось ==========
+// ========== DRY-режим — сохранить результат в JSON ==========
 if ($dry === 'works') {
-    header('Content-Type: text/html; charset=utf-8');
+    $result = ['error' => null, 'stats' => [], 'items' => [], 'works_sample' => []];
     try {
         $xml = onec_call('UnloadWorkOperations', [
             'OperationCode' => null,
             'StartDate' => '2000-01-01' . date_tz(),
             'EndDate'   => '2099-12-31' . date_tz(),
         ]);
+        $result['xml_len'] = strlen($xml);
+
         $parsed = parse_works_simplexml($xml);
-        $parsed = compute_parents($parsed);
-
-        $groups = array_filter($parsed, fn($x) => $x['it_is_group']);
-        $works  = array_filter($parsed, fn($x) => !$x['it_is_group']);
-
-        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Dry-разбор</title>';
-        echo '<style>body{font-family:-apple-system,sans-serif;background:#f0f2f5;padding:16px;line-height:1.5}';
-        echo '.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 2px 12px rgba(0,0,0,0.06)}';
-        echo 'h1{font-size:20px;margin:0 0 12px}h2{font-size:16px;margin:12px 0 8px;color:#1e3a8a}';
-        echo 'table{width:100%;border-collapse:collapse;font-size:12px}';
-        echo 'th{background:#f9fafb;text-align:left;padding:6px 8px;font-size:10px;color:#666;text-transform:uppercase}';
-        echo 'td{padding:6px 8px;border-bottom:1px solid #f0f0f0}';
-        echo 'code{background:#eff6ff;padding:1px 5px;border-radius:3px;color:#1e3a8a}';
-        echo '.err{color:#dc2626}</style></head><body>';
-
-        echo '<div class="card"><h1>🔬 DRY-разбор XML от 1С (без записи в БД)</h1>';
-        echo '<p>Длина XML: <b>' . strlen($xml) . '</b> байт</p>';
-        echo '<p>SimpleXML распарсил: <b class="' . (empty($parsed) ? 'err' : '') . '">' . (empty($parsed) ? '❌ НЕТ' : '✅ да') . '</b></p>';
-        echo '<p>Всего элементов: <b>' . count($parsed) . '</b> '
-            . '(групп: <b>' . count($groups) . '</b>, работ: <b>' . count($works) . '</b>)</p>';
-        echo '</div>';
+        $result['simplexml_ok'] = !empty($parsed);
 
         if (!empty($parsed)) {
-            echo '<div class="card"><h2>Первые 30 элементов</h2><table>';
-            echo '<tr><th>Code</th><th>Parent</th><th>Тип</th><th>Имя</th><th>OperationCode</th></tr>';
-            $i = 0;
-            foreach ($parsed as $p) {
-                if (++$i > 30) break;
-                echo '<tr>';
-                echo '<td><code>' . htmlspecialchars($p['code']) . '</code></td>';
-                echo '<td><code>' . htmlspecialchars($p['parent_code'] ?? '—') . '</code></td>';
-                echo '<td>' . ($p['it_is_group'] ? '📁 группа' : '🔧 работа') . '</td>';
-                echo '<td>' . htmlspecialchars(mb_substr($p['name'] ?? '', 0, 60)) . '</td>';
-                echo '<td>' . htmlspecialchars($p['operation_code'] ?? '—') . '</td>';
-                echo '</tr>';
-            }
-            echo '</table></div>';
+            $parsed = compute_parents($parsed);
 
-            // Примеры работ и их вычисленного родителя
-            echo '<div class="card"><h2>Примеры работ → вычисленный родитель</h2><table>';
-            echo '<tr><th>Code</th><th>OperationCode</th><th>→ группа</th><th>Имя</th></tr>';
-            $i = 0;
-            foreach ($works as $w) {
-                if (++$i > 30) break;
-                echo '<tr>';
-                echo '<td><code>' . htmlspecialchars($w['code']) . '</code></td>';
-                echo '<td><code>' . htmlspecialchars($w['operation_code'] ?? '—') . '</code></td>';
-                echo '<td><code>' . htmlspecialchars($w['parent_code'] ?? '—') . '</code></td>';
-                echo '<td>' . htmlspecialchars(mb_substr($w['name'] ?? '', 0, 60)) . '</td>';
-                echo '</tr>';
-            }
-            echo '</table></div>';
+            $groups = array_filter($parsed, fn($x) => $x['it_is_group']);
+            $works  = array_filter($parsed, fn($x) => !$x['it_is_group']);
+
+            $result['stats'] = [
+                'total'  => count($parsed),
+                'groups' => count($groups),
+                'works'  => count($works),
+            ];
+
+            $result['items'] = array_slice($parsed, 0, 50);
+            $result['works_sample'] = array_slice(array_values($works), 0, 50);
         }
-
-        echo '</body></html>';
     } catch (Throwable $e) {
-        echo '<div class="card" style="color:#dc2626">❌ Ошибка: ' . htmlspecialchars($e->getMessage()) . '</div>';
+        $result['error'] = $e->getMessage();
     }
+    $dir = __DIR__ . '/uploads';
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    @file_put_contents($dir . '/dry_result.json', json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
     exit(0);
 }
 
