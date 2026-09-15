@@ -13,32 +13,33 @@ $factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
-/* ----- Левая панель: дерево групп -----
-   Берём ТОЛЬКО группы (it_is_group = TRUE). Ограничим до 3000.
-*/
+/* ===== Дерево групп: только группы (it_is_group = TRUE), максимум 5000 ===== */
 $stmt = $pdo->query("
     SELECT code, parent_code, name, operation_code
     FROM work_operations
     WHERE it_is_group = TRUE AND deleted = FALSE
     ORDER BY code
-    LIMIT 3000
+    LIMIT 5000
 ");
 $allGroups = $stmt->fetchAll();
 
+$groupByCode = [];
 $groupByParent = [];
-$groupByCode   = [];
 foreach ($allGroups as $g) {
     $groupByCode[$g['code']] = $g;
     $pc = $g['parent_code'] ?? '__ROOT__';
     $groupByParent[$pc][] = $g;
 }
+
+// Корневые группы — у которых parent_code пустой или которого нет в списке
 $rootGroups = [];
 foreach ($allGroups as $g) {
     $pc = $g['parent_code'] ?? '';
     if ($pc === '' || !isset($groupByCode[$pc])) $rootGroups[] = $g;
 }
 
-/* ----- Правая панель: работы ----- */
+/* ===== Работы ===== */
+// Если выбрана группа — берём работы в ней И во всех подгруппах (рекурсивно)
 $where  = ['w.it_is_group = FALSE', 'w.deleted = FALSE'];
 $params = [];
 
@@ -46,21 +47,33 @@ if ($q !== '') {
     $where[] = "(w.code ILIKE :q OR w.name ILIKE :q OR w.name_work ILIKE :q OR w.operation_code ILIKE :q OR w.eng_name ILIKE :q)";
     $params[':q'] = '%' . $q . '%';
 }
+
+// Рекурсивный CTE для поиска всех подгрупп
+$groupFilterSql = '';
 if ($groupCode !== '') {
-    $where[] = "w.parent_code = :g";
+    $groupFilterSql = "
+        WITH RECURSIVE sub AS (
+            SELECT code FROM work_operations WHERE code = :g
+            UNION ALL
+            SELECT wo.code FROM work_operations wo JOIN sub ON wo.parent_code = sub.code
+            WHERE wo.it_is_group = TRUE
+        )
+    ";
+    $where[] = "w.parent_code IN (SELECT code FROM sub)";
     $params[':g'] = $groupCode;
 }
+
 if ($guardOnly) $where[] = "w.guard_work = TRUE";
 if ($factOnly)  $where[] = "w.fact_work = TRUE";
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations w $whereSql");
+$stmt = $pdo->prepare($groupFilterSql . " SELECT COUNT(*) FROM work_operations w $whereSql");
 $stmt->execute($params);
 $total = (int)$stmt->fetchColumn();
 
 $offset = ($page - 1) * $perPage;
-$stmt = $pdo->prepare("
-    SELECT w.code, w.name, w.operation_code, w.eng_name, w.description, w.guard_work, w.fact_work
+$stmt = $pdo->prepare($groupFilterSql . "
+    SELECT w.code, w.name, w.operation_code, w.eng_name, w.description, w.guard_work, w.fact_work, w.norm_time
     FROM work_operations w
     $whereSql
     ORDER BY w.operation_code NULLS LAST, w.name
@@ -70,7 +83,7 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll();
 $pages = max(1, (int)ceil($total / $perPage));
 
-/* ----- Статистика (быстро) ----- */
+/* ===== Статистика ===== */
 $stats = $pdo->query("
     SELECT
         COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS items,
@@ -84,8 +97,9 @@ $lastSync = $pdo->query("SELECT MAX(updated_at) FROM work_operations")->fetchCol
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i', strtotime($ts)) : '—'; }
 function buildUrl($o = []) { return '?' . http_build_query(array_merge($_GET, $o)); }
 
+/** Рекурсивный рендер группы */
 function renderGroup(array $g, array $byParent, string $selectedCode, int $depth = 0): void {
-    if ($depth > 6) return; // защита от слишком глубокой рекурсии
+    if ($depth > 5) return;
     $code = $g['code'];
     $children = $byParent[$code] ?? [];
     $isSelected = ($code === $selectedCode);
@@ -103,6 +117,11 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
     foreach ($children as $c) {
         renderGroup($c, $byParent, $selectedCode, $depth + 1);
     }
+}
+
+function fmtNorm($n) {
+    if ($n === null) return '—';
+    return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
 }
 ?>
 <!DOCTYPE html>
@@ -151,6 +170,7 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
   .work-name{color:#1a1a1a;font-weight:500}
   .work-eng{color:#888;font-size:11px;margin-top:3px}
   .work-desc{color:#666;font-size:11px;margin-top:4px;font-style:italic}
+  .norm-time{background:#e0f2fe;color:#075985;padding:2px 8px;border-radius:5px;font-size:12px;font-weight:600;white-space:nowrap}
   .badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap;margin-right:4px}
   .badge-guard{background:#f0fdf4;color:#16a34a}
   .badge-fact{background:#f3e8ff;color:#7c3aed}
@@ -198,7 +218,7 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
         <div class="tree-row <?= $groupCode === '' && $q === '' ? 'selected' : '' ?>">
           <a href="?" class="tree-link" style="font-weight:600;">🏠 Все работы</a>
         </div>
-        <div class="tree-group-header">Дерево (<?= count($allGroups) ?> шт.)</div>
+        <div class="tree-group-header">Дерево (<?= count($rootGroups) ?> верхних, <?= count($allGroups) ?> всего)</div>
         <?php foreach ($rootGroups as $g): ?>
           <?php renderGroup($g, $groupByParent, $groupCode); ?>
         <?php endforeach; ?>
@@ -242,8 +262,9 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
         <table class="works">
           <thead>
             <tr>
-              <th style="width:130px;">Код операции</th>
+              <th style="width:120px;">Код операции</th>
               <th>Наименование работы</th>
+              <th style="width:100px;">Норма</th>
               <th style="width:110px;">Флаги</th>
             </tr>
           </thead>
@@ -263,6 +284,11 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
                   <?php if ($r['description'] && mb_strlen($r['description']) < 400): ?>
                     <div class="work-desc"><?= e($r['description']) ?></div>
                   <?php endif; ?>
+                </td>
+                <td>
+                  <?php if ($r['norm_time'] !== null): ?>
+                    <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
+                  <?php else: ?>—<?php endif; ?>
                 </td>
                 <td>
                   <?php if ($r['guard_work']): ?><span class="badge badge-guard">Постовая</span><?php endif; ?>
