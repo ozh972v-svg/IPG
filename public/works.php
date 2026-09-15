@@ -7,7 +7,7 @@ if (!$user) { header('Location: login.php'); exit; }
 $pdo = get_db();
 
 $q          = trim($_GET['q'] ?? '');
-$groupCode  = trim($_GET['group'] ?? '');    // выбранная группа
+$groupCode  = trim($_GET['group'] ?? '');
 $guardOnly  = !empty($_GET['guard']);
 $factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
@@ -24,7 +24,6 @@ foreach ($allGroups as $g) {
     $pc = $g['parent_code'] ?? '__ROOT__';
     $groupByParent[$pc][] = $g;
 }
-// Корневые группы — те, у которых нет родителя в этом же наборе
 $rootGroups = [];
 foreach ($allGroups as $g) {
     $pc = $g['parent_code'] ?? '';
@@ -32,28 +31,29 @@ foreach ($allGroups as $g) {
 }
 
 /* ----- Правая панель: работы выбранной группы ----- */
-$where = ['it_is_group = FALSE', 'deleted = FALSE'];
+// ВАЖНО: во всех условиях используем префикс w. — потому что в запросе есть JOIN
+$where  = ['w.it_is_group = FALSE', 'w.deleted = FALSE'];
 $params = [];
 
 if ($q !== '') {
-    $where[] = "(code ILIKE :q OR name ILIKE :q OR name_work ILIKE :q OR operation_code ILIKE :q OR eng_name ILIKE :q)";
+    $where[] = "(w.code ILIKE :q OR w.name ILIKE :q OR w.name_work ILIKE :q OR w.operation_code ILIKE :q OR w.eng_name ILIKE :q)";
     $params[':q'] = '%' . $q . '%';
 }
 if ($groupCode !== '') {
-    $where[] = "parent_code = :g";
+    $where[] = "w.parent_code = :g";
     $params[':g'] = $groupCode;
 }
-if ($guardOnly) $where[] = "guard_work = TRUE";
-if ($factOnly)  $where[] = "fact_work = TRUE";
+if ($guardOnly) $where[] = "w.guard_work = TRUE";
+if ($factOnly)  $where[] = "w.fact_work = TRUE";
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations $whereSql");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations w $whereSql");
 $stmt->execute($params);
 $total = (int)$stmt->fetchColumn();
 
 $offset = ($page - 1) * $perPage;
 $stmt = $pdo->prepare("
-    SELECT w.*, p.name AS group_name, p.code AS group_opcode
+    SELECT w.*, p.name AS group_name
     FROM work_operations w
     LEFT JOIN work_operations p ON p.code = w.parent_code
     $whereSql
@@ -64,10 +64,10 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll();
 $pages = max(1, (int)ceil($total / $perPage));
 
-// Общая статистика
+// Общая статистика (без JOIN — префиксы не нужны)
 $stats = $pdo->query("
-    SELECT COUNT(*) FILTER (WHERE it_is_group=FALSE AND deleted=FALSE) AS items,
-           COUNT(*) FILTER (WHERE it_is_group=TRUE  AND deleted=FALSE) AS groups
+    SELECT COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS items,
+           COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE) AS groups
     FROM work_operations
 ")->fetch();
 
@@ -77,14 +77,12 @@ $lastSync = $pdo->query("SELECT MAX(updated_at) FROM work_operations")->fetchCol
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i', strtotime($ts)) : '—'; }
 function buildUrl($o = []) { return '?' . http_build_query(array_merge($_GET, $o)); }
 
-/** Рекурсивный рендер группы в дереве */
 function renderGroup(array $g, array $byParent, string $selectedCode, int $depth = 0): void {
     $code = $g['code'];
     $children = $byParent[$code] ?? [];
     $isSelected = ($code === $selectedCode);
     $indent = $depth * 14;
     $name = $g['name'] ?: $code;
-    // Имя типа "10. Двигатель КАМАЗ" — убираем код в начале для компактности
     $display = preg_replace('/^\d+[\.\s]+/u', '', $name);
     $prefix  = '';
     if (preg_match('/^(\d+[\.]?)/u', $name, $mm)) $prefix = $mm[1];
@@ -118,7 +116,7 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
   .btn-small{padding:7px 12px;font-size:13px}
   .btn-row{display:flex;gap:10px;flex-wrap:wrap}
 
-  .layout{display:grid;grid-template-columns:320px 1fr;gap:12px}
+  .layout{display:grid;grid-template-columns:340px 1fr;gap:12px}
   @media (max-width:900px){.layout{grid-template-columns:1fr}}
 
   .search-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
@@ -127,7 +125,6 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
   .filters{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-top:8px}
   .filters label{display:flex;align-items:center;gap:5px;cursor:pointer}
 
-  /* Дерево */
   .tree{font-size:13px;max-height:80vh;overflow-y:auto}
   .tree-row{padding:5px 8px;border-radius:6px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tree-row:hover{background:#f8faff}
@@ -138,7 +135,6 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
   .tree-link:hover{color:#2563eb}
   .tree-group-header{padding:8px;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
 
-  /* Таблица работ */
   table.works{width:100%;border-collapse:collapse;font-size:13px}
   table.works th{background:#f9fafb;color:#666;font-weight:600;text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase;letter-spacing:0.4px}
   table.works td{padding:10px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
@@ -188,7 +184,6 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
 
   <div class="layout">
 
-    <!-- ЛЕВАЯ ПАНЕЛЬ: дерево групп -->
     <div class="card">
       <h2>📁 Группы</h2>
       <div class="tree">
@@ -202,14 +197,10 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
       </div>
     </div>
 
-    <!-- ПРАВАЯ ПАНЕЛЬ: список работ -->
     <div class="card">
       <h2>
         <?php if ($currentGroup): ?>
-          <?php
-            $cn = $currentGroup['name'] ?: $currentGroup['code'];
-            echo '📂 ' . e($cn);
-          ?>
+          <?php $cn = $currentGroup['name'] ?: $currentGroup['code']; echo '📂 ' . e($cn); ?>
         <?php else: ?>
           📋 Все работы
         <?php endif; ?>
@@ -243,9 +234,9 @@ function renderGroup(array $g, array $byParent, string $selectedCode, int $depth
         <table class="works">
           <thead>
             <tr>
-              <th style="width:120px;">Код операции</th>
+              <th style="width:130px;">Код операции</th>
               <th>Наименование работы</th>
-              <th style="width:100px;">Флаги</th>
+              <th style="width:110px;">Флаги</th>
             </tr>
           </thead>
           <tbody>
