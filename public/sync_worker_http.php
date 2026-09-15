@@ -82,19 +82,54 @@ function cut(?string $s, int $max): ?string {
 function date_tz(): string { return getenv('ONEC_DATE_TZ') ?: '+05:00'; }
 
 /**
- * Парсер через SimpleXML с использованием XPath (local-name игнорирует namespace).
+ * Парсер через SimpleXML с XPath. Пробует разные флаги и комбинации.
+ * Если не получается — возвращает ошибку в $err.
  */
-function parse_works_simplexml(string $xml): array {
-    if (!function_exists('simplexml_load_string')) return [];
+function parse_works_simplexml(string $xml, ?string &$err = null): array {
+    if (!function_exists('simplexml_load_string')) {
+        $err = 'функция simplexml_load_string отсутствует';
+        return [];
+    }
+
+    // 1) Убираем BOM
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
+    // 2) Убираем управляющие символы (кроме \t \n \r)
+    $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
+
     $prev = libxml_use_internal_errors(true);
-    $sx = simplexml_load_string($xml, 'SimpleXMLElement', LIBXML_NOCDATA | LIBXML_NONET);
+    libxml_clear_errors();
+
+    $flags = LIBXML_NOCDATA | LIBXML_NONET;
+    if (defined('LIBXML_PARSEHUGE')) $flags |= LIBXML_PARSEHUGE;
+
+    $sx = @simplexml_load_string($xml, 'SimpleXMLElement', $flags);
+
+    if (!$sx) {
+        // Пробуем без XML-декларации
+        $clean = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
+        $sx = @simplexml_load_string($clean, 'SimpleXMLElement', $flags);
+    }
+
+    $errs = libxml_get_errors();
     libxml_clear_errors();
     libxml_use_internal_errors($prev);
-    if (!$sx) return [];
 
+    if (!$sx) {
+        if ($errs) {
+            $e = $errs[0];
+            $err = 'libxml: ' . trim($e->message) . ' (строка ' . $e->line . ', колонка ' . $e->column . ')';
+        } else {
+            $err = 'simplexml_load_string вернул false, libxml без ошибок';
+        }
+        return [];
+    }
+
+    // Ищем контейнеры WorkOperations
     $containers = $sx->xpath('//*[local-name()="WorkOperations"]');
-    if (!$containers) return [];
+    if (!$containers) {
+        $err = 'XML распарсился, но WorkOperations не найден';
+        return [];
+    }
 
     $items = [];
     foreach ($containers as $container) {
@@ -112,7 +147,7 @@ function parse_works_simplexml(string $xml): array {
             $code = $get('Code');
             if ($code === null) continue;
 
-            // Вложенный <Parent><Code>...</Code></Parent> — если есть
+            // Вложенный <Parent><Code>...</Code></Parent>
             $parentCode = null;
             $parentNodes = $n->xpath('./*[local-name()="Parent"]');
             if ($parentNodes && isset($parentNodes[0])) {
@@ -145,7 +180,6 @@ function parse_works_simplexml(string $xml): array {
  * Вычисляет parent_code для групп и работ на основе кодов.
  */
 function compute_parents(array $items): array {
-    // Собираем все коды групп
     $groupCodes = [];
     foreach ($items as $item) {
         if (!empty($item['it_is_group'])) {
@@ -166,7 +200,7 @@ function compute_parents(array $items): array {
                 }
             }
         } else {
-            // Работа: префикс кода операции = группа
+            // Работа: префикс кода операции = группа (П10-017 → 10, 00-000 → 00)
             $opc = $item['operation_code'] ?? '';
             if ($opc && preg_match('/^[A-Za-zА-Яа-я]*?(\d{2})/u', $opc, $m)) {
                 $candidate = $m[1];
@@ -181,7 +215,7 @@ function compute_parents(array $items): array {
 
 // ========== DRY-режим — сохранить результат в JSON ==========
 if ($dry === 'works') {
-    $result = ['error' => null, 'stats' => [], 'items' => [], 'works_sample' => []];
+    $result = ['error' => null, 'parse_error' => null, 'stats' => [], 'items' => [], 'works_sample' => []];
     try {
         $xml = onec_call('UnloadWorkOperations', [
             'OperationCode' => null,
@@ -190,8 +224,10 @@ if ($dry === 'works') {
         ]);
         $result['xml_len'] = strlen($xml);
 
-        $parsed = parse_works_simplexml($xml);
+        $parseErr = null;
+        $parsed = parse_works_simplexml($xml, $parseErr);
         $result['simplexml_ok'] = !empty($parsed);
+        $result['parse_error']  = $parseErr;
 
         if (!empty($parsed)) {
             $parsed = compute_parents($parsed);
@@ -233,8 +269,11 @@ function do_sync_works(PDO $pdo): array {
         'EndDate'   => '2099-12-31' . date_tz(),
     ]);
 
-    $parsed = parse_works_simplexml($xml);
-    if (empty($parsed)) throw new RuntimeException('SimpleXML не смог разобрать ответ');
+    $parseErr = null;
+    $parsed = parse_works_simplexml($xml, $parseErr);
+    if (empty($parsed)) {
+        throw new RuntimeException('SimpleXML не смог разобрать ответ. ' . ($parseErr ?: ''));
+    }
 
     $parsed = compute_parents($parsed);
 
@@ -291,8 +330,9 @@ function do_sync_nomenclature(PDO $pdo): array {
     $inn = getenv('ONEC_INN'); $kpp = getenv('ONEC_KPP');
     if (!$inn || !$kpp) throw new RuntimeException('Нужны ONEC_INN и ONEC_KPP');
     $xml = onec_call('UnloadNomenclatureUpdates', ['INN' => $inn, 'KPP' => $kpp]);
-    $parsed = parse_works_simplexml($xml);
-    if (empty($parsed)) return ['total' => 0, 'message' => 'SimpleXML 0'];
+    $parseErr = null;
+    $parsed = parse_works_simplexml($xml, $parseErr);
+    if (empty($parsed)) return ['total' => 0, 'message' => 'SimpleXML 0. ' . ($parseErr ?: '')];
     $stmt = $pdo->prepare("
         INSERT INTO nomenclatures (code, name, full_name, eng_name, base_measure, code_1c, parent, deleted, updated_at)
         VALUES (:code, :name, :full_name, :eng_name, :base_measure, :code_1c, :parent, :deleted, NOW())
