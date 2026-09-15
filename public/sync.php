@@ -17,13 +17,15 @@ $messages = [];
 $error = null;
 
 function onec_call(string $operation, array $params = []): string {
-    $login    = getenv('ONEC_LOGIN');
-    $password = getenv('ONEC_PASSWORD');
+    $login    = getenv('ONEC_SOAP_LOGIN')    ?: getenv('ONEC_LOGIN');
+    $password = getenv('ONEC_SOAP_PASSWORD') ?: getenv('ONEC_PASSWORD');
     if (!$login || !$password) {
         throw new RuntimeException('Не заданы ONEC_LOGIN / ONEC_PASSWORD');
     }
 
-    $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/ws2.1cws';
+    // ВАЖНО: POST идёт на /ws/Zakaz (имя сервиса), а не на /ws/ws2.1cws
+    // (последний — только для просмотра WSDL браузером).
+    $endpoint = getenv('ONEC_SOAP_URL') ?: 'https://web-1c.kamaz.ru/GOA/ws/Zakaz';
     $ns = 'http://1c.kamaz.ru/zakaz';
 
     $paramsXml = '';
@@ -60,11 +62,16 @@ function onec_call(string $operation, array $params = []): string {
     curl_close($ch);
 
     if ($curlErr) throw new RuntimeException('Ошибка соединения: ' . $curlErr);
-    if ($httpCode === 401) throw new RuntimeException('Неверный логин/пароль 1С');
+    if ($httpCode === 401 || $httpCode === 402) {
+        throw new RuntimeException(
+            'Неверный логин/пароль для POST на ' . $endpoint . ' (HTTP ' . $httpCode . '). '
+            . 'Ответ: ' . substr(preg_replace('/\s+/', ' ', (string)$response), 0, 500)
+        );
+    }
     if ($httpCode === 403) throw new RuntimeException('Нет прав на операцию ' . $operation);
     if ($httpCode !== 200) {
         $preview = substr(preg_replace('/\s+/', ' ', trim((string)$response)), 0, 700);
-        throw new RuntimeException('1С вернул код ' . $httpCode . '. Ответ: ' . $preview);
+        throw new RuntimeException('1С вернул код ' . $httpCode . ' (' . $endpoint . '). Ответ: ' . $preview);
     }
     return (string)$response;
 }
@@ -120,9 +127,6 @@ function date_tz(): string {
     return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
-/**
- * Формирует даты в формате xs:date (БЕЗ времени, только дата + таймзона).
- */
 function date_params(): array {
     $tz = date_tz();
     return [
@@ -366,7 +370,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Формат дат — xs:date (без времени), с таймзоной <code>+05:00</code>.
+      POST идёт на <code>/ws/Zakaz</code> (имя сервиса из WSDL), формат дат — <code>xs:date</code> с таймзоной.
     </p>
   </div>
 
@@ -417,8 +421,8 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       <tbody>
         <tr><td><code>PHP</code></td><td><?= e(PHP_VERSION) ?></td></tr>
         <tr><td><code>ONEC_LOGIN</code></td><td><?= getenv('ONEC_LOGIN') ? '✅' : '❌' ?></td></tr>
-        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '— (не нужен)' ?></td></tr>
-        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '— (не нужен)' ?></td></tr>
+        <tr><td><code>ONEC_PASSWORD</code></td><td><?= getenv('ONEC_PASSWORD') ? '✅' : '❌' ?></td></tr>
+        <tr><td><code>ONEC_SOAP_URL</code></td><td><?= getenv('ONEC_SOAP_URL') ? e(getenv('ONEC_SOAP_URL')) : '— (по умолчанию: /GOA/ws/Zakaz)' ?></td></tr>
         <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (+05:00)' ?></td></tr>
       </tbody>
     </table>
