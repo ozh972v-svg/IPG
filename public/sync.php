@@ -134,16 +134,12 @@ function date_tz(): string {
 }
 
 function do_sync_works(PDO $pdo): array {
-    $inn = getenv('ONEC_INN');
-    $kpp = getenv('ONEC_KPP');
-    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
-
     $tz = date_tz();
 
+    // Пробуем: OperationCode (пустой) + StartDate + EndDate.
+    // По документации эти три параметра — обязательные.
     $xml = onec_call('UnloadWorkOperations', [
         'OperationCode' => '',
-        'INN'           => $inn,
-        'KPP'           => $kpp,
         'StartDate'     => '2000-01-01T00:00:00' . $tz,
         'EndDate'       => '2099-12-31T23:59:59' . $tz,
     ]);
@@ -210,15 +206,9 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $inn = getenv('ONEC_INN');
-    $kpp = getenv('ONEC_KPP');
-    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
-
     $tz = date_tz();
 
     $xml = onec_call('UnloadNomenclature', [
-        'INN'       => $inn,
-        'KPP'       => $kpp,
         'StartDate' => '2000-01-01T00:00:00' . $tz,
         'EndDate'   => '2099-12-31T23:59:59' . $tz,
     ]);
