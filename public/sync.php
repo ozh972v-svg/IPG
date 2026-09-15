@@ -127,19 +127,26 @@ function extract_description(SimpleXMLElement $sx): ?string {
 }
 
 /**
- * Формирует StartDate / EndDate с учётом таймзоны.
- * Таймзону можно переопределить переменной ONEC_DATE_TZ (по умолчанию +05:00 — Екатеринбург).
+ * Таймзона для дат.
  */
-function date_params(): array {
-    $tz = getenv('ONEC_DATE_TZ') ?: '+05:00';
-    return [
-        'StartDate' => '2000-01-01T00:00:00' . $tz,
-        'EndDate'   => '2099-12-31T23:59:59' . $tz,
-    ];
+function date_tz(): string {
+    return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
 function do_sync_works(PDO $pdo): array {
-    $xml = onec_call('UnloadWorkOperations', date_params());
+    $inn = getenv('ONEC_INN');
+    $kpp = getenv('ONEC_KPP');
+    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
+
+    $tz = date_tz();
+
+    $xml = onec_call('UnloadWorkOperations', [
+        'OperationCode' => '',
+        'INN'           => $inn,
+        'KPP'           => $kpp,
+        'StartDate'     => '2000-01-01T00:00:00' . $tz,
+        'EndDate'       => '2099-12-31T23:59:59' . $tz,
+    ]);
     check_soap_fault($xml);
     $sx = parse_soap($xml);
 
@@ -203,7 +210,18 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $xml = onec_call('UnloadNomenclature', date_params());
+    $inn = getenv('ONEC_INN');
+    $kpp = getenv('ONEC_KPP');
+    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
+
+    $tz = date_tz();
+
+    $xml = onec_call('UnloadNomenclature', [
+        'INN'       => $inn,
+        'KPP'       => $kpp,
+        'StartDate' => '2000-01-01T00:00:00' . $tz,
+        'EndDate'   => '2099-12-31T23:59:59' . $tz,
+    ]);
     check_soap_fault($xml);
     $sx = parse_soap($xml);
 
