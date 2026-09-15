@@ -34,7 +34,9 @@ if (!$photo) {
     exit;
 }
 
-if ((int)$photo['user_id'] !== (int)$user['id']) {
+// Автор или админ могут удалять
+$isAuthor = ((int)$photo['user_id'] === (int)$user['id']);
+if (!$isAuthor && !$user['is_admin']) {
     header('Location: gallery.php?error=' . urlencode('Можно удалять только свои фото'));
     exit;
 }
@@ -47,10 +49,9 @@ if (!$backKeyType || !$backKeyValue) {
              . '&deleted=1';
 }
 
-// === 1. Удалить из хранилища IzIPost (если есть storage_path) ===
+// === 1. Удалить из хранилища IzIPost ===
 $storageKey = getenv('STORAGE_API_KEY');
 if ($storageKey && !empty($photo['storage_path'])) {
-    // НЕ кодируем слэши — только проблемные символы
     $pathForUrl = str_replace(
         [' ', '&', '#', '?', '+'],
         ['%20', '%26', '%23', '%3F', '%2B'],
@@ -71,7 +72,7 @@ if ($storageKey && !empty($photo['storage_path'])) {
     curl_close($ch);
 }
 
-// === 2. Удалить старый файл с диска (для фото, загруженных до интеграции) ===
+// === 2. Удалить старый файл с диска (для фото до интеграции) ===
 if (empty($photo['storage_path'])) {
     $path = __DIR__ . '/' . $photo['file_path'];
     if (file_exists($path)) {
