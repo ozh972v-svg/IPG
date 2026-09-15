@@ -16,9 +16,6 @@ $running = !empty($_GET['run']);
 $messages = [];
 $error = null;
 
-/**
- * Отправляет SOAP-запрос к 1С:ГОА.
- */
 function onec_call(string $operation, array $params = []): string {
     $login    = getenv('ONEC_LOGIN');
     $password = getenv('ONEC_PASSWORD');
@@ -72,9 +69,6 @@ function onec_call(string $operation, array $params = []): string {
     return (string)$response;
 }
 
-/**
- * Проверяет SOAP Fault.
- */
 function check_soap_fault(string $xml): void {
     if (stripos($xml, '<faultcode') !== false || stripos($xml, ':Fault>') !== false) {
         if (preg_match('/<faultstring[^>]*>(.*?)<\/faultstring>/is', $xml, $m)) {
@@ -84,53 +78,33 @@ function check_soap_fault(string $xml): void {
     }
 }
 
-/**
- * Достаёт первое значение тега (без namespace-префикса, не жадный).
- * Например, tag='Description' найдёт <Description>...</Description> или <m:Description>...</m:Description>
- */
 function xml_tag(string $xml, string $tag): ?string {
-    $re = '/<' . preg_quote($tag, '/') . '(?:\s[^>]*)?>(.*?)<\/' . preg_quote($tag, '/') . '>/is'
-        . '|<[^:>]+:' . preg_quote($tag, '/') . '(?:\s[^>]*)?>(.*?)<\/[^:>]+:' . preg_quote($tag, '/') . '>/is';
+    $t = preg_quote($tag, '~');
+    $re = '~(?:<' . $t . '(?:\s[^>]*)?>(.*?)</' . $t . '>'
+        . '|<[^:>\s]+:' . $t . '(?:\s[^>]*)?>(.*?)</[^:>\s]+:' . $t . '>)~is';
     if (preg_match($re, $xml, $m)) {
-        $val = $m[1] !== '' ? $m[1] : ($m[2] ?? '');
+        $val = isset($m[1]) && $m[1] !== '' ? $m[1] : ($m[2] ?? '');
         $val = trim(html_entity_decode($val, ENT_XML1, 'UTF-8'));
         return $val === '' ? null : $val;
     }
     return null;
 }
 
-/**
- * Возвращает все вхождения блока <...:Tag>...</...:Tag> (не жадный, но без вложенных одноимённых).
- * Для не-вложенных повторяющихся элементов (WorkOperation, Nomenclature) работает отлично.
- */
 function xml_blocks(string $xml, string $tag): array {
-    $tag = preg_quote($tag, '/');
-    // Сначала с namespace-префиксом
-    $re = '/<[^:>\s]+:' . $tag . '(?:\s[^>]*)?>(.*?)<\/[^:>\s]+:' . $tag . '>/is';
-    if (preg_match_all($re, $xml, $m)) {
-        return $m[1];
-    }
-    // Потом без префикса
-    $re = '/<' . $tag . '(?:\s[^>]*)?>(.*?)<\/' . $tag . '>/is';
-    if (preg_match_all($re, $xml, $m)) {
-        return $m[1];
-    }
+    $t = preg_quote($tag, '~');
+    $re = '~<[^:>\s]+:' . $t . '(?:\s[^>]*)?>(.*?)</[^:>\s]+:' . $t . '>~is';
+    if (preg_match_all($re, $xml, $m)) return $m[1];
+    $re = '~<' . $t . '(?:\s[^>]*)?>(.*?)</' . $t . '>~is';
+    if (preg_match_all($re, $xml, $m)) return $m[1];
     return [];
 }
 
-/**
- * Достаёт текст первого дочернего тега внутри блока.
- */
 function block_field(string $block, string $tag): ?string {
     return xml_tag($block, $tag);
 }
 
-/**
- * Достаёт код родителя из блока Parent.
- * В WorkOperation Parent — вложенный объект с Code внутри.
- */
 function block_parent_code(string $block): ?string {
-    if (!preg_match('/<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)<\/(?:[^:>\s]+:)?Parent>/is', $block, $m)) {
+    if (!preg_match('~<(?:[^:>\s]+:)?Parent(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Parent>~is', $block, $m)) {
         return null;
     }
     $parentBlock = $m[1];
@@ -142,42 +116,41 @@ function block_parent_code(string $block): ?string {
     return $code;
 }
 
-/**
- * Таймзона для дат.
- */
 function date_tz(): string {
     return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
 /**
- * Превью ответа для лога.
+ * Формирует даты в формате xs:date (БЕЗ времени, только дата + таймзона).
  */
+function date_params(): array {
+    $tz = date_tz();
+    return [
+        'StartDate' => '2000-01-01' . $tz,
+        'EndDate'   => '2099-12-31' . $tz,
+    ];
+}
+
 function raw_preview(string $xml): string {
     $v = preg_replace('/\s+/', ' ', $xml);
     return substr(trim($v), 0, 400);
 }
 
 function do_sync_works(PDO $pdo): array {
-    $tz = date_tz();
-    $params = [
-        'OperationCode' => '',
-        'StartDate'     => '2000-01-01T00:00:00' . $tz,
-        'EndDate'       => '2099-12-31T23:59:59' . $tz,
-    ];
+    $dates = date_params();
+    $params = array_merge(['OperationCode' => ''], $dates);
 
     $xml = onec_call('UnloadWorkOperations', $params);
     check_soap_fault($xml);
 
     $description = xml_tag($xml, 'Description');
-
-    // Ищем блоки <WorkOperation>...</WorkOperation>
     $blocks = xml_blocks($xml, 'WorkOperation');
 
     if (count($blocks) === 0) {
         return [
             'total'   => 0,
             'message' => 'Записей 0. ' . ($description ? 'Описание от 1С: ' . $description : '(описание отсутствует)')
-                       . ' | Отправлено: OperationCode="", StartDate=' . $params['StartDate'] . ', EndDate=' . $params['EndDate']
+                       . ' | Отправлено: OperationCode="", StartDate=' . $dates['StartDate'] . ', EndDate=' . $dates['EndDate']
                        . ' | Ответ: ' . raw_preview($xml),
         ];
     }
@@ -203,9 +176,7 @@ function do_sync_works(PDO $pdo): array {
     foreach ($blocks as $b) {
         $code = block_field($b, 'Code');
         if (!$code) continue;
-        // Code внутри Parent — не должен попасть в код самой работы.
-        // Поэтому берём первый <Code> до <Parent>.
-        if (preg_match('/^.*?<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>(.*?)<\/(?:[^:>\s]+:)?Code>/is', $b, $cm)) {
+        if (preg_match('~^.*?<(?:[^:>\s]+:)?Code(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?Code>~is', $b, $cm)) {
             $code = trim(html_entity_decode($cm[1], ENT_XML1, 'UTF-8'));
         }
 
@@ -228,12 +199,8 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $tz = date_tz();
-    $params = [
-        'OperationCode' => '',
-        'StartDate'     => '2000-01-01T00:00:00' . $tz,
-        'EndDate'       => '2099-12-31T23:59:59' . $tz,
-    ];
+    $dates = date_params();
+    $params = array_merge(['OperationCode' => ''], $dates);
 
     $xml = onec_call('UnloadNomenclature', $params);
     check_soap_fault($xml);
@@ -268,9 +235,8 @@ function do_sync_nomenclature(PDO $pdo): array {
         $code = block_field($b, 'Code');
         if (!$code) continue;
 
-        // BaseMeasure — вложенный объект Measure, берём его Name
         $baseMeasure = null;
-        if (preg_match('/<(?:[^:>\s]+:)?BaseMeasure(?:\s[^>]*)?>(.*?)<\/(?:[^:>\s]+:)?BaseMeasure>/is', $b, $bm)) {
+        if (preg_match('~<(?:[^:>\s]+:)?BaseMeasure(?:\s[^>]*)?>(.*?)</(?:[^:>\s]+:)?BaseMeasure>~is', $b, $bm)) {
             $inner = $bm[1];
             $baseMeasure = xml_tag($inner, 'Name') ?: xml_tag($inner, 'Code');
         }
@@ -353,7 +319,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .alert { padding:12px 16px; border-radius:10px; font-size:14px; margin-bottom:16px; }
   .alert-success { background:#f0fdf4; color:#16a34a; border-left:4px solid #16a34a; }
   .alert-error { background:#fef2f2; color:#dc2626; border-left:4px solid #dc2626; }
-  .alert-info { background:#eff6ff; color:#2563eb; border-left:4px solid #2563eb; }
   table.doc-table { width:100%; border-collapse:collapse; font-size:13px; }
   table.doc-table th { background:#f9fafb; color:#666; font-weight:600; text-align:left; padding:10px 12px; border-bottom:1px solid #e5e7eb; font-size:12px; text-transform:uppercase; }
   table.doc-table td { padding:10px 12px; border-bottom:1px solid #f0f0f0; vertical-align:top; }
@@ -401,7 +366,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       </a>
     </div>
     <p style="font-size:13px;color:#666;margin-top:12px;">
-      Парсинг ответа 1С — регулярными выражениями (не зависит от PHP-модуля SimpleXML).
+      Формат дат — xs:date (без времени), с таймзоной <code>+05:00</code>.
     </p>
   </div>
 
@@ -451,13 +416,9 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
       <tbody>
         <tr><td><code>PHP</code></td><td><?= e(PHP_VERSION) ?></td></tr>
-        <tr><td><code>SimpleXML</code></td><td><?= function_exists('simplexml_load_string') ? '✅ есть' : '❌ нет (не критично)' ?></td></tr>
-        <tr><td><code>DOMDocument</code></td><td><?= class_exists('DOMDocument') ? '✅ есть' : '❌ нет (не критично)' ?></td></tr>
-        <tr><td><code>preg_match</code></td><td><?= function_exists('preg_match') ? '✅ есть' : '❌ нет' ?></td></tr>
-        <tr><td><code>curl</code></td><td><?= function_exists('curl_init') ? '✅ есть' : '❌ нет' ?></td></tr>
         <tr><td><code>ONEC_LOGIN</code></td><td><?= getenv('ONEC_LOGIN') ? '✅' : '❌' ?></td></tr>
-        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '—' ?></td></tr>
-        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '—' ?></td></tr>
+        <tr><td><code>ONEC_INN</code></td><td><?= getenv('ONEC_INN') ? '✅ ' . e(getenv('ONEC_INN')) : '— (не нужен)' ?></td></tr>
+        <tr><td><code>ONEC_KPP</code></td><td><?= getenv('ONEC_KPP') ? '✅ ' . e(getenv('ONEC_KPP')) : '— (не нужен)' ?></td></tr>
         <tr><td><code>ONEC_DATE_TZ</code></td><td><?= getenv('ONEC_DATE_TZ') ? e(getenv('ONEC_DATE_TZ')) : '— (+05:00)' ?></td></tr>
       </tbody>
     </table>
