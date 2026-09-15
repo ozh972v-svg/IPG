@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare('INSERT INTO users (email, password_hash, name) VALUES (:login, :hash, :name) RETURNING id');
                 $stmt->execute([':login' => $login, ':hash' => $hash, ':name' => $name]);
                 $_SESSION['user_id'] = $stmt->fetchColumn();
-                header('Location: gallery.php');
+                header('Location: index.html');
                 exit;
             }
         } catch (Throwable $e) {
