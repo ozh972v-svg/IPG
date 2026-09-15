@@ -25,15 +25,15 @@ foreach ($stmt->fetchAll() as $row) {
 }
 $totalGroups = count($groupCodes);
 
-// Загружаем всё в память — 15-26к записей это ~20 МБ
-$stmt = $pdo->query("SELECT id, code, parent_code, it_is_group, operation_code FROM work_operations");
+// Загружаем все записи (ключ — code)
+$stmt = $pdo->query("SELECT code, parent_code, it_is_group, operation_code FROM work_operations");
 $rows = $stmt->fetchAll();
 
 $updated = 0;
 $skipped_no_parent = 0;
 $errors = 0;
 
-$updStmt = $pdo->prepare("UPDATE work_operations SET parent_code = :p WHERE id = :id");
+$updStmt = $pdo->prepare("UPDATE work_operations SET parent_code = :p WHERE code = :c");
 
 foreach ($rows as $r) {
     $newParent = null;
@@ -48,7 +48,7 @@ foreach ($rows as $r) {
             }
         }
     } else {
-        // Работа: префикс кода операции = группа
+        // Работа: префикс кода операции = группа (П10-017 → 10, 00-000 → 00)
         $opc = $r['operation_code'] ?? '';
         if ($opc && preg_match('/^[A-Za-zА-Яа-я]*?(\d{2})/u', $opc, $m)) {
             $candidate = $m[1];
@@ -61,7 +61,7 @@ foreach ($rows as $r) {
     // Обновляем, если изменилось
     if ($newParent !== $r['parent_code']) {
         try {
-            $updStmt->execute([':p' => $newParent, ':id' => $r['id']]);
+            $updStmt->execute([':p' => $newParent, ':c' => $r['code']]);
             $updated++;
         } catch (Throwable $e) {
             $errors++;
@@ -106,7 +106,7 @@ foreach ($rows as $r) {
     <p style="font-size:13px;color:#666;">
       <?php if ($skipped_no_parent > 0): ?>
         ⚠️ У <?= number_format($skipped_no_parent, 0, '.', ' ') ?> записей не удалось определить родителя —
-        возможно, их код операции не начинается с 2 цифр. Это нормально для некоторых работ.
+        возможно, код операции не начинается с 2 цифр. Это нормально для некоторых работ.
       <?php else: ?>
         ✅ У всех записей проставлен родитель.
       <?php endif; ?>
@@ -119,4 +119,4 @@ foreach ($rows as $r) {
   </div>
 </div>
 </body>
-</html>  
+</html>
