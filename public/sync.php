@@ -66,7 +66,7 @@ function onec_call(string $operation, array $params = []): string {
     if ($httpCode === 401) throw new RuntimeException('Неверный логин/пароль 1С');
     if ($httpCode === 403) throw new RuntimeException('Нет прав на операцию ' . $operation);
     if ($httpCode !== 200) {
-        $preview = substr(preg_replace('/\s+/', ' ', trim((string)$response)), 0, 600);
+        $preview = substr(preg_replace('/\s+/', ' ', trim((string)$response)), 0, 700);
         throw new RuntimeException('1С вернул код ' . $httpCode . '. Ответ: ' . $preview);
     }
     return (string)$response;
@@ -85,13 +85,10 @@ function check_soap_fault(string $xml): void {
 }
 
 /**
- * Разбирает SOAP-ответ. Возвращает SimpleXMLElement или бросает исключение.
- * Убирает BOM, декларацию XML, работает через namespace-agnostic xpath.
+ * Разбирает SOAP-ответ.
  */
 function parse_soap(string $xml): SimpleXMLElement {
-    // Убираем BOM
     $xml = preg_replace('/^\xEF\xBB\xBF/', '', $xml);
-    // Убираем xml-декларацию (SimpleXML спотыкается, если она внутри строки)
     $xml = preg_replace('/<\?xml[^>]*\?>/i', '', $xml, 1);
 
     $prev = libxml_use_internal_errors(true);
@@ -110,7 +107,7 @@ function parse_soap(string $xml): SimpleXMLElement {
 }
 
 /**
- * Извлекает текст элемента (без учёта namespace).
+ * Текст элемента (без учёта namespace).
  */
 function first_text(SimpleXMLElement $el, string $tag): ?string {
     $nodes = $el->xpath('./*[local-name()="' . $tag . '"]');
@@ -120,7 +117,7 @@ function first_text(SimpleXMLElement $el, string $tag): ?string {
 }
 
 /**
- * Достаёт Description из ответа (это текстовое сообщение от 1С).
+ * Достаёт Description из ответа.
  */
 function extract_description(SimpleXMLElement $sx): ?string {
     $nodes = $sx->xpath('//*[local-name()="Description"]');
@@ -130,14 +127,7 @@ function extract_description(SimpleXMLElement $sx): ?string {
 }
 
 function do_sync_works(PDO $pdo): array {
-    $inn = getenv('ONEC_INN');
-    $kpp = getenv('ONEC_KPP');
-    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
-
-    // Для первоначальной загрузки — используем UnloadWorkOperations с широким периодом
     $xml = onec_call('UnloadWorkOperations', [
-        'INN'       => $inn,
-        'KPP'       => $kpp,
         'StartDate' => '2000-01-01T00:00:00',
         'EndDate'   => '2099-12-31T23:59:59',
     ]);
@@ -204,13 +194,7 @@ function do_sync_works(PDO $pdo): array {
 }
 
 function do_sync_nomenclature(PDO $pdo): array {
-    $inn = getenv('ONEC_INN');
-    $kpp = getenv('ONEC_KPP');
-    if (!$inn || !$kpp) throw new RuntimeException('Не заданы ONEC_INN / ONEC_KPP');
-
     $xml = onec_call('UnloadNomenclature', [
-        'INN'       => $inn,
-        'KPP'       => $kpp,
         'StartDate' => '2000-01-01T00:00:00',
         'EndDate'   => '2099-12-31T23:59:59',
     ]);
@@ -277,8 +261,6 @@ function run_sync(PDO $pdo, string $syncType, callable $fn): array {
 
     try {
         $result = $fn($pdo);
-        $msg = $result['total'] . ' записей';
-        if (!empty($result['message'])) $msg .= '. ' . $result['message'];
         $pdo->prepare("UPDATE sync_log SET status='ok', finished_at=NOW(), items_total=:n, error_message=:m WHERE id=:id")
             ->execute([':n' => $result['total'], ':m' => $result['message'] ?: null, ':id' => $logId]);
         return ['ok' => true, 'total' => $result['total'], 'message' => $result['message']];
@@ -335,7 +317,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .alert { padding:12px 16px; border-radius:10px; font-size:14px; margin-bottom:16px; }
   .alert-success { background:#f0fdf4; color:#16a34a; border-left:4px solid #16a34a; }
   .alert-error { background:#fef2f2; color:#dc2626; border-left:4px solid #dc2626; }
-  .alert-info { background:#eff6ff; color:#2563eb; border-left:4px solid #2563eb; }
   table.doc-table { width:100%; border-collapse:collapse; font-size:13px; }
   table.doc-table th { background:#f9fafb; color:#666; font-weight:600; text-align:left; padding:10px 12px; border-bottom:1px solid #e5e7eb; font-size:12px; text-transform:uppercase; }
   table.doc-table td { padding:10px 12px; border-bottom:1px solid #f0f0f0; vertical-align:top; }
