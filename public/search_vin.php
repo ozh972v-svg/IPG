@@ -148,17 +148,36 @@ function isActive($d) {
   }
   .section-title:first-child { margin-top: 0; }
 
+  /* === БАННЕР ГАРАНТИИ === */
   .warranty-banner {
-    padding: 14px 20px; border-radius: 12px; text-align: center;
-    font-size: 20px; font-weight: 700; margin: 12px 0;
+    padding: 20px 24px; border-radius: 12px; text-align: center;
+    font-size: 22px; font-weight: 700; margin: 14px 0;
   }
-  .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
-  .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
+  .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 5px solid #16a34a; }
+  .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 5px solid #dc2626; }
+
   .warranty-banner .banner-sub {
-    font-size: 13px; font-weight: 500; color: #555;
-    margin-top: 8px; line-height: 1.6;
+    font-size: 15px; font-weight: 500; color: #333;
+    margin-top: 16px; line-height: 1.6;
+    display: flex; flex-direction: column; gap: 0;
+    padding: 14px 18px; background: rgba(255,255,255,0.7);
+    border-radius: 10px; text-align: left;
+  }
+  .warranty-banner .banner-sub .row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px dashed rgba(0,0,0,0.1);
+    gap: 16px;
+  }
+  .warranty-banner .banner-sub .row:last-child { border-bottom: none; }
+  .warranty-banner .banner-sub .row .label {
+    color: #666; font-weight: 500; font-size: 14px;
+  }
+  .warranty-banner .banner-sub .row .value {
+    color: #1a1a1a; font-weight: 700; font-size: 15px;
+    text-align: right;
   }
 
+  /* === ОТМ === */
   .otm-card {
     padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
     margin-bottom: 12px; background: #fff; transition: all 0.15s;
@@ -211,6 +230,9 @@ function isActive($d) {
     .field-row { flex-direction: column; gap: 4px; }
     .field-label { width: auto; }
     .field-grid { grid-template-columns: 1fr; }
+    .warranty-banner { font-size: 18px; padding: 16px; }
+    .warranty-banner .banner-sub .row { flex-direction: column; align-items: flex-start; gap: 2px; }
+    .warranty-banner .banner-sub .row .value { text-align: left; }
   }
 </style>
 </head>
@@ -328,23 +350,50 @@ function isActive($d) {
         <div class="warranty-banner <?= $mainActive ? 'yes' : 'no' ?>">
           <?= $mainActive ? '✅ В ГАРАНТИИ' : '❌ НЕ В ГАРАНТИИ' ?>
           <div class="banner-sub">
-            Основная гарантия:
-            с <?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?>
-            по <?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?>
-            · пробег <?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км
-            · наработка <?= (int)($car['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч
+            <div class="row">
+              <span class="label">Начало гарантии</span>
+              <span class="value"><?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?></span>
+            </div>
+            <div class="row">
+              <span class="label">Окончание гарантии</span>
+              <span class="value"><?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?></span>
+            </div>
+            <div class="row">
+              <span class="label">Пробег окончания</span>
+              <span class="value"><?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</span>
+            </div>
+            <div class="row">
+              <span class="label">Наработка окончания</span>
+              <span class="value"><?= (int)($car['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч</span>
+            </div>
           </div>
         </div>
 
-        <!-- Баннеры гарантии на узлы (только активные) -->
+        <!-- Баннеры гарантии на узлы -->
         <?php foreach ($activeNodes as $g): ?>
           <div class="warranty-banner yes">
             ✅ ГАРАНТИЯ НА УЗЛЫ
             <div class="banner-sub">
-              <b><?= e($g['Name'] ?? 'Узел') ?></b> (<?= e($g['NameDefectiveNode'] ?? '—') ?>):
-              действует до <?= e(fmtDate($g['ExtensionPeriod'] ?? null)) ?>
-              · пробег <?= number_format((int)($g['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км
-              · наработка <?= (int)($g['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч
+              <div class="row">
+                <span class="label">Наименование</span>
+                <span class="value"><?= e($g['Name'] ?? 'Узел') ?></span>
+              </div>
+              <div class="row">
+                <span class="label">Обозначение узла</span>
+                <span class="value"><?= e($g['NameDefectiveNode'] ?? '—') ?></span>
+              </div>
+              <div class="row">
+                <span class="label">Действует до</span>
+                <span class="value"><?= e(fmtDate($g['ExtensionPeriod'] ?? null)) ?></span>
+              </div>
+              <div class="row">
+                <span class="label">Пробег окончания</span>
+                <span class="value"><?= number_format((int)($g['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</span>
+              </div>
+              <div class="row">
+                <span class="label">Наработка окончания</span>
+                <span class="value"><?= (int)($g['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч</span>
+              </div>
             </div>
           </div>
         <?php endforeach; ?>
