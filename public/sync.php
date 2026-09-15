@@ -17,9 +17,6 @@ $diagN     = isset($_GET['diag']) ? (int)$_GET['diag'] : 0;
 $messages  = [];
 $error     = null;
 
-/**
- * Из WSDL: soapAction="http://1c.kamaz.ru/zakaz#Zakaz:UnloadWorkOperations"
- */
 function soap_action(string $operation): string {
     return 'http://1c.kamaz.ru/zakaz#Zakaz:' . $operation;
 }
@@ -112,19 +109,11 @@ function raw_preview(string $xml, int $len = 2000): string {
     return substr(trim($v), 0, $len);
 }
 
-/**
- * Обрезает строку до допустимой длины (в символах Unicode).
- */
 function cut(?string $s, int $max): ?string {
     if ($s === null) return null;
     return mb_substr($s, 0, $max, 'UTF-8');
 }
 
-/**
- * Парсит ответ с элементами WorkOperation (внутри <WorkOperations>).
- * Стратегия: находим все <Code>, для каждого берём окно и вытаскиваем поля.
- * С защитой от мусора — код не длиннее 50 символов и начинается с буквы/цифры.
- */
 function parse_work_operations(string $xml): array {
     $items = [];
 
@@ -146,7 +135,6 @@ function parse_work_operations(string $xml): array {
     for ($i = 0; $i < $n; $i++) {
         $code = trim(html_entity_decode($codes[$i][0], ENT_XML1, 'UTF-8'));
         if ($code === '') continue;
-        // Защита от мусора: код должен быть коротким и начинаться с буквы/цифры
         if (mb_strlen($code, 'UTF-8') > 50) continue;
         if (!preg_match('/^[A-Za-zА-Яа-я0-9]/u', $code)) continue;
 
@@ -199,9 +187,6 @@ function date_tz(): string {
     return getenv('ONEC_DATE_TZ') ?: '+05:00';
 }
 
-/**
- * Возвращает описание одного диагностического варианта по номеру.
- */
 function diag_variant(int $n): ?array {
     $tz  = date_tz();
     $inn = getenv('ONEC_INN') ?: '';
@@ -224,9 +209,21 @@ function diag_variant(int $n): ?array {
             'params' => ['OperationCode' => null, 'StartDate' => null, 'EndDate' => null],
         ],
         4 => [
-            'label' => 'UnloadWorkOperationsUpdates с INN/KPP (проверка)',
+            'label' => 'UnloadWorkOperationsUpdates с INN/KPP',
             'op' => 'UnloadWorkOperationsUpdates',
             'params' => ['INN' => $inn, 'KPP' => $kpp],
+        ],
+        5 => [
+            'label' => 'СЫРОЙ XML — UnloadWorkOperations (посмотреть сырой ответ)',
+            'op' => 'UnloadWorkOperations',
+            'params' => ['OperationCode' => null, 'StartDate' => '2000-01-01' . $tz, 'EndDate' => '2099-12-31' . $tz],
+            'raw_only' => true,
+        ],
+        6 => [
+            'label' => 'СЫРОЙ XML — UnloadWorkOperationsUpdates с INN/KPP',
+            'op' => 'UnloadWorkOperationsUpdates',
+            'params' => ['INN' => $inn, 'KPP' => $kpp],
+            'raw_only' => true,
         ],
     ];
 
@@ -380,17 +377,23 @@ if ($running && $type) {
     }
 }
 
-// Один диагностический вариант
 $diagResult = null;
 if ($diagN > 0) {
     $cfg = diag_variant($diagN);
     if ($cfg) {
-        $diagResult = ['n' => $diagN, 'label' => $cfg['label'], 'op' => $cfg['op'], 'params' => $cfg['params'], 'soap_action' => soap_action($cfg['op'])];
+        $diagResult = [
+            'n' => $diagN,
+            'label' => $cfg['label'],
+            'op' => $cfg['op'],
+            'params' => $cfg['params'],
+            'soap_action' => soap_action($cfg['op']),
+            'raw_only' => !empty($cfg['raw_only']),
+        ];
         try {
             $xml = onec_call($cfg['op'], $cfg['params']);
             $diagResult['raw_len']  = strlen($xml);
             $diagResult['desc']     = xml_tag($xml, 'Description');
-            $diagResult['preview']  = raw_preview($xml, 3000);
+            $diagResult['preview']  = raw_preview($xml, 20000);
             $parsed = parse_work_operations($xml);
             $diagResult['parsed_count']  = count($parsed);
             $diagResult['parsed_sample'] = array_slice($parsed, 0, 3);
@@ -419,6 +422,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .card { background:#fff; border-radius:14px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,0.06); margin-bottom:16px; }
   h1 { font-size:22px; margin:0 0 12px; }
   h2 { font-size:18px; margin:0 0 12px; }
+  h3 { font-size:14px; margin:14px 0 6px; }
   .btn { display:inline-block; padding:12px 18px; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; background:#2563eb; color:#fff; text-decoration:none; text-align:center; }
   .btn:hover { opacity:0.9; }
   .btn-secondary { background:#fff; color:#2563eb; border:1.5px solid #2563eb; }
@@ -476,12 +480,14 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
           ✅ HTTP 200 · Ответ <?= (int)$diagResult['raw_len'] ?> байт · Распознано записей: <?= (int)$diagResult['parsed_count'] ?>
           <?php if ($diagResult['desc']): ?> · Описание: <?= e(substr($diagResult['desc'], 0, 300)) ?><?php endif; ?>
         </div>
+
+        <h3>Сырой ответ 1С (первые 20000 символов, пробелы сохранены)</h3>
+        <pre style="background:#fffbe6;padding:12px;border-radius:6px;font-size:11px;overflow:auto;max-height:700px;border:1px solid #fcd34d;white-space:pre-wrap;word-break:break-all;"><?= e($diagResult['preview']) ?></pre>
+
         <?php if (!empty($diagResult['parsed_sample'])): ?>
-          <h3 style="margin-top:14px;font-size:14px;">Примеры распознанных записей</h3>
+          <h3>Примеры распознанных записей</h3>
           <pre style="background:#f9fafb;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:500px;"><?= e(json_encode($diagResult['parsed_sample'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) ?></pre>
         <?php endif; ?>
-        <h3 style="margin-top:14px;font-size:14px;">Полный ответ 1С (первые 3000 символов)</h3>
-        <pre style="background:#f9fafb;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:400px;"><?= e($diagResult['preview']) ?></pre>
       <?php endif; ?>
     </div>
   <?php endif; ?>
@@ -509,12 +515,14 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
 
   <div class="card">
     <h2>🔬 Диагностика (по одному варианту за клик)</h2>
-    <p style="font-size:13px;color:#666;">Nginx рубит долгие запросы — поэтому делаем по одному. Нажми по очереди.</p>
+    <p style="font-size:13px;color:#666;">Nginx рубит долгие запросы — делаем по одному. Нажми по очереди.</p>
     <div class="btn-row">
       <a href="sync.php?diag=1" class="btn" style="background:#b45309;">Вариант 1: nillable + даты с tz</a>
       <a href="sync.php?diag=2" class="btn" style="background:#b45309;">Вариант 2: nillable + даты без tz</a>
       <a href="sync.php?diag=3" class="btn" style="background:#b45309;">Вариант 3: всё null</a>
       <a href="sync.php?diag=4" class="btn" style="background:#b45309;">Вариант 4: Updates с INN/KPP</a>
+      <a href="sync.php?diag=5" class="btn" style="background:#dc2626;">🔥 Вариант 5: СЫРОЙ XML (работы)</a>
+      <a href="sync.php?diag=6" class="btn" style="background:#dc2626;">🔥 Вариант 6: СЫРОЙ XML (Updates)</a>
     </div>
   </div>
 
