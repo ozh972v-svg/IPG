@@ -6,9 +6,7 @@ $user = current_user();
 if (!$user) { header('Location: login.php'); exit; }
 $pdo = get_db();
 
-// Текущая модель: из GET, или из сессии, или первая из БД
 $models = $pdo->query("SELECT code, name FROM work_models ORDER BY code")->fetchAll();
-
 $model = trim($_GET['model'] ?? '');
 if ($model === '' && !empty($_SESSION['work_model'])) $model = $_SESSION['work_model'];
 if ($model === '' && $models) $model = $models[0]['code'];
@@ -27,12 +25,19 @@ $factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
+/**
+ * Классификатор КАМАЗ по первому символу кода операции.
+ * Источник: презентация «Гарантийная работа с автотехникой КАМАЗ», стр. 42.
+ */
 $CATEGORIES = [
-    'A' => ['label' => 'Административные',          'prefix' => 'АХХ-ХХХ', 'desc' => 'Оформить заказ-наряд на ТО и ремонт'],
-    'E' => ['label' => 'Диагностические',           'prefix' => 'ЕХХ-ХХХ', 'desc' => 'Работы по оценке состояния техники в целом'],
-    'P' => ['label' => 'Постовые текущего ремонта','prefix' => 'РХХ-ХХХ (ТРП…)', 'desc' => 'Работы по снятию и установке изделий с автотехники, включая оценку состояния, слив/залив технических жидкостей и прокачку систем, регулировку после установки'],
-    'C' => ['label' => 'Цеховые текущего ремонта',  'prefix' => 'СХХ-ХХХ (ТРЦ…)', 'desc' => 'Работы по разборке, очистке, оценке состояния, сборке, регулировке, обкатке и т.д., выполняемые в отношении изделий, снятых с автотехники'],
-    'X' => ['label' => 'Ненормированная трудоёмкость', 'prefix' => '9999', 'desc' => 'Трудоёмкость работ определяется временем, фактически затраченным на их проведение'],
+    'A' => ['label' => 'Административные',                      'desc' => 'Работы по оформлению заказ-наряда, приёмке-выдаче, согласованиям', 'color' => '#dc2626'],
+    'B' => ['label' => 'Предпродажная подготовка',              'desc' => 'Работы по подготовке автотехники к продаже/передаче', 'color' => '#ea580c'],
+    'T' => ['label' => 'Техническое обслуживание',              'desc' => 'Регламентные работы ТО (ТО-1, ТО-2, сезонное обслуживание)', 'color' => '#ca8a04'],
+    'X' => ['label' => 'Комплекс работ ТО',                     'desc' => 'Комплексные регламентные работы (ПТО, ПЗР, А2, А3, ТОд и др.)', 'color' => '#65a30d'],
+    'E' => ['label' => 'Диагностика автотехники',               'desc' => 'Работы по оценке состояния техники в целом', 'color' => '#0891b2'],
+    'P' => ['label' => 'Постовые работы текущего ремонта',      'desc' => 'Работы по снятию и установке изделий, слив/залив жидкостей, прокачка систем, регулировка после установки', 'color' => '#2563eb'],
+    'C' => ['label' => 'Цеховые работы текущего ремонта',       'desc' => 'Разборка, очистка, оценка, сборка, регулировка, обкатка изделий, снятых с автотехники', 'color' => '#7c3aed'],
+    'M' => ['label' => 'Доработка (работы только для ОТМ)',     'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
 ];
 
 /* ===== ДЕРЕВО ===== */
@@ -71,13 +76,21 @@ if ($groupCode !== '') {
     $params[':g'] = $groupCode;
 }
 if ($category !== '' && isset($CATEGORIES[$category])) {
-    $prefLetters = [
-        'A' => ['А', 'A'], 'E' => ['Е', 'E'], 'P' => ['Р', 'P'],
-        'C' => ['С', 'C'], 'X' => ['Х', 'X', '9'],
+    // Классификатор КАМАЗ — по ПЕРВОМУ СИМВОЛУ кода операции.
+    // Коды бывают как кириллицей (А, Е, Р, С, Т, Х, М, В), так и латиницей (A, E, P, C, T, X, M, B).
+    $letters = [
+        'A' => ['А', 'A'],
+        'B' => ['В', 'B'],
+        'T' => ['Т', 'T'],
+        'X' => ['Х', 'X'],
+        'E' => ['Е', 'E'],
+        'P' => ['Р', 'P'],
+        'C' => ['С', 'C'],
+        'M' => ['М', 'M'],
     ];
-    $letters = $prefLetters[$category];
+    $set = $letters[$category] ?? [$category];
     $ors = [];
-    foreach ($letters as $i => $L) {
+    foreach ($set as $i => $L) {
         $key = ':p' . $category . $i;
         $ors[] = "w.operation_code LIKE $key";
         $params[$key] = $L . '%';
@@ -116,6 +129,21 @@ $stmt = $pdo->prepare("
 $stmt->execute([':m' => $model]);
 $stats = $stmt->fetch();
 
+// Сколько работ в каждой категории
+$stmt = $pdo->prepare("
+    SELECT operation_code FROM work_operations
+    WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m AND operation_code IS NOT NULL
+");
+$stmt->execute([':m' => $model]);
+$catCounts = array_fill_keys(array_keys($CATEGORIES), 0);
+$noCategory = 0;
+foreach ($stmt->fetchAll() as $r) {
+    $first = mb_substr($r['operation_code'], 0, 1);
+    $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X','Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
+    if (isset($map[$first])) $catCounts[$map[$first]]++;
+    else $noCategory++;
+}
+
 $currentGroup = null;
 if ($groupCode !== '') {
     $stmt = $pdo->prepare("SELECT code, name FROM work_operations WHERE code = :c AND it_is_group = TRUE AND model = :m");
@@ -132,16 +160,14 @@ function fmtNorm($n) {
     if ($n === null) return null;
     return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
 }
-function opCategoryClass(?string $op): string {
+function opFirstLetter(?string $op): string {
     if ($op === null || $op === '') return '';
-    $first = mb_substr($op, 0, 1);
-    if (in_array($first, ['А','A'], true)) return 'cat-a';
-    if (in_array($first, ['Е','E'], true)) return 'cat-e';
-    if (in_array($first, ['Р','P'], true)) return 'cat-p';
-    if (in_array($first, ['С','C'], true)) return 'cat-c';
-    if (in_array($first, ['Х','X'], true)) return 'cat-x';
-    if (preg_match('/^\d{4}$/', $op))        return 'cat-x';
-    return '';
+    return mb_substr($op, 0, 1);
+}
+function opCategoryKey(?string $op): string {
+    $first = opFirstLetter($op);
+    $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X','Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
+    return $map[$first] ?? '';
 }
 ?>
 <!DOCTYPE html>
@@ -168,13 +194,19 @@ function opCategoryClass(?string $op): string {
   .model-bar select{padding:6px 10px;border:1.5px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:13px;background:#fff;color:#1e3a8a;font-weight:600;cursor:pointer}
   .model-bar select:focus{outline:none;border-color:#2563eb}
 
-  .legend-details summary{cursor:pointer;font-weight:600;color:#1e3a8a;font-size:14px;padding:8px 0}
-  .legend-details summary::marker{color:#2563eb}
-  .legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:10px}
-  .legend-item{padding:10px 14px;background:#f9fafb;border-radius:8px;border-left:3px solid #dc2626}
-  .legend-item .code{font-family:'SF Mono',Consolas,monospace;font-weight:700;color:#dc2626;font-size:14px}
-  .legend-item .label{font-weight:700;font-size:13px;color:#1a1a1a;margin:4px 0}
-  .legend-item .desc{font-size:12px;color:#666;line-height:1.4}
+  /* Сетка категорий */
+  .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:12px}
+  .cat-card{border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all 0.15s;text-decoration:none;color:inherit;display:block;background:#fff}
+  .cat-card:hover{border-color:#2563eb;background:#f8faff;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,0.08)}
+  .cat-card.active{background:#eff6ff;border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+  .cat-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .cat-letter{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#fff;flex-shrink:0}
+  .cat-title{font-weight:700;font-size:14px;color:#1a1a1a}
+  .cat-count{font-size:11px;color:#666;margin-left:auto;background:#f3f4f6;padding:2px 8px;border-radius:10px;font-weight:600}
+  .cat-desc{font-size:12px;color:#666;line-height:1.4;margin-left:42px}
+
+  .clear-cat{display:inline-block;margin-top:12px;padding:8px 14px;background:#fff;border:1.5px solid #2563eb;color:#2563eb;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600}
+  .clear-cat:hover{background:#eff6ff}
 
   .layout{display:grid;grid-template-columns:340px 1fr;gap:12px}
   @media (max-width:900px){.layout{grid-template-columns:1fr}}
@@ -184,11 +216,6 @@ function opCategoryClass(?string $op): string {
   .search-bar input:focus{outline:none;border-color:#2563eb}
   .filters{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-top:8px;align-items:center}
   .filters label{display:flex;align-items:center;gap:5px;cursor:pointer}
-  .cat-filters{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-  .cat-btn{padding:6px 10px;border-radius:8px;background:#f3f4f6;color:#333;font-size:12px;font-weight:600;text-decoration:none;border:1.5px solid transparent;display:flex;align-items:center;gap:6px}
-  .cat-btn:hover{background:#e5e7eb}
-  .cat-btn.active{background:#dc2626;color:#fff;border-color:#dc2626}
-  .cat-dot{width:8px;height:8px;border-radius:50%;background:#dc2626}
 
   .tree{font-size:13px;max-height:75vh;overflow-y:auto}
   .tree > details > summary{padding:8px 10px;font-weight:700;color:#1e3a8a;cursor:pointer;border-radius:8px;display:flex;align-items:center;gap:8px;list-style:none}
@@ -208,11 +235,14 @@ function opCategoryClass(?string $op): string {
   table.works td{padding:10px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
   table.works tr:hover td{background:#fafbff}
   .op-code{padding:2px 8px;border-radius:5px;font-size:12px;font-weight:700;white-space:nowrap;font-family:'SF Mono',Consolas,monospace;background:#fef3c7;color:#92400e}
-  .op-code.cat-a{background:#fee2e2;color:#991b1b}
-  .op-code.cat-e{background:#fef3c7;color:#92400e}
-  .op-code.cat-p{background:#dbeafe;color:#1e40af}
-  .op-code.cat-c{background:#f3e8ff;color:#6b21a8}
-  .op-code.cat-x{background:#f3f4f6;color:#4b5563}
+  .cat-a{background:#fee2e2;color:#991b1b}
+  .cat-b{background:#ffedd5;color:#9a3412}
+  .cat-t{background:#fef9c3;color:#854d0e}
+  .cat-x{background:#ecfccb;color:#3f6212}
+  .cat-e{background:#cffafe;color:#155e75}
+  .cat-p{background:#dbeafe;color:#1e40af}
+  .cat-c{background:#ede9fe;color:#5b21b6}
+  .cat-m{background:#fce7f3;color:#9d174d}
   .work-name{color:#1a1a1a;font-weight:500}
   .work-eng{color:#888;font-size:11px;margin-top:3px}
   .work-desc{color:#666;font-size:11px;margin-top:4px;font-style:italic}
@@ -271,19 +301,34 @@ function opCategoryClass(?string $op): string {
     </div>
   <?php endif; ?>
 
+  <!-- КАТЕГОРИИ ПО ПЕРВОМУ СИМВОЛУ КОДА ОПЕРАЦИИ -->
   <div class="card">
-    <details class="legend-details">
-      <summary>📖 Что означают категории работ (нажмите чтобы раскрыть)</summary>
-      <div class="legend">
-        <?php foreach ($CATEGORIES as $catKey => $cat): ?>
-          <div class="legend-item">
-            <div class="code"><?= e($cat['prefix']) ?></div>
-            <div class="label"><?= e($cat['label']) ?></div>
-            <div class="desc"><?= e($cat['desc']) ?></div>
+    <h2>📖 Категории работ — по первому символу кода операции</h2>
+    <p style="font-size:13px;color:#666;margin:0 0 4px;">
+      Источник: регламент гарантийной работы с автотехникой КАМАЗ.
+      Нажмите на категорию, чтобы отфильтровать работы.
+    </p>
+
+    <div class="cat-grid">
+      <?php foreach ($CATEGORIES as $key => $cat): ?>
+        <?php $isActive = ($category === $key); ?>
+        <a class="cat-card <?= $isActive ? 'active' : '' ?>"
+           href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $q ? '&q=' . urlencode($q) : '' ?>&cat=<?= urlencode($key) ?>">
+          <div class="cat-head">
+            <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($key) ?></div>
+            <div class="cat-title"><?= e($cat['label']) ?></div>
+            <div class="cat-count"><?= number_format((int)($catCounts[$key] ?? 0), 0, '.', ' ') ?></div>
           </div>
-        <?php endforeach; ?>
-      </div>
-    </details>
+          <div class="cat-desc"><?= e($cat['desc']) ?></div>
+        </a>
+      <?php endforeach; ?>
+    </div>
+
+    <?php if ($category !== ''): ?>
+      <a class="clear-cat" href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $q ? '&q=' . urlencode($q) : '' ?>">
+        ✖ Сбросить фильтр категории
+      </a>
+    <?php endif; ?>
   </div>
 
   <div class="layout">
@@ -345,17 +390,6 @@ function opCategoryClass(?string $op): string {
         </div>
       </form>
 
-      <div class="cat-filters">
-        <a href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?>&q=<?= urlencode($q) ?>"
-           class="cat-btn <?= $category === '' ? 'active' : '' ?>">Все категории</a>
-        <?php foreach ($CATEGORIES as $catKey => $cat): ?>
-          <a href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?>&cat=<?= urlencode($catKey) ?>&q=<?= urlencode($q) ?>"
-             class="cat-btn <?= $category === $catKey ? 'active' : '' ?>">
-            <span class="cat-dot"></span><?= e($cat['prefix']) ?>
-          </a>
-        <?php endforeach; ?>
-      </div>
-
       <div class="stats" style="margin-top:12px;">
         <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
         Всего работ в модели: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
@@ -377,10 +411,13 @@ function opCategoryClass(?string $op): string {
           </thead>
           <tbody>
             <?php foreach ($rows as $r): ?>
+              <?php $catKey = opCategoryKey($r['operation_code']); ?>
               <tr>
                 <td>
                   <?php if ($r['operation_code']): ?>
-                    <span class="op-code <?= opCategoryClass($r['operation_code']) ?>"><?= e($r['operation_code']) ?></span>
+                    <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
+                      <?= e($r['operation_code']) ?>
+                    </span>
                   <?php else: ?>—<?php endif; ?>
                 </td>
                 <td>
