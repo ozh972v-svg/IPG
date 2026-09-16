@@ -39,33 +39,15 @@ $CATEGORIES = [
     'M' => ['label' => 'Доработка (работы только для ОТМ)',  'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
 ];
 
-/**
- * Слова-триггеры, которые переводят работу в категорию E (Диагностика),
- * даже если код начинается с другой буквы.
- */
 $DIAG_TRIGGERS = [
-    'диагностика',
-    'диагностировать',
-    'поиск неисправност',
-    'поиск дефект',
-    'определить неисправност',
-    'выявление неисправност',
-    'проверить состояние',
-    'проверка состояния',
-    'проверка работоспособност',
-    'проверить работоспособност',
-    'проверить и при необходимости',
-    'дефектовка',
-    'оценка состояния',
-    'оценить состояние',
-    'оценка качества',
+    'диагностика', 'диагностировать', 'поиск неисправност', 'поиск дефект',
+    'определить неисправност', 'выявление неисправност',
+    'проверить состояние', 'проверка состояния',
+    'проверить работоспособност', 'проверка работоспособност',
+    'проверить и при необходимости', 'дефектовка',
+    'оценка состояния', 'оценить состояние', 'оценка качества',
 ];
 
-/**
- * Возвращает категорию работы:
- * 1) Сначала смотрим название на «диагностические» триггеры → E
- * 2) Иначе — по первой букве кода операции
- */
 function opCategoryKey(?string $op, ?string $name = null): string {
     if ($name !== null) {
         global $DIAG_TRIGGERS;
@@ -79,6 +61,58 @@ function opCategoryKey(?string $op, ?string $name = null): string {
     $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X',
             'Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
     return $map[$first] ?? '';
+}
+
+/* ===== AJAX: поиск предварительных работ ===== */
+if (!empty($_GET['find_prereq'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $obj = trim($_GET['object'] ?? '');
+    $exclude = trim($_GET['exclude'] ?? '');
+    if ($obj === '' || mb_strlen($obj) < 3) { echo json_encode([]); exit; }
+
+    $exclArr = $exclude !== '' ? array_filter(array_map('trim', explode(',', $exclude))) : [];
+    $exclSql = '';
+    $exclParams = [];
+    if ($exclArr) {
+        $ph = [];
+        foreach ($exclArr as $i => $c) {
+            $key = ':ex' . $i;
+            $ph[] = $key;
+            $exclParams[$key] = $c;
+        }
+        $exclSql = ' AND code NOT IN (' . implode(',', $ph) . ') ';
+    }
+
+    $objClean = preg_replace('/\s*(снят|снята|снято|разобран|отсоединён)[а-я]*\s*/ui', '', $obj);
+    $objClean = trim($objClean);
+    if ($objClean === '') $objClean = $obj;
+
+    $sql = "
+        SELECT code, name, operation_code, norm_time
+        FROM work_operations
+        WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m
+          AND (name ILIKE :a OR name ILIKE :b)
+          AND name !~* '\\([^)]*(снят|снята|снято|разобран|отсоедин)[^)]*\\)'
+          $exclSql
+        ORDER BY
+            CASE WHEN name ILIKE :c THEN 0
+                 WHEN name ILIKE :d THEN 1
+                 ELSE 2 END,
+            LENGTH(name)
+        LIMIT 15
+    ";
+    $params = array_merge([
+        ':m' => $model,
+        ':a' => 'Снять и установить %' . $objClean . '%',
+        ':b' => 'Снять %' . $objClean . '%',
+        ':c' => 'Снять и установить ' . $objClean . '%',
+        ':d' => 'Снять ' . $objClean . '%',
+    ], $exclParams);
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 /* ===== ДЕРЕВО ===== */
@@ -118,7 +152,6 @@ if ($groupCode !== '') {
 }
 if ($category !== '' && isset($CATEGORIES[$category])) {
     if ($category === 'E') {
-        // Диагностика: код начинается с E ИЛИ название содержит триггер
         global $DIAG_TRIGGERS;
         $ors = ["(w.operation_code LIKE 'Е%' OR w.operation_code LIKE 'E%')"];
         $i = 0;
@@ -186,41 +219,6 @@ $stmt = $pdo->prepare("SELECT MAX(updated_at) FROM work_operations WHERE model =
 $stmt->execute([':m' => $model]);
 $lastSync = $stmt->fetchColumn();
 
-/* ===== ПОИСК «СНЯТИЕ/УСТАНОВКА» ДЛЯ АВТОСВЯЗЕЙ =====
-   Возвращаем список работ, подходящих под «снять/установить <объект>»,
-   для конкретной модели. Используется в JS через ajax-эндпоинт ниже.
-*/
-
-// AJAX-эндпоинт: ?find_prereq=1&object=двигатель
-if (!empty($_GET['find_prereq'])) {
-    header('Content-Type: application/json; charset=utf-8');
-    $obj = trim($_GET['object'] ?? '');
-    if ($obj === '' || mb_strlen($obj) < 3) { echo json_encode([]); exit; }
-
-    // Ищем работы с «Снять и установить <объект>» или «Снять <объект>»
-    $stmt = $pdo->prepare("
-        SELECT code, name, operation_code, norm_time
-        FROM work_operations
-        WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m
-          AND (name ILIKE :a OR name ILIKE :b)
-        ORDER BY
-            CASE WHEN name ILIKE :c THEN 0
-                 WHEN name ILIKE :d THEN 1
-                 ELSE 2 END,
-            LENGTH(name)
-        LIMIT 10
-    ");
-    $stmt->execute([
-        ':m' => $model,
-        ':a' => 'Снять и установить %' . $obj . '%',
-        ':b' => 'Снять %' . $obj . '%',
-        ':c' => 'Снять и установить ' . $obj . '%',
-        ':d' => 'Снять ' . $obj . '%',
-    ]);
-    echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i', strtotime($ts)) : '—'; }
 function buildUrl($o = []) { return '?' . http_build_query(array_merge($_GET, $o)); }
 function fmtNorm($n) {
@@ -266,7 +264,6 @@ function fmtNorm($n) {
   .clear-cat{display:inline-block;margin-top:12px;padding:8px 14px;background:#fff;border:1.5px solid #2563eb;color:#2563eb;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600}
   .clear-cat:hover{background:#eff6ff}
 
-  /* 3 колонки: дерево | работы | корзина */
   .layout{display:grid;grid-template-columns:300px 1fr 360px;gap:12px;align-items:start}
   @media (max-width:1200px){.layout{grid-template-columns:280px 1fr;} .basket{grid-column:1/-1}}
   @media (max-width:800px){.layout{grid-template-columns:1fr} .basket{grid-column:1}}
@@ -325,7 +322,6 @@ function fmtNorm($n) {
 
   .warn{padding:12px 16px;border-radius:10px;background:#fffbeb;color:#b45309;border-left:4px solid #b45309;margin-bottom:12px;font-size:13px}
 
-  /* КОРЗИНА */
   .basket{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto}
   .basket-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
   .basket-header h2{margin:0;font-size:16px;color:#1e3a8a}
@@ -344,7 +340,6 @@ function fmtNorm($n) {
   .basket-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
   .basket-actions .btn{flex:1;min-width:120px;font-size:12px;padding:8px 10px}
 
-  /* МОДАЛКА */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
   .modal-overlay.active{display:flex}
   .modal{background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;overflow-y:auto;padding:24px}
@@ -356,6 +351,7 @@ function fmtNorm($n) {
   .modal .prereq-item label{flex:1;cursor:pointer}
   .modal-btns{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
   .modal .badge-auto{background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
+  .prereq-sub{margin-left:24px;font-size:10px;color:#888;padding:4px 0 0;}
 
   .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
   .copy-msg.show{opacity:1}
@@ -396,7 +392,6 @@ function fmtNorm($n) {
     <h2>📖 Категории работ — по первому символу кода операции</h2>
     <p style="font-size:13px;color:#666;margin:0 0 4px;">
       Диагностические работы определяются автоматически по названию (слова «диагностика», «поиск неисправности», «проверить состояние» и т.п.).
-      Нажмите на категорию, чтобы отфильтровать работы.
     </p>
     <div class="cat-grid">
       <?php foreach ($CATEGORIES as $key => $cat): ?>
@@ -420,7 +415,6 @@ function fmtNorm($n) {
 
   <div class="layout">
 
-    <!-- ДЕРЕВО -->
     <div class="card">
       <h2>📁 Группы</h2>
       <div class="tree">
@@ -449,7 +443,6 @@ function fmtNorm($n) {
       </div>
     </div>
 
-    <!-- РАБОТЫ -->
     <div class="card">
       <h2>
         <?php if ($currentGroup): ?>
@@ -470,340 +463,4 @@ function fmtNorm($n) {
           <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию, коду операции…">
           <button type="submit" class="btn">🔍 Найти</button>
           <?php if ($q !== '' || $guardOnly || $factOnly): ?>
-            <a href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $category ? '&cat=' . urlencode($category) : '' ?>" class="btn btn-secondary">Сбросить</a>
-          <?php endif; ?>
-        </div>
-        <div class="filters">
-          <label><input type="checkbox" name="guard" value="1" <?= $guardOnly ? 'checked' : '' ?>> Только постовые</label>
-          <label><input type="checkbox" name="fact"  value="1" <?= $factOnly  ? 'checked' : '' ?>> Только фактические</label>
-        </div>
-      </form>
-
-      <div class="stats" style="margin-top:12px;">
-        <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
-        Всего работ: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
-        · Групп: <b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b>
-      </div>
-
-      <?php if (!$rows): ?>
-        <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
-      <?php else: ?>
-        <table class="works">
-          <thead>
-            <tr>
-              <th style="width:120px;">Код операции</th>
-              <th>Наименование работы</th>
-              <th style="width:80px;">Норма</th>
-              <th style="width:90px;"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($rows as $r): ?>
-              <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
-              <tr>
-                <td>
-                  <?php if ($r['operation_code']): ?>
-                    <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
-                      <?= e($r['operation_code']) ?>
-                    </span>
-                  <?php else: ?>—<?php endif; ?>
-                </td>
-                <td>
-                  <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
-                  <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
-                </td>
-                <td>
-                  <?php if ($r['norm_time'] !== null): ?>
-                    <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
-                  <?php else: ?>—<?php endif; ?>
-                </td>
-                <td>
-                  <button type="button" class="add-btn"
-                    data-code="<?= e($r['code']) ?>"
-                    data-op="<?= e($r['operation_code']) ?>"
-                    data-name="<?= e($r['name']) ?>"
-                    data-norm="<?= e((string)$r['norm_time']) ?>">
-                    ➕
-                  </button>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-
-        <?php if ($pages > 1): ?>
-          <div class="pagination">
-            <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
-            <span class="active"><?= $page ?></span>
-            <span>из <?= $pages ?></span>
-            <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
-          </div>
-        <?php endif; ?>
-      <?php endif; ?>
-    </div>
-
-    <!-- КОРЗИНА -->
-    <div class="card basket">
-      <div class="basket-header">
-        <h2>📋 Выбранные работы</h2>
-        <span class="basket-count" id="basketCount">0</span>
-      </div>
-
-      <div class="basket-total">
-        Суммарная норма: <b id="basketTotal">0,00</b> ч
-      </div>
-
-      <ul class="basket-list" id="basketList">
-        <li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>
-      </ul>
-
-      <div class="basket-actions" id="basketActions" style="display:none;">
-        <button class="btn btn-green btn-small" onclick="basketCopy()">📋 Копировать</button>
-        <button class="btn btn-secondary btn-small" onclick="basketDownload()">💾 Скачать</button>
-        <button class="btn btn-red btn-small" onclick="basketClear()">🗑️ Очистить</button>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<!-- МОДАЛКА ПРЕДВАРИТЕЛЬНЫХ РАБОТ -->
-<div class="modal-overlay" id="prereqModal">
-  <div class="modal">
-    <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
-    <p id="prereqText">
-      В названии работы указано, что деталь уже снята.
-      Обычно для этого требуется <b>сначала снять</b> более крупный узел.
-      Хотите добавить связанные работы?
-    </p>
-    <ul class="prereq-list" id="prereqList"></ul>
-    <div class="modal-btns">
-      <button class="btn btn-secondary" onclick="closePrereq()">Отмена</button>
-      <button class="btn btn-green" onclick="addPrereqSelected()">Добавить выбранные</button>
-    </div>
-  </div>
-</div>
-
-<div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
-
-<script>
-// ============ КОРЗИНА (localStorage) ============
-const BASKET_KEY = 'works_basket_v1';
-let basket = [];
-
-function basketLoad() {
-  try { basket = JSON.parse(localStorage.getItem(BASKET_KEY) || '[]'); }
-  catch(e) { basket = []; }
-  if (!Array.isArray(basket)) basket = [];
-}
-function basketSave() {
-  localStorage.setItem(BASKET_KEY, JSON.stringify(basket));
-}
-function basketRender() {
-  const list = document.getElementById('basketList');
-  const count = document.getElementById('basketCount');
-  const total = document.getElementById('basketTotal');
-  const actions = document.getElementById('basketActions');
-
-  count.textContent = basket.length;
-
-  let sum = 0;
-  basket.forEach(b => { if (b.norm) sum += parseFloat(b.norm); });
-  total.textContent = sum.toFixed(2).replace('.', ',');
-
-  if (basket.length === 0) {
-    list.innerHTML = '<li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>';
-    actions.style.display = 'none';
-    document.querySelectorAll('.add-btn').forEach(b => b.classList.remove('in-basket'));
-    return;
-  }
-  actions.style.display = 'flex';
-
-  list.innerHTML = basket.map((b, i) => `
-    <li class="basket-item">
-      <div class="basket-item-content">
-        ${b.op ? `<div class="basket-item-op">${escapeHtml(b.op)}</div>` : ''}
-        <div class="basket-item-name">${escapeHtml(b.name || '')}</div>
-        ${b.norm ? `<div class="basket-item-norm">${b.norm} ч</div>` : ''}
-      </div>
-      <span class="basket-item-del" onclick="basketRemove(${i})">×</span>
-    </li>
-  `).join('');
-
-  // отметить уже добавленные кнопки
-  const codes = new Set(basket.map(b => b.code));
-  document.querySelectorAll('.add-btn').forEach(btn => {
-    if (codes.has(btn.dataset.code)) btn.classList.add('in-basket');
-    else btn.classList.remove('in-basket');
-  });
-}
-function escapeHtml(s) {
-  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
-}
-function basketAdd(item) {
-  if (basket.some(b => b.code === item.code)) return false;
-  basket.push(item);
-  basketSave();
-  basketRender();
-  return true;
-}
-function basketRemove(i) {
-  basket.splice(i, 1);
-  basketSave();
-  basketRender();
-}
-function basketClear() {
-  if (!confirm('Очистить все выбранные работы?')) return;
-  basket = [];
-  basketSave();
-  basketRender();
-}
-function basketCopy() {
-  const text = basket.map(b => {
-    const op = b.op ? `[${b.op}] ` : '';
-    const n = b.norm ? ` (${b.norm} ч)` : '';
-    return op + b.name + n;
-  }).join('\n');
-  navigator.clipboard.writeText(text).then(() => showMsg('✅ Скопировано в буфер'));
-}
-function basketDownload() {
-  const text = basket.map(b => {
-    const op = b.op || '';
-    const name = b.name || '';
-    const n = b.norm || '';
-    return [op, name, n].join('\t');
-  }).join('\n');
-  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'works_' + new Date().toISOString().slice(0,10) + '.txt';
-  a.click();
-  URL.revokeObjectURL(url);
-}
-function showMsg(text) {
-  const el = document.getElementById('copyMsg');
-  el.textContent = text;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2000);
-}
-
-// ============ АВТОСВЯЗИ (вариант А) ============
-/**
- * Ищем в названии паттерн "(X снят|снята|снято|разобран|отсоединён)"
- * или "(X снят и разобран)" и т.п.
- */
-function extractPrereqObject(name) {
-  if (!name) return null;
-  // В скобках — ищем «снят / снята / снято / разобран / снят и разобран»
-  const m = name.match(/\(([^()]*(?:снят|снята|снято|разобран|отсоединён)[^()]*)\)/i);
-  if (!m) return null;
-  let inner = m[1];
-
-  // Убираем «и разобран», «и снят», «с автомобиля снят» и т.д.
-  inner = inner
-    .replace(/\b(и\s+разобран[а-я]*|разобран[а-я]*|с\s+автомобиля\s+снят[а-я]*|снят[а-я]*|отсоединён[а-я]*|установлен[а-я]*)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Убираем лишнее: "(снят)", "(доступ обеспечен)" — уже отсеялось по regexp
-  if (inner.length < 3) return null;
-
-  return inner;
-}
-
-function openPrereqModal(originalItem, objectText, prereqItems) {
-  const modal = document.getElementById('prereqModal');
-  const list = document.getElementById('prereqList');
-  const text = document.getElementById('prereqText');
-
-  text.innerHTML = `В названии работы: <b>«${escapeHtml(originalItem.name)}»</b><br>
-    указано, что деталь уже снята (<b>${escapeHtml(objectText)}</b>).
-    Обычно для этого нужно сначала выполнить работу по снятию. Добавить?`;
-
-  list.innerHTML = prereqItems.map((p, i) => `
-    <li class="prereq-item">
-      <input type="checkbox" id="prereq-${i}" checked
-             data-code="${escapeHtml(p.code)}"
-             data-op="${escapeHtml(p.operation_code || '')}"
-             data-name="${escapeHtml(p.name)}"
-             data-norm="${escapeHtml((p.norm_time||'').toString())}">
-      <label for="prereq-${i}">
-        ${p.operation_code ? `<span class="op-code">${escapeHtml(p.operation_code)}</span> ` : ''}
-        ${escapeHtml(p.name)}
-        ${p.norm_time ? `<span class="badge-auto">${p.norm_time} ч</span>` : ''}
-      </label>
-    </li>
-  `).join('');
-
-  modal.classList.add('active');
-}
-function closePrereq() {
-  document.getElementById('prereqModal').classList.remove('active');
-}
-function addPrereqSelected() {
-  const checked = document.querySelectorAll('#prereqList input[type=checkbox]:checked');
-  let added = 0;
-  checked.forEach(chk => {
-    if (basketAdd({
-      code: chk.dataset.code,
-      op: chk.dataset.op,
-      name: chk.dataset.name,
-      norm: chk.dataset.norm || null
-    })) added++;
-  });
-  closePrereq();
-  if (added > 0) showMsg('✅ Добавлено работ: ' + added);
-}
-
-// ============ ОБРАБОТКА КЛИКА ПО КНОПКЕ «+» ============
-document.addEventListener('click', async function(e) {
-  if (!e.target.classList.contains('add-btn')) return;
-
-  const btn = e.target;
-  const item = {
-    code: btn.dataset.code,
-    op: btn.dataset.op,
-    name: btn.dataset.name,
-    norm: btn.dataset.norm || null
-  };
-
-  // Уже в корзине?
-  if (basket.some(b => b.code === item.code)) {
-    showMsg('Уже в корзине');
-    return;
-  }
-
-  // 1. Ищем в названии паттерн «(X снят)»
-  const objectText = extractPrereqObject(item.name);
-
-  // 2. Добавляем основную работу
-  basketAdd(item);
-
-  // 3. Если нашли объект — ищем предварительные работы
-  if (objectText) {
-    try {
-      const url = `?model=<?= urlencode($model) ?>&find_prereq=1&object=${encodeURIComponent(objectText)}`;
-      const resp = await fetch(url, {headers: {'X-Requested-With': 'fetch'}});
-      const prereq = await resp.json();
-
-      // Отфильтруем те, что уже в корзине, и те, что равны самой работе
-      const filtered = prereq.filter(p =>
-        p.code !== item.code && !basket.some(b => b.code === p.code)
-      );
-
-      if (filtered.length > 0) {
-        openPrereqModal(item, objectText, filtered);
-      }
-    } catch(err) {
-      console.error('Ошибка поиска предварительных работ:', err);
-    }
-  }
-});
-
-// ============ ИНИЦИАЛИЗАЦИЯ ============
-basketLoad();
-basketRender();
-</script>
-</body>
-</html>
+            <a href="
