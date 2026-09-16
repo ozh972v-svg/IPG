@@ -20,20 +20,18 @@ foreach ($models as $m) {
 $q          = trim($_GET['q'] ?? '');
 $groupCode  = trim($_GET['group'] ?? '');
 $category   = trim($_GET['cat'] ?? '');
-$guardOnly  = !empty($_GET['guard']);
-$factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
 $CATEGORIES = [
-    'A' => ['label' => 'Административные',                   'desc' => 'Работы по оформлению заказ-наряда, приёмке-выдаче, согласованиям', 'color' => '#dc2626'],
-    'B' => ['label' => 'Предпродажная подготовка',           'desc' => 'Работы по подготовке автотехники к продаже/передаче', 'color' => '#ea580c'],
-    'T' => ['label' => 'Техническое обслуживание',           'desc' => 'Регламентные работы ТО (ТО-1, ТО-2, сезонное обслуживание)', 'color' => '#ca8a04'],
-    'X' => ['label' => 'Комплекс работ ТО',                  'desc' => 'Комплексные регламентные работы (ПТО, ПЗР, А2, А3, ТОд и др.)', 'color' => '#65a30d'],
-    'E' => ['label' => 'Диагностика автотехники',            'desc' => 'Работы по оценке состояния техники в целом', 'color' => '#0891b2'],
-    'P' => ['label' => 'Постовые работы текущего ремонта',   'desc' => 'Работы по снятию и установке изделий, слив/залив жидкостей, прокачка систем, регулировка', 'color' => '#2563eb'],
-    'C' => ['label' => 'Цеховые работы текущего ремонта',    'desc' => 'Разборка, очистка, оценка, сборка, регулировка, обкатка изделий, снятых с автотехники', 'color' => '#7c3aed'],
-    'M' => ['label' => 'Доработка (работы только для ОТМ)',  'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
+    'A' => ['label' => 'Административные',                   'desc' => 'Оформление заказ-наряда, приёмка-выдача, согласования', 'color' => '#dc2626'],
+    'B' => ['label' => 'Предпродажная подготовка',           'desc' => 'Подготовка автотехники к продаже/передаче', 'color' => '#ea580c'],
+    'T' => ['label' => 'Техническое обслуживание',           'desc' => 'Регламентные работы ТО (ТО-1, ТО-2, сезонное)', 'color' => '#ca8a04'],
+    'X' => ['label' => 'Комплекс работ ТО',                  'desc' => 'Комплексные регламентные (ПТО, ПЗР, А2, А3, ТОд и др.)', 'color' => '#65a30d'],
+    'E' => ['label' => 'Диагностика автотехники',            'desc' => 'Работы по оценке состояния техники', 'color' => '#0891b2'],
+    'P' => ['label' => 'Постовые работы текущего ремонта',   'desc' => 'Снятие/установка изделий, жидкости, прокачка, регулировка', 'color' => '#2563eb'],
+    'C' => ['label' => 'Цеховые работы текущего ремонта',    'desc' => 'Разборка, сборка, регулировка снятых изделий', 'color' => '#7c3aed'],
+    'M' => ['label' => 'Доработка (только для ОТМ)',         'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
 ];
 
 $DIAG_TRIGGERS = [
@@ -68,15 +66,10 @@ if (!empty($_GET['find_prereq'])) {
     if ($obj === '' || mb_strlen($obj) < 3) { echo json_encode([]); exit; }
 
     $exclArr = $exclude !== '' ? array_filter(array_map('trim', explode(',', $exclude))) : [];
-    $exclSql = '';
-    $exclParams = [];
+    $exclSql = ''; $exclParams = [];
     if ($exclArr) {
         $ph = [];
-        foreach ($exclArr as $i => $c) {
-            $key = ':ex' . $i;
-            $ph[] = $key;
-            $exclParams[$key] = $c;
-        }
+        foreach ($exclArr as $i => $c) { $k = ':ex'.$i; $ph[] = $k; $exclParams[$k] = $c; }
         $exclSql = ' AND code NOT IN (' . implode(',', $ph) . ') ';
     }
 
@@ -105,75 +98,44 @@ if (!empty($_GET['find_prereq'])) {
         ':c' => 'Снять и установить ' . $objClean . '%',
         ':d' => 'Снять ' . $objClean . '%',
     ], $exclParams);
-
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
+    $stmt = $pdo->prepare($sql); $stmt->execute($params);
     echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-/* ===== AJAX: поиск парной работы (Снять ↔ Установить) ===== */
+/* ===== AJAX: поиск парной работы ===== */
 if (!empty($_GET['find_pair'])) {
     header('Content-Type: application/json; charset=utf-8');
     $name = trim($_GET['name'] ?? '');
     $exclude = trim($_GET['exclude'] ?? '');
     if ($name === '') { echo json_encode([]); exit; }
+    if (preg_match('/^Снять и установить\s/ui', $name)) { echo json_encode([]); exit; }
 
-    // Если уже «Снять и установить» — пара есть, ничего не ищем
-    if (preg_match('/^Снять и установить\s/ui', $name)) {
-        echo json_encode([]); exit;
-    }
-
-    $tail = null;
-    $pairVerb = null;
-
-    if (preg_match('/^Снять\s+(.+)$/ui', $name, $m)) {
-        $tail = $m[1];
-        $pairVerb = 'Установить';
-    } elseif (preg_match('/^Установить\s+(.+)$/ui', $name, $m)) {
-        $tail = $m[1];
-        $pairVerb = 'Снять';
-    }
-
+    $tail = null; $pairVerb = null;
+    if (preg_match('/^Снять\s+(.+)$/ui', $name, $m)) { $tail = $m[1]; $pairVerb = 'Установить'; }
+    elseif (preg_match('/^Установить\s+(.+)$/ui', $name, $m)) { $tail = $m[1]; $pairVerb = 'Снять'; }
     if ($tail === null) { echo json_encode([]); exit; }
 
-    // Убираем хвостовые скобки для поиска
     $tailKey = preg_replace('/\s*\([^)]*\)\s*$/u', '', $tail);
     $tailKey = trim($tailKey);
     if ($tailKey === '') $tailKey = $tail;
-
-    // Обрезаем хвост по первой запятой для более широкого поиска
-    if (mb_strlen($tailKey) > 60) {
-        $tailKey = mb_substr($tailKey, 0, 60);
-    }
+    if (mb_strlen($tailKey) > 60) $tailKey = mb_substr($tailKey, 0, 60);
 
     $exclArr = $exclude !== '' ? array_filter(array_map('trim', explode(',', $exclude))) : [];
-    $exclSql = '';
-    $exclParams = [];
+    $exclSql = ''; $exclParams = [];
     if ($exclArr) {
         $ph = [];
-        foreach ($exclArr as $i => $c) {
-            $key = ':ex' . $i;
-            $ph[] = $key;
-            $exclParams[$key] = $c;
-        }
+        foreach ($exclArr as $i => $c) { $k = ':ex'.$i; $ph[] = $k; $exclParams[$k] = $c; }
         $exclSql = ' AND code NOT IN (' . implode(',', $ph) . ') ';
     }
 
-    // Варианты парной работы
     $variants = [
         $pairVerb . ' ' . $tailKey . '%',
         $pairVerb . ' и установить ' . $tailKey . '%',
         $pairVerb . ' и снять ' . $tailKey . '%',
     ];
-
-    $ors = [];
-    $params = [':m' => $model];
-    foreach ($variants as $i => $pat) {
-        $key = ':v' . $i;
-        $ors[] = "name ILIKE $key";
-        $params[$key] = $pat;
-    }
+    $ors = []; $params = [':m' => $model];
+    foreach ($variants as $i => $pat) { $k = ':v'.$i; $ors[] = "name ILIKE $k"; $params[$k] = $pat; }
     $orsSql = '(' . implode(' OR ', $ors) . ')';
 
     $sql = "
@@ -185,24 +147,21 @@ if (!empty($_GET['find_pair'])) {
         ORDER BY LENGTH(name)
         LIMIT 5
     ";
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute(array_merge($params, $exclParams));
+    $stmt = $pdo->prepare($sql); $stmt->execute(array_merge($params, $exclParams));
     echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 /* ===== ДЕРЕВО ===== */
 $stmt = $pdo->prepare("
-    SELECT code, parent_code, name
-    FROM work_operations
+    SELECT code, parent_code, name FROM work_operations
     WHERE it_is_group = TRUE AND deleted = FALSE AND model = :m
     ORDER BY code
 ");
 $stmt->execute([':m' => $model]);
 $allGroups = $stmt->fetchAll();
 
-$topGroups = [];
-$subgroups = [];
+$topGroups = []; $subgroups = [];
 foreach ($allGroups as $g) {
     $len = strlen($g['code']);
     if ($len === 2) $topGroups[] = $g;
@@ -231,55 +190,71 @@ if ($category !== '' && isset($CATEGORIES[$category])) {
         global $DIAG_TRIGGERS;
         $ors = ["(w.operation_code LIKE 'Е%' OR w.operation_code LIKE 'E%')"];
         $i = 0;
-        foreach ($DIAG_TRIGGERS as $t) {
-            $key = ':t' . $i;
-            $ors[] = "w.name ILIKE $key";
-            $params[$key] = '%' . $t . '%';
-            $i++;
-        }
+        foreach ($DIAG_TRIGGERS as $t) { $k = ':t'.$i; $ors[] = "w.name ILIKE $k"; $params[$k] = '%'.$t.'%'; $i++; }
         $where[] = '(' . implode(' OR ', $ors) . ')';
     } else {
-        $letters = [
-            'A' => ['А', 'A'], 'B' => ['В', 'B'], 'T' => ['Т', 'T'], 'X' => ['Х', 'X'],
-            'P' => ['Р', 'P'], 'C' => ['С', 'C'], 'M' => ['М', 'M'],
-        ];
+        $letters = ['A'=>['А','A'],'B'=>['В','B'],'T'=>['Т','T'],'X'=>['Х','X'],'P'=>['Р','P'],'C'=>['С','C'],'M'=>['М','M']];
         $set = $letters[$category] ?? [$category];
         $ors = [];
-        foreach ($set as $i => $L) {
-            $key = ':p' . $category . $i;
-            $ors[] = "w.operation_code LIKE $key";
-            $params[$key] = $L . '%';
-        }
+        foreach ($set as $i => $L) { $k = ':p'.$category.$i; $ors[] = "w.operation_code LIKE $k"; $params[$k] = $L.'%'; }
         $where[] = '(' . implode(' OR ', $ors) . ')';
     }
 }
-if ($guardOnly) $where[] = "w.guard_work = TRUE";
-if ($factOnly)  $where[] = "w.fact_work = TRUE";
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations w $whereSql");
-$stmt->execute($params);
-$total = (int)$stmt->fetchColumn();
+// Постраничный список работ
+$total = 0; $rows = []; $pages = 1;
+if ($category !== '' || $q !== '') {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations w $whereSql");
+    $stmt->execute($params);
+    $total = (int)$stmt->fetchColumn();
 
-$offset = ($page - 1) * $perPage;
+    $offset = ($page - 1) * $perPage;
+    $stmt = $pdo->prepare("
+        SELECT w.code, w.name, w.operation_code, w.eng_name, w.description,
+               w.norm_time, w.parent_code
+        FROM work_operations w
+        $whereSql
+        ORDER BY w.operation_code NULLS LAST, w.name
+        LIMIT $perPage OFFSET $offset
+    ");
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+    $pages = max(1, (int)ceil($total / $perPage));
+}
+
+/* ===== КАТЕГОРИИ ВНУТРИ ГРУППЫ (со счётчиками) ===== */
+$catCounts = array_fill_keys(array_keys($CATEGORIES), 0);
+if ($groupCode !== '') {
+    $stmt = $pdo->prepare("
+        SELECT w.name, w.operation_code
+        FROM work_operations w
+        WHERE w.it_is_group = FALSE AND w.deleted = FALSE AND w.model = :m
+          AND (w.parent_code = :g OR w.parent_code IN (SELECT code FROM work_operations WHERE parent_code = :g AND it_is_group = TRUE AND model = :m2))
+    ");
+    $stmt->execute([':m' => $model, ':g' => $groupCode, ':m2' => $model]);
+    foreach ($stmt->fetchAll() as $r) {
+        $k = opCategoryKey($r['operation_code'], $r['name']);
+        if (isset($catCounts[$k])) $catCounts[$k]++;
+    }
+}
+
+/* ===== КАТЕГОРИИ ВООБЩЕ (без группы) ===== */
+$catCountsAll = array_fill_keys(array_keys($CATEGORIES), 0);
 $stmt = $pdo->prepare("
-    SELECT w.code, w.name, w.operation_code, w.eng_name, w.description,
-           w.guard_work, w.fact_work, w.norm_time, w.parent_code
-    FROM work_operations w
-    $whereSql
-    ORDER BY w.operation_code NULLS LAST, w.name
-    LIMIT $perPage OFFSET $offset
+    SELECT name, operation_code FROM work_operations
+    WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m
 ");
-$stmt->execute($params);
-$rows = $stmt->fetchAll();
-$pages = max(1, (int)ceil($total / $perPage));
+$stmt->execute([':m' => $model]);
+foreach ($stmt->fetchAll() as $r) {
+    $k = opCategoryKey($r['operation_code'], $r['name']);
+    if (isset($catCountsAll[$k])) $catCountsAll[$k]++;
+}
 
-/* ===== СТАТИСТИКА ===== */
+/* ===== СТАТИСТИКА / ИНФО ===== */
 $stmt = $pdo->prepare("
-    SELECT
-        COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE AND model = :m) AS groups,
-        COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m) AS works,
-        COUNT(*) FILTER (WHERE it_is_group = FALSE AND norm_time IS NOT NULL AND model = :m) AS with_norm
+    SELECT COUNT(*) FILTER (WHERE it_is_group = TRUE AND deleted = FALSE AND model = :m) AS groups,
+           COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m) AS works
     FROM work_operations
 ");
 $stmt->execute([':m' => $model]);
@@ -313,6 +288,7 @@ function fmtNorm($n) {
   .container{max-width:1700px;margin:0 auto}
   .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:12px}
   h1{font-size:22px;margin:0 0 8px} h2{font-size:16px;margin:0 0 12px;color:#1e3a8a}
+  h3{font-size:14px;margin:0 0 10px;color:#1e3a8a}
   .top-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
   .user-info{font-size:13px;color:#666} .user-info b{color:#2563eb}
   .logout{color:#dc2626;text-decoration:none;font-size:13px;margin-left:12px}
@@ -324,21 +300,33 @@ function fmtNorm($n) {
   .btn-small{padding:7px 12px;font-size:13px}
   .btn-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
+  /* Плашка про применимость */
+  .applicability{background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border-left:4px solid #2563eb;padding:12px 16px;border-radius:10px;font-size:13px;color:#1e3a8a;margin-top:12px;line-height:1.6}
+  .applicability b{color:#1e40af}
+
   .model-bar{background:#eff6ff;border-left:4px solid #2563eb;padding:10px 14px;border-radius:10px;font-size:13px;color:#1e3a8a;margin-bottom:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
   .model-bar label{font-weight:600}
   .model-bar select{padding:6px 10px;border:1.5px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:13px;background:#fff;color:#1e3a8a;font-weight:600;cursor:pointer}
   .model-bar select:focus{outline:none;border-color:#2563eb}
 
-  .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:12px}
-  .cat-card{border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all 0.15s;text-decoration:none;color:inherit;display:block;background:#fff}
+  /* Сетка категорий */
+  .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .cat-card{border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all 0.15s;text-decoration:none;color:inherit;display:block;background:#fff;position:relative}
   .cat-card:hover{border-color:#2563eb;background:#f8faff;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,0.08)}
   .cat-card.active{background:#eff6ff;border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+  .cat-card.empty{opacity:0.4;cursor:not-allowed;pointer-events:none}
   .cat-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
   .cat-letter{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#fff;flex-shrink:0}
   .cat-title{font-weight:700;font-size:14px;color:#1a1a1a}
+  .cat-count{margin-left:auto;background:#f3f4f6;color:#666;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+  .cat-card.active .cat-count{background:#2563eb;color:#fff}
   .cat-desc{font-size:12px;color:#666;line-height:1.4;margin-left:42px}
-  .clear-cat{display:inline-block;margin-top:12px;padding:8px 14px;background:#fff;border:1.5px solid #2563eb;color:#2563eb;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600}
-  .clear-cat:hover{background:#eff6ff}
+
+  /* Хлебные крошки */
+  .breadcrumbs{font-size:13px;color:#666;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .breadcrumbs a{color:#2563eb;text-decoration:none}
+  .breadcrumbs a:hover{text-decoration:underline}
+  .breadcrumbs .sep{color:#cbd5e1}
 
   .layout{display:grid;grid-template-columns:300px 1fr 360px;gap:12px;align-items:start}
   @media (max-width:1200px){.layout{grid-template-columns:280px 1fr;} .basket{grid-column:1/-1}}
@@ -347,8 +335,6 @@ function fmtNorm($n) {
   .search-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .search-bar input[type=text]{flex:1;min-width:200px;padding:11px 14px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px;font-family:inherit}
   .search-bar input:focus{outline:none;border-color:#2563eb}
-  .filters{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-top:8px;align-items:center}
-  .filters label{display:flex;align-items:center;gap:5px;cursor:pointer}
 
   .tree{font-size:13px;max-height:75vh;overflow-y:auto}
   .tree > details > summary{padding:8px 10px;font-weight:700;color:#1e3a8a;cursor:pointer;border-radius:8px;display:flex;align-items:center;gap:8px;list-style:none}
@@ -378,25 +364,17 @@ function fmtNorm($n) {
   .cat-m{background:#fce7f3;color:#9d174d}
   .work-name{color:#1a1a1a;font-weight:500}
   .work-eng{color:#888;font-size:11px;margin-top:3px}
-  .work-desc{color:#666;font-size:11px;margin-top:4px;font-style:italic}
   .norm-time{background:#e0f2fe;color:#075985;padding:3px 10px;border-radius:6px;font-size:13px;font-weight:700;white-space:nowrap}
-  .badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap;margin-right:4px}
-  .badge-guard{background:#f0fdf4;color:#16a34a}
-  .badge-fact{background:#f3e8ff;color:#7c3aed}
   .add-btn{background:#16a34a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
   .add-btn:hover{background:#15803d}
   .add-btn.in-basket{background:#9ca3af;cursor:default}
 
-  .stats{font-size:12px;color:#666;padding:8px 0;border-bottom:1px solid #f0f0f0;margin-bottom:8px}
-  .stats b{color:#2563eb}
   .empty{text-align:center;padding:60px 20px;color:#999}
   .empty .big{font-size:48px;margin-bottom:8px}
 
   .pagination{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:16px}
   .pagination a,.pagination span{padding:7px 12px;border-radius:7px;text-decoration:none;font-size:13px;background:#fff;border:1.5px solid #e5e7eb;color:#2563eb}
   .pagination .active{background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600}
-
-  .warn{padding:12px 16px;border-radius:10px;background:#fffbeb;color:#b45309;border-left:4px solid #b45309;margin-bottom:12px;font-size:13px}
 
   .basket{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto}
   .basket-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
@@ -432,6 +410,8 @@ function fmtNorm($n) {
 
   .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
   .copy-msg.show{opacity:1}
+
+  .step-hint{font-size:13px;color:#666;margin-bottom:12px;padding:8px 12px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb}
 </style>
 </head>
 <body>
@@ -461,50 +441,31 @@ function fmtNorm($n) {
           </option>
         <?php endforeach; ?>
       </select>
-      <span style="color:#666;">Работ в модели: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b> · обновлено: <b><?= e(fmtTs($lastSync)) ?></b></span>
+      <span style="color:#666;">обновлено: <b><?= e(fmtTs($lastSync)) ?></b></span>
     </div>
-  </div>
 
-  <div class="card">
-    <h2>📖 Категории работ — по первому символу кода операции</h2>
-    <p style="font-size:13px;color:#666;margin:0 0 4px;">
-      Диагностические работы определяются автоматически по названию.
-      Нажмите на категорию, чтобы отфильтровать работы.
-    </p>
-    <div class="cat-grid">
-      <?php foreach ($CATEGORIES as $key => $cat): ?>
-        <?php $isActive = ($category === $key); ?>
-        <a class="cat-card <?= $isActive ? 'active' : '' ?>"
-           href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $q ? '&q=' . urlencode($q) : '' ?>&cat=<?= urlencode($key) ?>">
-          <div class="cat-head">
-            <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($key) ?></div>
-            <div class="cat-title"><?= e($cat['label']) ?></div>
-          </div>
-          <div class="cat-desc"><?= e($cat['desc']) ?></div>
-        </a>
-      <?php endforeach; ?>
+    <div class="applicability">
+      🔵 <b>Работы категорий A, E, P, C применяются:</b>
+      <b>и в гарантийных</b>, <b>и в негарантийных ремонтах</b>.
+      Разделение на гарантийный / негарантийный ремонт выполняется на этапе оформления заказ-наряда — в самом справочнике работы универсальны.
     </div>
-    <?php if ($category !== ''): ?>
-      <a class="clear-cat" href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $q ? '&q=' . urlencode($q) : '' ?>">
-        ✖ Сбросить фильтр категории
-      </a>
-    <?php endif; ?>
   </div>
 
   <div class="layout">
 
+    <!-- ДЕРЕВО -->
     <div class="card">
       <h2>📁 Группы</h2>
       <div class="tree">
-        <a href="?model=<?= urlencode($model) ?><?= $category ? '&cat=' . urlencode($category) : '' ?>" class="tree-sub <?= $groupCode === '' ? 'selected' : '' ?>" style="padding-left:10px;font-weight:700;color:#1e3a8a;background:<?= $groupCode === '' ? '#eff6ff' : 'transparent' ?>;">
-          🏠 Все работы
+        <a href="?model=<?= urlencode($model) ?>" class="tree-sub <?= $groupCode === '' ? 'selected' : '' ?>" style="padding-left:10px;font-weight:700;color:#1e3a8a;background:<?= $groupCode === '' ? '#eff6ff' : 'transparent' ?>;">
+          🏠 Все группы
         </a>
         <?php foreach ($topGroups as $g): ?>
           <?php $isOpen = ($groupCode === $g['code']) || strpos($groupCode, $g['code']) === 0; ?>
           <?php $sel = ($groupCode === $g['code']); ?>
           <details class="tree-details" <?= $isOpen ? 'open' : '' ?>>
             <summary class="<?= $sel ? 'selected' : '' ?>">
-              <a href="?model=<?= urlencode($model) ?>&group=<?= urlencode($g['code']) ?><?= $category ? '&cat=' . urlencode($category) : '' ?>">
+              <a href="?model=<?= urlencode($model) ?>&group=<?= urlencode($g['code']) ?>">
                 <span style="color:#2563eb;font-size:12px;">📂</span>
                 <?= e($g['name']) ?>
               </a>
@@ -512,7 +473,7 @@ function fmtNorm($n) {
             <?php foreach ($subgroups[$g['code']] ?? [] as $sub): ?>
               <?php $selSub = ($sub['code'] === $groupCode); ?>
               <a class="tree-sub <?= $selSub ? 'selected' : '' ?>"
-                 href="?model=<?= urlencode($model) ?>&group=<?= urlencode($sub['code']) ?><?= $category ? '&cat=' . urlencode($category) : '' ?>">
+                 href="?model=<?= urlencode($model) ?>&group=<?= urlencode($sub['code']) ?>">
                 <?= e($sub['name']) ?>
               </a>
             <?php endforeach; ?>
@@ -521,98 +482,140 @@ function fmtNorm($n) {
       </div>
     </div>
 
+    <!-- ЦЕНТРАЛЬНАЯ ЧАСТЬ -->
     <div class="card">
-      <h2>
+      <!-- Хлебные крошки -->
+      <div class="breadcrumbs">
+        <a href="?model=<?= urlencode($model) ?>">📁 Все группы</a>
         <?php if ($currentGroup): ?>
-          📂 <?= e($currentGroup['name']) ?>
-        <?php else: ?>
-          📋 Все работы
+          <span class="sep">›</span>
+          <a href="?model=<?= urlencode($model) ?>&group=<?= urlencode($groupCode) ?>"><?= e($currentGroup['name']) ?></a>
         <?php endif; ?>
         <?php if ($category && isset($CATEGORIES[$category])): ?>
-          <span style="font-weight:400;font-size:13px;color:#666;"> · <b><?= e($CATEGORIES[$category]['label']) ?></b></span>
+          <span class="sep">›</span>
+          <span><?= e($CATEGORIES[$category]['label']) ?></span>
         <?php endif; ?>
-      </h2>
-
-      <form method="get">
-        <input type="hidden" name="model" value="<?= e($model) ?>">
-        <input type="hidden" name="group" value="<?= e($groupCode) ?>">
-        <input type="hidden" name="cat" value="<?= e($category) ?>">
-        <div class="search-bar">
-          <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию, коду операции…">
-          <button type="submit" class="btn">🔍 Найти</button>
-          <?php if ($q !== '' || $guardOnly || $factOnly): ?>
-            <a href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $category ? '&cat=' . urlencode($category) : '' ?>" class="btn btn-secondary">Сбросить</a>
-          <?php endif; ?>
-        </div>
-        <div class="filters">
-          <label><input type="checkbox" name="guard" value="1" <?= $guardOnly ? 'checked' : '' ?>> Только постовые</label>
-          <label><input type="checkbox" name="fact"  value="1" <?= $factOnly  ? 'checked' : '' ?>> Только фактические</label>
-        </div>
-      </form>
-
-      <div class="stats" style="margin-top:12px;">
-        <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
-        Всего работ: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
-        · Групп: <b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b>
       </div>
 
-      <?php if (!$rows): ?>
-        <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
-      <?php else: ?>
-        <table class="works">
-          <thead>
-            <tr>
-              <th style="width:120px;">Код операции</th>
-              <th>Наименование работы</th>
-              <th style="width:80px;">Норма</th>
-              <th style="width:90px;"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($rows as $r): ?>
-              <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
-              <tr>
-                <td>
-                  <?php if ($r['operation_code']): ?>
-                    <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
-                      <?= e($r['operation_code']) ?>
-                    </span>
-                  <?php else: ?>—<?php endif; ?>
-                </td>
-                <td>
-                  <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
-                  <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
-                </td>
-                <td>
-                  <?php if ($r['norm_time'] !== null): ?>
-                    <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
-                  <?php else: ?>—<?php endif; ?>
-                </td>
-                <td>
-                  <button type="button" class="add-btn"
-                    data-code="<?= e($r['code']) ?>"
-                    data-op="<?= e($r['operation_code']) ?>"
-                    data-name="<?= e($r['name']) ?>"
-                    data-norm="<?= e((string)$r['norm_time']) ?>">
-                    ➕
-                  </button>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
+      <!-- СЦЕНАРИЙ 1: Группа не выбрана -->
+      <?php if ($groupCode === ''): ?>
+        <h2>📋 Шаг 1: выберите группу работ</h2>
+        <div class="step-hint">
+          Выберите группу в левом меню или кликните по категории ниже, чтобы увидеть работы по всем группам.
+        </div>
+        <h3>Или выберите сразу категорию:</h3>
+        <div class="cat-grid">
+          <?php foreach ($CATEGORIES as $key => $cat): ?>
+            <?php $cnt = (int)($catCountsAll[$key] ?? 0); ?>
+            <a class="cat-card <?= $cnt === 0 ? 'empty' : '' ?> <?= $category === $key ? 'active' : '' ?>"
+               href="?model=<?= urlencode($model) ?>&cat=<?= urlencode($key) ?>">
+              <div class="cat-head">
+                <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($key) ?></div>
+                <div class="cat-title"><?= e($cat['label']) ?></div>
+                <div class="cat-count"><?= number_format($cnt, 0, '.', ' ') ?></div>
+              </div>
+              <div class="cat-desc"><?= e($cat['desc']) ?></div>
+            </a>
+          <?php endforeach; ?>
+        </div>
 
-        <?php if ($pages > 1): ?>
-          <div class="pagination">
-            <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
-            <span class="active"><?= $page ?></span>
-            <span>из <?= $pages ?></span>
-            <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
+      <!-- СЦЕНАРИЙ 2: Группа выбрана, категория не выбрана -->
+      <?php elseif ($category === ''): ?>
+        <h2>📋 Шаг 2: выберите категорию в группе «<?= e($currentGroup['name'] ?? '') ?>»</h2>
+        <div class="step-hint">
+          Показаны только те категории, в которых есть работы внутри выбранной группы.
+        </div>
+        <div class="cat-grid">
+          <?php foreach ($CATEGORIES as $key => $cat): ?>
+            <?php $cnt = (int)($catCounts[$key] ?? 0); ?>
+            <a class="cat-card <?= $cnt === 0 ? 'empty' : '' ?>"
+               href="?model=<?= urlencode($model) ?>&group=<?= urlencode($groupCode) ?>&cat=<?= urlencode($key) ?>">
+              <div class="cat-head">
+                <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($key) ?></div>
+                <div class="cat-title"><?= e($cat['label']) ?></div>
+                <div class="cat-count"><?= number_format($cnt, 0, '.', ' ') ?></div>
+              </div>
+              <div class="cat-desc"><?= e($cat['desc']) ?></div>
+            </a>
+          <?php endforeach; ?>
+        </div>
+
+      <!-- СЦЕНАРИЙ 3: Группа + категория выбраны — список работ -->
+      <?php else: ?>
+        <h2>📋 Шаг 3: работы — <?= e($CATEGORIES[$category]['label']) ?></h2>
+
+        <form method="get" style="margin-bottom:12px;">
+          <input type="hidden" name="model" value="<?= e($model) ?>">
+          <input type="hidden" name="group" value="<?= e($groupCode) ?>">
+          <input type="hidden" name="cat" value="<?= e($category) ?>">
+          <div class="search-bar">
+            <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию или коду…">
+            <button type="submit" class="btn">🔍 Найти</button>
+            <?php if ($q !== ''): ?>
+              <a href="?model=<?= urlencode($model) ?>&group=<?= urlencode($groupCode) ?>&cat=<?= urlencode($category) ?>" class="btn btn-secondary">Сбросить</a>
+            <?php endif; ?>
           </div>
+        </form>
+
+        <?php if (!$rows): ?>
+          <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
+        <?php else: ?>
+          <table class="works">
+            <thead>
+              <tr>
+                <th style="width:120px;">Код операции</th>
+                <th>Наименование работы</th>
+                <th style="width:80px;">Норма</th>
+                <th style="width:90px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($rows as $r): ?>
+                <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
+                <tr>
+                  <td>
+                    <?php if ($r['operation_code']): ?>
+                      <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
+                        <?= e($r['operation_code']) ?>
+                      </span>
+                    <?php else: ?>—<?php endif; ?>
+                  </td>
+                  <td>
+                    <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
+                    <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
+                  </td>
+                  <td>
+                    <?php if ($r['norm_time'] !== null): ?>
+                      <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
+                    <?php else: ?>—<?php endif; ?>
+                  </td>
+                  <td>
+                    <button type="button" class="add-btn"
+                      data-code="<?= e($r['code']) ?>"
+                      data-op="<?= e($r['operation_code']) ?>"
+                      data-name="<?= e($r['name']) ?>"
+                      data-norm="<?= e((string)$r['norm_time']) ?>">
+                      ➕
+                    </button>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+
+          <?php if ($pages > 1): ?>
+            <div class="pagination">
+              <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
+              <span class="active"><?= $page ?></span>
+              <span>из <?= $pages ?></span>
+              <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
+            </div>
+          <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
     </div>
 
+    <!-- КОРЗИНА -->
     <div class="card basket">
       <div class="basket-header">
         <h2>📋 Выбранные работы</h2>
@@ -640,9 +643,7 @@ function fmtNorm($n) {
 <div class="modal-overlay" id="prereqModal">
   <div class="modal">
     <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
-    <p id="prereqText">
-      Отметьте, какие работы добавить в заказ-наряд:
-    </p>
+    <p id="prereqText">Отметьте, какие работы добавить в заказ-наряд:</p>
     <ul class="prereq-list" id="prereqList"></ul>
     <div class="modal-btns">
       <button class="btn btn-secondary" onclick="closePrereq()">Отмена</button>
@@ -654,7 +655,6 @@ function fmtNorm($n) {
 <div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
 
 <script>
-// ============ КОРЗИНА ============
 const BASKET_KEY = 'works_basket_v1';
 let basket = [];
 
@@ -744,7 +744,6 @@ function showMsg(text) {
   setTimeout(() => el.classList.remove('show'), 2000);
 }
 
-// ============ ИЗВЛЕЧЕНИЕ ОБЪЕКТОВ ИЗ СКОБОК ============
 function extractPrereqObjects(name) {
   if (!name) return [];
   const results = [];
@@ -761,14 +760,12 @@ function extractPrereqObjects(name) {
   return results;
 }
 
-// ============ РЕКУРСИВНЫЙ ПОИСК ЗАВИСИМОСТЕЙ ============
 async function findDependencies(item, existingCodes, depth) {
   if (depth > 2) return null;
 
   const objects = extractPrereqObjects(item.name);
   if (objects.length === 0) return null;
 
-  // 1. Ищем предварительные работы по объектам в скобках
   let allPrereqs = [];
   for (const obj of objects) {
     try {
@@ -781,9 +778,7 @@ async function findDependencies(item, existingCodes, depth) {
       const items = await resp.json();
       const filtered = items.filter(p => !existingCodes.has(p.code));
       allPrereqs = allPrereqs.concat(filtered);
-    } catch(err) {
-      console.error('Ошибка поиска:', err);
-    }
+    } catch(err) { console.error(err); }
   }
 
   const seen = new Set();
@@ -792,15 +787,12 @@ async function findDependencies(item, existingCodes, depth) {
     seen.add(p.code);
     return true;
   });
-
   if (allPrereqs.length === 0) return null;
 
-  // 2. Для каждой работы без «и установить» ищем парную (Установить / Снять)
   const pairsToAdd = [];
   for (const p of allPrereqs) {
     if (/^Снять и установить\s/ui.test(p.name)) continue;
     if (!/^(Снять|Установить)\s/ui.test(p.name)) continue;
-
     try {
       const excludeParam = encodeURIComponent([...existingCodes, ...allPrereqs.map(x => x.code)].join(','));
       const url = '?model=' + encodeURIComponent('<?= $model ?>')
@@ -809,20 +801,16 @@ async function findDependencies(item, existingCodes, depth) {
                 + '&exclude=' + excludeParam;
       const resp = await fetch(url, {headers: {'X-Requested-With': 'fetch'}});
       const pairs = await resp.json();
-
       pairs.forEach(pair => {
         if (allPrereqs.some(x => x.code === pair.code)) return;
         if (pairsToAdd.some(x => x.code === pair.code)) return;
         pair._pairedWith = p.code;
         pairsToAdd.push(pair);
       });
-    } catch(err) {
-      console.error('Ошибка поиска пары:', err);
-    }
+    } catch(err) { console.error(err); }
   }
   allPrereqs = allPrereqs.concat(pairsToAdd);
 
-  // 3. Для каждой найденной работы ищем её собственные зависимости
   const deeper = [];
   for (const p of allPrereqs) {
     const subCodes = new Set([...existingCodes, p.code, ...allPrereqs.map(x => x.code)]);
@@ -831,22 +819,18 @@ async function findDependencies(item, existingCodes, depth) {
       subCodes,
       depth + 1
     );
-    if (subResult) {
-      subResult.parentCode = p.code;
-      deeper.push(subResult);
-    }
+    if (subResult) { subResult.parentCode = p.code; deeper.push(subResult); }
   }
 
   return { parent: item, prereqs: allPrereqs, deeper: deeper };
 }
 
-// ============ МОДАЛКА ============
 function renderPrereqModal(tree) {
   const modal = document.getElementById('prereqModal');
   const list = document.getElementById('prereqList');
   const text = document.getElementById('prereqText');
 
-  text.innerHTML = 'Для работы <b style="color:#92400e;">' + escapeHtml(tree.parent.name) + '</b> нужны предварительные работы. Отметьте, что добавить:';
+  text.innerHTML = 'Для работы <b style="color:#92400e;">' + escapeHtml(tree.parent.name) + '</b> нужны предварительные работы:';
 
   const flat = [];
   function walk(node, level, parentLabel) {
@@ -863,9 +847,7 @@ function renderPrereqModal(tree) {
     const subNote = entry.level > 0
       ? '<div class="prereq-sub" style="margin-left:' + (indent + 28) + 'px;">↳ требуется для: ' + escapeHtml(entry.parentLabel || '') + '</div>'
       : '';
-    const pairBadge = entry.isPair
-      ? '<span class="badge-pair">парная</span>'
-      : '';
+    const pairBadge = entry.isPair ? '<span class="badge-pair">парная</span>' : '';
     return subNote + `
       <li class="prereq-item" style="margin-left:${indent}px;">
         <input type="checkbox" id="prereq-${i}" checked
@@ -885,9 +867,7 @@ function renderPrereqModal(tree) {
 
   modal.classList.add('active');
 }
-function closePrereq() {
-  document.getElementById('prereqModal').classList.remove('active');
-}
+function closePrereq() { document.getElementById('prereqModal').classList.remove('active'); }
 function addPrereqSelected() {
   const checked = document.querySelectorAll('#prereqList input[type=checkbox]:checked');
   let added = 0;
@@ -903,7 +883,6 @@ function addPrereqSelected() {
   if (added > 0) showMsg('✅ Добавлено работ: ' + added);
 }
 
-// ============ КЛИК ➕ ============
 document.addEventListener('click', async function(e) {
   if (!e.target.classList.contains('add-btn')) return;
   const btn = e.target;
@@ -924,13 +903,11 @@ document.addEventListener('click', async function(e) {
 
   const existingCodes = new Set(basket.map(b => b.code));
   const tree = await findDependencies(item, existingCodes, 0);
-
   if (tree && tree.prereqs.length > 0) {
     renderPrereqModal(tree);
   }
 });
 
-// ============ СТАРТ ============
 basketLoad();
 basketRender();
 </script>
