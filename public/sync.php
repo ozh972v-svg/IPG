@@ -8,16 +8,16 @@ if (!$user || !$user['is_admin']) { header('Location: index.html'); exit; }
 $pdo = get_db();
 $messages = [];
 $error = null;
+$importResult = null;
 
 /**
  * Определяет индексы колонок по заголовкам.
- * Заголовок ищется в первых 5 строках файла (там есть «Норма времени», «Модель шасси», ...).
+ * Заголовок ищется в первых 5 строках файла.
  */
 function find_header_row(array $lines): ?int {
     foreach ($lines as $i => $line) {
         $cols = explode("\t", $line);
         $first = trim($cols[0] ?? '');
-        // Шапка таблицы начинается со слова «Норма времени»
         if ($first === 'Норма времени') return $i;
     }
     return null;
@@ -37,7 +37,6 @@ function map_columns(string $headerLine): array {
         elseif ($title === 'Операция')       $map['name'] = $i;
         elseif ($title === 'Трудоемкость')   $map['norm'] = $i;
         elseif ($title === 'Родитель') {
-            // Две колонки «Родитель»: первая — группа, вторая — подгруппа
             if ($parentIdx === 0) { $map['group'] = $i; $parentIdx++; }
             else                  { $map['subgroup'] = $i; }
         }
@@ -51,17 +50,12 @@ function extract_code(string $s): ?string {
 }
 
 /**
- * Парсит файл. Возвращает список комплектаций, каждая со своими группами/подгруппами/работами.
- * [
- *   '54901-0070004-CA' => ['groups'=>[...], 'subgroups'=>[...], 'works'=>[...]],
- *   ...
- * ]
+ * Парсит файл. Возвращает массив комплектаций, каждая со своими группами/подгруппами/работами.
  */
 function parse_file(string $path): array {
     $content = file_get_contents($path);
     if ($content === false) throw new RuntimeException('Не удалось прочитать файл');
 
-    // Убираем BOM, разбиваем на строки
     $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
     $lines = preg_split('/\r\n|\r|\n/', $content);
 
@@ -72,7 +66,7 @@ function parse_file(string $path): array {
 
     $map = map_columns($lines[$headerRow]);
     if (!isset($map['complectation']) || !isset($map['op_code']) || !isset($map['name'])) {
-        throw new RuntimeException('В заголовке не найдены обязательные колонки: «Комплектация», «Код операции», «Операция». Проверьте формат выгрузки.');
+        throw new RuntimeException('В заголовке не найдены обязательные колонки: «Комплектация», «Код операции», «Операция».');
     }
 
     $byComplectation = [];
@@ -83,19 +77,17 @@ function parse_file(string $path): array {
         $cols = explode("\t", $line);
         if (trim($cols[0] ?? '') === 'Итого') break;
 
-        $comp = trim($cols[$map['complectation']] ?? '');
+        $comp   = trim($cols[$map['complectation']] ?? '');
         $opCode = trim($cols[$map['op_code']] ?? '');
-        $name = trim($cols[$map['name']] ?? '');
+        $name   = trim($cols[$map['name']] ?? '');
         if ($comp === '' || $opCode === '' || $name === '') continue;
 
-        // Убираем хвостовой дефис у комплектации
         $comp = rtrim($comp, '-');
 
         if (!isset($byComplectation[$comp])) {
             $byComplectation[$comp] = ['groups'=>[], 'subgroups'=>[], 'works'=>[]];
         }
 
-        // Группа и подгруппа
         $gCode = null;
         if (isset($map['group'])) {
             $gVal = trim($cols[$map['group']] ?? '');
@@ -114,7 +106,6 @@ function parse_file(string $path): array {
             }
         }
 
-        // Норма — из колонки «Трудоемкость»
         $norm = null;
         if (isset($map['norm'])) {
             $nVal = trim($cols[$map['norm']] ?? '');
@@ -139,7 +130,8 @@ function parse_file(string $path): array {
 }
 
 /**
- * Импорт одной комплектации: удаляет старые записи по ней, вставляет новые.
+ * Импорт одной комплектации: удаляет старые записи, вставляет новые.
+ * Дополнительно заполняет model (первые 5 цифр комплектации).
  */
 function import_one(string $complectation, array $data): array {
     global $pdo;
@@ -147,6 +139,12 @@ function import_one(string $complectation, array $data): array {
     $groups    = $data['groups'];
     $subgroups = $data['subgroups'];
     $works     = $data['works'];
+
+    // Извлекаем model из кода комплектации: "54901-0000024-94" -> "54901"
+    $model = null;
+    if (preg_match('/^(\d{5})/', $complectation, $m)) {
+        $model = $m[1];
+    }
 
     // Родители подгрупп: 3757 → 37
     $subgroupParents = [];
@@ -171,17 +169,18 @@ function import_one(string $complectation, array $data): array {
     }
     unset($w);
 
-    // Удаляем старое только для этой комплектации
+    // Удаляем старое для этой комплектации
     $pdo->prepare("DELETE FROM work_operations WHERE complectation = :c")
         ->execute([':c' => $complectation]);
 
     $stmt = $pdo->prepare("
         INSERT INTO work_operations
-            (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, deleted, updated_at)
+            (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, deleted, updated_at)
         VALUES
-            (:code, :parent, :is_group, :name, :op_code, :norm, :complectation, FALSE, NOW())
+            (:code, :parent, :is_group, :name, :op_code, :norm, :complectation, :model, FALSE, NOW())
     ");
 
+    // Группы верхнего уровня
     foreach ($groups as $code => $name) {
         $stmt->execute([
             ':code'           => $code . '@' . $complectation,
@@ -191,8 +190,10 @@ function import_one(string $complectation, array $data): array {
             ':op_code'        => null,
             ':norm'           => null,
             ':complectation'  => $complectation,
+            ':model'          => $model,
         ]);
     }
+    // Подгруппы
     foreach ($subgroups as $code => $name) {
         $stmt->execute([
             ':code'           => $code . '@' . $complectation,
@@ -202,8 +203,10 @@ function import_one(string $complectation, array $data): array {
             ':op_code'        => null,
             ':norm'           => null,
             ':complectation'  => $complectation,
+            ':model'          => $model,
         ]);
     }
+    // Работы
     foreach ($works as $w) {
         $parent = $w['parent'] ? ($w['parent'] . '@' . $complectation) : null;
         $stmt->execute([
@@ -214,11 +217,13 @@ function import_one(string $complectation, array $data): array {
             ':op_code'        => mb_substr($w['op_code'], 0, 50),
             ':norm'           => $w['norm'],
             ':complectation'  => $complectation,
+            ':model'          => $model,
         ]);
     }
 
     return [
         'complectation' => $complectation,
+        'model'         => $model,
         'groups'        => count($groups),
         'subgroups'     => count($subgroups),
         'works'         => count($works),
@@ -247,8 +252,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_nam
         );
         foreach ($results as $r) {
             $messages[] = sprintf(
-                '  • %s — групп %d, подгрупп %d, работ %d (с нормой: %d)',
-                $r['complectation'], $r['groups'], $r['subgroups'], $r['works'], $r['with_norm']
+                '  • %s (модель %s) — групп %d, подгрупп %d, работ %d (с нормой: %d)',
+                $r['complectation'], $r['model'] ?? '—',
+                $r['groups'], $r['subgroups'], $r['works'], $r['with_norm']
             );
         }
     } catch (Throwable $e) {
@@ -259,6 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_nam
 // Список загруженных комплектаций
 $complectations = $pdo->query("
     SELECT complectation,
+           MAX(model) AS model,
            COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE) AS groups_cnt,
            COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS works_cnt,
            MAX(updated_at) AS last_update
@@ -348,7 +355,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
       <b>Как выгрузить из 1С:</b><br>
       1. Отчёт «Трудоёмкость операций по нормам времени» → «ДляВыгрузки»<br>
       2. Сохрани как <code>.txt</code> в кодировке <b>UTF-8</b>, разделитель — табуляция<br>
-      3. Загрузи сюда — <b>комплектации и нормы времени программа возьмёт из файла сама</b><br>
+      3. Загрузи сюда — <b>комплектации, модель и нормы времени программа возьмёт из файла сама</b><br>
       <b>Важно:</b> если в файле несколько комплектаций — все они импортируются за один раз.
     </div>
 
@@ -375,8 +382,9 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
         <thead>
           <tr>
             <th>Код комплектации</th>
-            <th style="width:100px;">Групп</th>
-            <th style="width:100px;">Работ</th>
+            <th style="width:80px;">Модель</th>
+            <th style="width:80px;">Групп</th>
+            <th style="width:80px;">Работ</th>
             <th style="width:180px;">Обновлено</th>
           </tr>
         </thead>
@@ -384,6 +392,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
           <?php foreach ($complectations as $c): ?>
             <tr>
               <td><code><?= e($c['complectation']) ?></code></td>
+              <td><?= e($c['model'] ?? '—') ?></td>
               <td><?= number_format((int)$c['groups_cnt'], 0, '.', ' ') ?></td>
               <td><b><?= number_format((int)$c['works_cnt'], 0, '.', ' ') ?></b></td>
               <td><?= fmtTs($c['last_update']) ?></td>
