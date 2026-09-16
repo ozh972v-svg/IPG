@@ -8,59 +8,41 @@ if (!$user || !$user['is_admin']) { header('Location: index.html'); exit; }
 $pdo = get_db();
 $messages = [];
 $error = null;
-$importResult = null;
 
 /**
- * Роли колонок определяем по формату значения — устойчиво к сдвигам.
+ * Определяет индексы колонок по заголовкам.
+ * Заголовок ищется в первых 5 строках файла (там есть «Норма времени», «Модель шасси», ...).
  */
-function detect_roles(array $cols): array {
-    $roles = ['group'=>null, 'subgroup'=>null, 'opCode'=>null, 'name'=>null, 'norm'=>null, 'complectation'=>null];
+function find_header_row(array $lines): ?int {
+    foreach ($lines as $i => $line) {
+        $cols = explode("\t", $line);
+        $first = trim($cols[0] ?? '');
+        // Шапка таблицы начинается со слова «Норма времени»
+        if ($first === 'Норма времени') return $i;
+    }
+    return null;
+}
 
-    foreach ($cols as $i => $raw) {
-        $v = trim($raw);
-        if ($v === '') continue;
+/**
+ * Определяет индексы нужных колонок по строке заголовка.
+ */
+function map_columns(string $headerLine): array {
+    $cols = array_map('trim', explode("\t", $headerLine));
+    $map = [];
+    $parentIdx = 0;
 
-        // Комплектация — длинный код типа "54901-0070004-CA" или "54901-0000054-92"
-        if (preg_match('/^\d{5}\-\d{5,9}\-[A-ZА-Я]{2}$/u', $v)) {
-            if ($roles['complectation'] === null) {
-                $roles['complectation'] = ['idx'=>$i, 'val'=>$v];
-            }
-            continue;
-        }
-
-        // Норма времени — "0,500" или "0.500"
-        if (preg_match('/^\d+[,.]\d+$/', $v)) {
-            $roles['norm'] = ['idx'=>$i, 'val'=>$v];
-            continue;
-        }
-
-        // Код операции: "00-000", "П10-008", "C10-0211", "Р-37-11-00-00", "P-35-02-02-01"
-        if (preg_match('/^([A-Za-zА-Яа-я]+\-?\d[\d\-]*|\d{2}\-\d[\d\-]*)$/u', $v)) {
-            $roles['opCode'] = ['idx'=>$i, 'val'=>$v];
-            continue;
-        }
-
-        // Подгруппа: 4 цифры + разделитель ("0000. Автомобиль", "8228 - Холодильник")
-        if (preg_match('/^\d{4}\s*[.\-–]\s*/', $v)) {
-            if ($roles['subgroup'] === null) $roles['subgroup'] = ['idx'=>$i, 'val'=>$v];
-            continue;
-        }
-
-        // Группа: 2 цифры + разделитель ("00. Автомобиль")
-        if (preg_match('/^\d{2}\s*[.\-–]\s*/', $v)) {
-            if ($roles['group'] === null) $roles['group'] = ['idx'=>$i, 'val'=>$v];
-            continue;
+    foreach ($cols as $i => $title) {
+        if ($title === 'Комплектация')       $map['complectation'] = $i;
+        elseif ($title === 'Код операции')   $map['op_code'] = $i;
+        elseif ($title === 'Операция')       $map['name'] = $i;
+        elseif ($title === 'Трудоемкость')   $map['norm'] = $i;
+        elseif ($title === 'Родитель') {
+            // Две колонки «Родитель»: первая — группа, вторая — подгруппа
+            if ($parentIdx === 0) { $map['group'] = $i; $parentIdx++; }
+            else                  { $map['subgroup'] = $i; }
         }
     }
-
-    if ($roles['opCode'] !== null) {
-        $opIdx = $roles['opCode']['idx'];
-        if (isset($cols[$opIdx + 1])) {
-            $nameVal = trim($cols[$opIdx + 1]);
-            if ($nameVal !== '') $roles['name'] = $nameVal;
-        }
-    }
-    return $roles;
+    return $map;
 }
 
 function extract_code(string $s): ?string {
@@ -69,103 +51,104 @@ function extract_code(string $s): ?string {
 }
 
 /**
- * Парсит файл: определяет комплектацию, группы, подгруппы, работы.
+ * Парсит файл. Возвращает список комплектаций, каждая со своими группами/подгруппами/работами.
+ * [
+ *   '54901-0070004-CA' => ['groups'=>[...], 'subgroups'=>[...], 'works'=>[...]],
+ *   ...
+ * ]
  */
 function parse_file(string $path): array {
-    $handle = fopen($path, 'r');
-    if (!$handle) throw new RuntimeException('Не удалось открыть файл');
+    $content = file_get_contents($path);
+    if ($content === false) throw new RuntimeException('Не удалось прочитать файл');
 
-    $headersFound = false;
-    $groups = [];         // код группы => имя
-    $subgroups = [];      // код подгруппы => имя
-    $works = [];          // список работ
-    $complectation = null;
-    $lineNo = 0;
+    // Убираем BOM, разбиваем на строки
+    $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
+    $lines = preg_split('/\r\n|\r|\n/', $content);
 
-    while (($line = fgets($handle)) !== false) {
-        $lineNo++;
-        $line = rtrim($line, "\r\n");
-        if ($lineNo === 1) $line = preg_replace('/^\xEF\xBB\xBF/', '', $line);
+    $headerRow = find_header_row($lines);
+    if ($headerRow === null) {
+        throw new RuntimeException('Не найдена строка заголовка «Норма времени … Комплектация … Код операции …». Убедитесь, что выгружен отчёт «Трудоёмкость операций по нормам времени» в формате TSV (табуляция).');
+    }
 
+    $map = map_columns($lines[$headerRow]);
+    if (!isset($map['complectation']) || !isset($map['op_code']) || !isset($map['name'])) {
+        throw new RuntimeException('В заголовке не найдены обязательные колонки: «Комплектация», «Код операции», «Операция». Проверьте формат выгрузки.');
+    }
+
+    $byComplectation = [];
+
+    for ($i = $headerRow + 1; $i < count($lines); $i++) {
+        $line = rtrim($lines[$i], "\r\n");
+        if ($line === '') continue;
         $cols = explode("\t", $line);
+        if (trim($cols[0] ?? '') === 'Итого') break;
 
-        if (!$headersFound) {
-            if (isset($cols[0]) && trim($cols[0]) === 'Норма времени') $headersFound = true;
-            continue;
+        $comp = trim($cols[$map['complectation']] ?? '');
+        $opCode = trim($cols[$map['op_code']] ?? '');
+        $name = trim($cols[$map['name']] ?? '');
+        if ($comp === '' || $opCode === '' || $name === '') continue;
+
+        // Убираем хвостовой дефис у комплектации
+        $comp = rtrim($comp, '-');
+
+        if (!isset($byComplectation[$comp])) {
+            $byComplectation[$comp] = ['groups'=>[], 'subgroups'=>[], 'works'=>[]];
         }
 
-        if (isset($cols[0]) && trim($cols[0]) === 'Итого') break;
-
-        $r = detect_roles($cols);
-        if ($r['opCode'] === null || $r['name'] === null) continue;
-
-        // Запоминаем код комплектации — из любой строки, где он заполнен
-        if ($r['complectation'] !== null && $complectation === null) {
-            $complectation = trim($r['complectation']['val']);
-            // Убираем возможный хвостовой дефис
-            $complectation = rtrim($complectation, '-');
+        // Группа и подгруппа
+        $gCode = null;
+        if (isset($map['group'])) {
+            $gVal = trim($cols[$map['group']] ?? '');
+            if ($gVal !== '') {
+                $gCode = extract_code($gVal);
+                if ($gCode !== null) $byComplectation[$comp]['groups'][$gCode] = $gVal;
+            }
         }
 
-        // Группа
-        if ($r['group'] !== null) {
-            $gCode = extract_code($r['group']['val']);
-            if ($gCode !== null) $groups[$gCode] = trim($r['group']['val']);
-        }
-
-        // Подгруппа
         $subCode = null;
-        if ($r['subgroup'] !== null) {
-            $subCode = extract_code($r['subgroup']['val']);
-            if ($subCode !== null) $subgroups[$subCode] = trim($r['subgroup']['val']);
+        if (isset($map['subgroup'])) {
+            $subVal = trim($cols[$map['subgroup']] ?? '');
+            if ($subVal !== '') {
+                $subCode = extract_code($subVal);
+                if ($subCode !== null) $byComplectation[$comp]['subgroups'][$subCode] = $subVal;
+            }
         }
 
-        // Норма
-        $normVal = null;
-        if ($r['norm'] !== null) {
-            $normVal = (float)str_replace([' ', ','], ['', '.'], $r['norm']['val']);
+        // Норма — из колонки «Трудоемкость»
+        $norm = null;
+        if (isset($map['norm'])) {
+            $nVal = trim($cols[$map['norm']] ?? '');
+            if ($nVal !== '') $norm = (float)str_replace([' ', ','], ['', '.'], $nVal);
         }
 
-        $parentCode = $subCode;
-        if ($parentCode === null && $r['group'] !== null) {
-            $parentCode = extract_code($r['group']['val']);
-        }
+        $parentCode = $subCode ?? $gCode;
 
-        $works[] = [
-            'op_code' => $r['opCode']['val'],
-            'name'    => $r['name'],
-            'norm'    => $normVal,
+        $byComplectation[$comp]['works'][] = [
+            'op_code' => $opCode,
+            'name'    => $name,
+            'norm'    => $norm,
             'parent'  => $parentCode,
         ];
     }
-    fclose($handle);
 
-    if (empty($works)) {
-        throw new RuntimeException('В файле не найдено ни одной работы.');
-    }
-    if ($complectation === null) {
-        throw new RuntimeException('В файле не найдена колонка «Комплектация» с кодом вида 54901-0070004-CA.');
+    if (empty($byComplectation)) {
+        throw new RuntimeException('В файле не найдено ни одной строки с работой.');
     }
 
-    return [
-        'complectation' => $complectation,
-        'groups'        => $groups,
-        'subgroups'     => $subgroups,
-        'works'         => $works,
-    ];
+    return $byComplectation;
 }
 
 /**
- * Импорт: удаляет старые записи только для этой комплектации, вставляет новые.
+ * Импорт одной комплектации: удаляет старые записи по ней, вставляет новые.
  */
-function import_parsed(array $parsed): array {
+function import_one(string $complectation, array $data): array {
     global $pdo;
 
-    $complectation = $parsed['complectation'];
-    $groups        = $parsed['groups'];
-    $subgroups     = $parsed['subgroups'];
-    $works         = $parsed['works'];
+    $groups    = $data['groups'];
+    $subgroups = $data['subgroups'];
+    $works     = $data['works'];
 
-    // Родители подгрупп: 1002 → 10
+    // Родители подгрупп: 3757 → 37
     $subgroupParents = [];
     foreach ($subgroups as $code => $_) {
         if (preg_match('/^(\d{2})\d{2}$/', $code, $m)) {
@@ -173,7 +156,7 @@ function import_parsed(array $parsed): array {
         }
     }
 
-    // Уникальные коды работ: code (для PK) + complectation в составе
+    // Уникальные коды работ
     $usedCodes = [];
     foreach ($works as &$w) {
         $base = $w['op_code'];
@@ -188,7 +171,7 @@ function import_parsed(array $parsed): array {
     }
     unset($w);
 
-    // Удаляем старое для этой комплектации
+    // Удаляем старое только для этой комплектации
     $pdo->prepare("DELETE FROM work_operations WHERE complectation = :c")
         ->execute([':c' => $complectation]);
 
@@ -199,7 +182,6 @@ function import_parsed(array $parsed): array {
             (:code, :parent, :is_group, :name, :op_code, :norm, :complectation, FALSE, NOW())
     ");
 
-    // Группы верхнего уровня (00, 10, 13...)
     foreach ($groups as $code => $name) {
         $stmt->execute([
             ':code'           => $code . '@' . $complectation,
@@ -211,7 +193,6 @@ function import_parsed(array $parsed): array {
             ':complectation'  => $complectation,
         ]);
     }
-    // Подгруппы (0000, 1002...)
     foreach ($subgroups as $code => $name) {
         $stmt->execute([
             ':code'           => $code . '@' . $complectation,
@@ -223,7 +204,6 @@ function import_parsed(array $parsed): array {
             ':complectation'  => $complectation,
         ]);
     }
-    // Работы
     foreach ($works as $w) {
         $parent = $w['parent'] ? ($w['parent'] . '@' . $complectation) : null;
         $stmt->execute([
@@ -250,19 +230,27 @@ function import_parsed(array $parsed): array {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_name'])) {
     try {
         $parsed = parse_file($_FILES['datafile']['tmp_name']);
-        $importResult = import_parsed($parsed);
+        $results = [];
+        foreach ($parsed as $comp => $data) {
+            $results[] = import_one($comp, $data);
+        }
 
         $dir = __DIR__ . '/uploads';
         if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        $safe = preg_replace('/[^\w\-]/', '_', $importResult['complectation']);
+        $safe = 'multi_' . date('Ymd_His');
         @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/import_' . $safe . '.txt');
 
+        $totalWorks = array_sum(array_column($results, 'works'));
         $messages[] = sprintf(
-            'Импорт для комплектации «%s» выполнен: групп %d, подгрупп %d, работ %d (с нормой: %d)',
-            $importResult['complectation'],
-            $importResult['groups'], $importResult['subgroups'],
-            $importResult['works'], $importResult['with_norm']
+            'Импорт выполнен. Комплектаций: %d. Всего работ: %d.',
+            count($results), $totalWorks
         );
+        foreach ($results as $r) {
+            $messages[] = sprintf(
+                '  • %s — групп %d, подгрупп %d, работ %d (с нормой: %d)',
+                $r['complectation'], $r['groups'], $r['subgroups'], $r['works'], $r['with_norm']
+            );
+        }
     } catch (Throwable $e) {
         $error = 'Ошибка импорта: ' . $e->getMessage();
     }
@@ -359,9 +347,9 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
     <div class="alert alert-info" style="font-size:13px;">
       <b>Как выгрузить из 1С:</b><br>
       1. Отчёт «Трудоёмкость операций по нормам времени» → «ДляВыгрузки»<br>
-      2. В фильтре выбери <b>одну комплектацию</b> (или пару «модель-комплектация»)<br>
-      3. Сохрани как <code>.txt</code> в кодировке <b>UTF-8</b>, разделитель — табуляция<br>
-      4. Загрузи сюда — <b>код комплектации программа возьмёт сама из файла</b>
+      2. Сохрани как <code>.txt</code> в кодировке <b>UTF-8</b>, разделитель — табуляция<br>
+      3. Загрузи сюда — <b>комплектации и нормы времени программа возьмёт из файла сама</b><br>
+      <b>Важно:</b> если в файле несколько комплектаций — все они импортируются за один раз.
     </div>
 
     <form method="post" enctype="multipart/form-data" id="uploadForm">
@@ -449,8 +437,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
 
   ['dragenter', 'dragover'].forEach(function (ev) {
     zone.addEventListener(ev, function (e) {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       zone.style.borderColor = '#2563eb';
       zone.style.background  = '#eff6ff';
     });
@@ -458,8 +445,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
 
   ['dragleave', 'drop'].forEach(function (ev) {
     zone.addEventListener(ev, function (e) {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       zone.style.borderColor = '#cbd5e1';
       zone.style.background  = '#f8fafc';
     });
