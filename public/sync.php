@@ -8,11 +8,9 @@ if (!$user || !$user['is_admin']) { header('Location: index.html'); exit; }
 $pdo = get_db();
 $messages = [];
 $error = null;
-$importResult = null;
 
 /**
- * Определяет роль каждой колонки по формату значения.
- * Устойчиво к сдвигам колонок в отчёте 1С.
+ * Определяет роли колонок по формату значения.
  */
 function detect_roles(array $cols): array {
     $roles = ['group'=>null, 'subgroup'=>null, 'opCode'=>null, 'name'=>null, 'norm'=>null];
@@ -21,37 +19,24 @@ function detect_roles(array $cols): array {
         $v = trim($raw);
         if ($v === '') continue;
 
-        // Норма времени: "0,500" или "0.500" (только цифры, запятая/точка, цифры)
         if (preg_match('/^\d+[,.]\d+$/', $v)) {
             $roles['norm'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
-
-        // Код операции: "00-000", "П10-008", "C10-0211", "X99-9910", "P-35-02-02-01", "Р10-0511", "Д40-0010"
-        // Начинается с буквы ИЛИ двух цифр, потом дефис(ы) и цифры
         if (preg_match('/^([A-Za-zА-Яа-я]+\-?\d[\d\-]*|\d{2}\-\d[\d\-]*)$/u', $v)) {
             $roles['opCode'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
-
-        // Подгруппа: ровно 4 цифры в начале, потом " . " или " - " ("0000. Автомобиль", "8228 - Холодильник")
         if (preg_match('/^\d{4}\s*[.\-–]\s*/', $v)) {
-            if ($roles['subgroup'] === null) {
-                $roles['subgroup'] = ['idx'=>$i, 'val'=>$v];
-            }
+            if ($roles['subgroup'] === null) $roles['subgroup'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
-
-        // Группа: ровно 2 цифры в начале, потом " . " или " - " ("00. Автомобиль", "82 - Принадлежности")
         if (preg_match('/^\d{2}\s*[.\-–]\s*/', $v)) {
-            if ($roles['group'] === null) {
-                $roles['group'] = ['idx'=>$i, 'val'=>$v];
-            }
+            if ($roles['group'] === null) $roles['group'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
     }
 
-    // Название работы — колонка сразу после кода операции
     if ($roles['opCode'] !== null) {
         $opIdx = $roles['opCode']['idx'];
         if (isset($cols[$opIdx + 1])) {
@@ -59,30 +44,26 @@ function detect_roles(array $cols): array {
             if ($nameVal !== '') $roles['name'] = $nameVal;
         }
     }
-
     return $roles;
 }
 
-/**
- * Извлекает числовой код из строки типа "00. Автомобиль" или "8228 - Холодильник".
- */
 function extract_code(string $s): ?string {
     if (preg_match('/^(\d+)\s*[.\-–]/', trim($s), $m)) return $m[1];
     return null;
 }
 
 /**
- * Парсит TSV-файл и импортирует в БД.
+ * Импорт файла для конкретной модели.
  */
-function import_file(string $path): array {
+function import_file(string $path, string $modelCode, string $modelName): array {
     global $pdo;
 
     $handle = fopen($path, 'r');
     if (!$handle) throw new RuntimeException('Не удалось открыть файл');
 
     $headersFound = false;
-    $groups = [];      // '00' => '00. Автомобиль'
-    $subgroups = [];   // '0000' => '0000. Автомобиль'
+    $groups = [];
+    $subgroups = [];
     $works = [];
     $lineNo = 0;
 
@@ -93,50 +74,37 @@ function import_file(string $path): array {
 
         $cols = explode("\t", $line);
 
-        // Ищем строку-заголовок
         if (!$headersFound) {
-            if (isset($cols[0]) && trim($cols[0]) === 'Норма времени') {
-                $headersFound = true;
-            }
+            if (isset($cols[0]) && trim($cols[0]) === 'Норма времени') $headersFound = true;
             continue;
         }
 
-        // Ищем конец таблицы
         if (isset($cols[0]) && trim($cols[0]) === 'Итого') break;
 
-        // Определяем роли колонок
         $r = detect_roles($cols);
-
-        // Пропускаем строки без кода операции и названия — это заголовки/пустышки
         if ($r['opCode'] === null || $r['name'] === null) continue;
 
         $opCode = $r['opCode']['val'];
         $name   = $r['name'];
 
-        // Группа
         if ($r['group'] !== null) {
             $gCode = extract_code($r['group']['val']);
             if ($gCode !== null) $groups[$gCode] = trim($r['group']['val']);
         }
 
-        // Подгруппа
         $subCode = null;
         if ($r['subgroup'] !== null) {
             $subCode = extract_code($r['subgroup']['val']);
             if ($subCode !== null) $subgroups[$subCode] = trim($r['subgroup']['val']);
         }
 
-        // Норма времени
         $normVal = null;
         if ($r['norm'] !== null) {
             $normVal = (float)str_replace([' ', ','], ['', '.'], $r['norm']['val']);
         }
 
-        // Родитель работы = подгруппа, если есть; иначе группа
-        $parentCode = null;
-        if ($subCode !== null) {
-            $parentCode = $subCode;
-        } elseif ($r['group'] !== null) {
+        $parentCode = $subCode;
+        if ($parentCode === null && $r['group'] !== null) {
             $parentCode = extract_code($r['group']['val']);
         }
 
@@ -150,10 +118,9 @@ function import_file(string $path): array {
     fclose($handle);
 
     if (empty($works)) {
-        throw new RuntimeException('В файле не найдено ни одной работы. Проверь, что файл TSV/UTF-8 и содержит колонки с кодом операции.');
+        throw new RuntimeException('В файле не найдено ни одной работы.');
     }
 
-    // Родитель подгруппы: '1002' → '10', '0900' → '09'
     $subgroupParents = [];
     foreach ($subgroups as $code => $_) {
         if (preg_match('/^(\d{2})\d{2}$/', $code, $m)) {
@@ -161,8 +128,8 @@ function import_file(string $path): array {
         }
     }
 
-    // Уникальные коды для работ (у двух работ может быть один operation_code)
-    // Если opCode повторяется — добавляем #2, #3 и т.д.
+    // Уникальные коды в рамках модели: "code" + "@" + model
+    // Потому что "00-000" может быть для 54901 и для 65115 одновременно
     $usedCodes = [];
     foreach ($works as &$w) {
         $base = $w['op_code'];
@@ -177,107 +144,107 @@ function import_file(string $path): array {
     }
     unset($w);
 
-    // === ЗАПИСЬ В БД ===
-    $pdo->exec("TRUNCATE work_operations");
+    // Регистрируем модель
+    $pdo->prepare("
+        INSERT INTO work_models (code, name, updated_at)
+        VALUES (:c, :n, NOW())
+        ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
+    ")->execute([':c' => $modelCode, ':n' => $modelName]);
+
+    // Удаляем старые записи для этой модели
+    $pdo->prepare("DELETE FROM work_operations WHERE model = :m")->execute([':m' => $modelCode]);
 
     $stmt = $pdo->prepare("
         INSERT INTO work_operations
-            (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, updated_at)
+            (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, model, updated_at)
         VALUES
-            (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, NOW())
+            (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, :model, NOW())
     ");
 
-    // 1) Группы (00, 10, 13, ...)
     foreach ($groups as $code => $name) {
         $stmt->execute([
-            ':code'     => mb_substr($code, 0, 50),
-            ':parent'   => null,
+            ':code' => mb_substr($code, 0, 50),
+            ':parent' => null,
             ':is_group' => 1,
-            ':name'     => mb_substr($name, 0, 250),
-            ':op_code'  => null,
-            ':norm'     => null,
+            ':name' => mb_substr($name, 0, 250),
+            ':op_code' => null,
+            ':norm' => null,
+            ':model' => $modelCode,
         ]);
     }
-
-    // 2) Подгруппы (0000, 1002, ...)
     foreach ($subgroups as $code => $name) {
         $stmt->execute([
-            ':code'     => mb_substr($code, 0, 50),
-            ':parent'   => $subgroupParents[$code] ?? null,
+            ':code' => mb_substr($code, 0, 50),
+            ':parent' => $subgroupParents[$code] ?? null,
             ':is_group' => 1,
-            ':name'     => mb_substr($name, 0, 250),
-            ':op_code'  => null,
-            ':norm'     => null,
+            ':name' => mb_substr($name, 0, 250),
+            ':op_code' => null,
+            ':norm' => null,
+            ':model' => $modelCode,
         ]);
     }
-
-    // 3) Работы
     foreach ($works as $w) {
         $stmt->execute([
-            ':code'     => $w['code'],
-            ':parent'   => $w['parent'],
+            ':code' => $w['code'],
+            ':parent' => $w['parent'],
             ':is_group' => 0,
-            ':name'     => mb_substr($w['name'], 0, 250),
-            ':op_code'  => mb_substr($w['op_code'], 0, 50),
-            ':norm'     => $w['norm'],
+            ':name' => mb_substr($w['name'], 0, 250),
+            ':op_code' => mb_substr($w['op_code'], 0, 50),
+            ':norm' => $w['norm'],
+            ':model' => $modelCode,
         ]);
     }
 
     return [
-        'groups'          => count($groups),
-        'subgroups'       => count($subgroups),
-        'works'           => count($works),
-        'works_with_norm' => count(array_filter($works, fn($w) => $w['norm'] !== null)),
+        'groups'    => count($groups),
+        'subgroups' => count($subgroups),
+        'works'     => count($works),
+        'with_norm' => count(array_filter($works, fn($w) => $w['norm'] !== null)),
     ];
 }
 
 // ============ ОБРАБОТКА ЗАГРУЗКИ ============
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_name'])) {
-    try {
-        $importResult = import_file($_FILES['datafile']['tmp_name']);
+    $modelCode = trim($_POST['model_code'] ?? '');
+    $modelName = trim($_POST['model_name'] ?? '');
+    if ($modelCode === '' || $modelName === '') {
+        $error = 'Укажите код и название модели автотехники';
+    } else {
+        try {
+            $result = import_file($_FILES['datafile']['tmp_name'], $modelCode, $modelName);
 
-        // Сохраним исходный файл для истории
-        $dir = __DIR__ . '/uploads';
-        if (!is_dir($dir)) @mkdir($dir, 0775, true);
-        @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/last_import.txt');
+            $dir = __DIR__ . '/uploads';
+            if (!is_dir($dir)) @mkdir($dir, 0775, true);
+            @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/import_' . preg_replace('/[^\w\-]/', '_', $modelCode) . '.txt');
 
-        $messages[] = sprintf(
-            'Импорт выполнен: групп %d, подгрупп %d, работ %d (с нормой времени: %d)',
-            $importResult['groups'],
-            $importResult['subgroups'],
-            $importResult['works'],
-            $importResult['works_with_norm']
-        );
-    } catch (Throwable $e) {
-        $error = 'Ошибка импорта: ' . $e->getMessage();
+            $messages[] = sprintf(
+                'Импорт для «%s» выполнен: групп %d, подгрупп %d, работ %d (с нормой времени: %d)',
+                $modelName, $result['groups'], $result['subgroups'], $result['works'], $result['with_norm']
+            );
+        } catch (Throwable $e) {
+            $error = 'Ошибка импорта: ' . $e->getMessage();
+        }
     }
 }
 
-// Статистика БД
-$stats = $pdo->query("
+// Список моделей + статистика
+$models = $pdo->query("
+    SELECT m.code, m.name, m.updated_at,
+           COUNT(w.code) FILTER (WHERE w.it_is_group = FALSE AND w.deleted = FALSE) AS works_cnt
+    FROM work_models m
+    LEFT JOIN work_operations w ON w.model = m.code
+    GROUP BY m.code, m.name, m.updated_at
+    ORDER BY m.code
+")->fetchAll();
+
+$totalStats = $pdo->query("
     SELECT
-        COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE) AS groups,
         COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS works,
         COUNT(*) FILTER (WHERE it_is_group = FALSE AND norm_time IS NOT NULL) AS with_norm
     FROM work_operations
 ")->fetch();
 
-$lastUpdate = $pdo->query("SELECT MAX(updated_at) FROM work_operations")->fetchColumn();
-
-// Примеры работ
-$sampleWorks = $pdo->query("
-    SELECT code, name, operation_code, norm_time, parent_code
-    FROM work_operations
-    WHERE it_is_group = FALSE AND deleted = FALSE
-    ORDER BY operation_code
-    LIMIT 15
-")->fetchAll();
-
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; }
-function fmtNorm($n) {
-    if ($n === null) return null;
-    return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
-}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -307,6 +274,12 @@ function fmtNorm($n) {
   .stat{padding:14px;background:#f9fafb;border-radius:10px;text-align:center}
   .stat b{display:block;color:#2563eb;font-size:22px;font-weight:700}
   .stat small{color:#666;font-size:12px;text-transform:uppercase;letter-spacing:0.3px}
+
+  .model-row{display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:12px}
+  .model-row label{display:block;font-size:13px;color:#666;margin-bottom:4px;font-weight:600}
+  .model-row input{padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:8px;font-family:inherit;font-size:14px;width:100%}
+  .model-row input:focus{outline:none;border-color:#2563eb}
+
   .dropzone{border:2px dashed #cbd5e1;border-radius:14px;padding:40px 20px;text-align:center;background:#f8fafc;transition:all 0.2s;cursor:pointer;margin-bottom:12px}
   .dropzone:hover{border-color:#2563eb;background:#eff6ff}
   .dropzone input[type=file]{display:none}
@@ -314,11 +287,13 @@ function fmtNorm($n) {
   .dropzone .title{font-size:16px;font-weight:600;color:#1e3a8a}
   .dropzone .sub{font-size:13px;color:#666;margin-top:4px}
   .file-selected{background:#f0fdf4;border-color:#16a34a;color:#16a34a}
+
   table{width:100%;border-collapse:collapse;font-size:13px}
-  table th{background:#f9fafb;text-align:left;padding:8px 10px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.3px}
-  table td{padding:8px 10px;border-bottom:1px solid #f0f0f0}
+  table th{background:#f9fafb;text-align:left;padding:10px 12px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.3px}
+  table td{padding:10px 12px;border-bottom:1px solid #f0f0f0}
   code{background:#eff6ff;padding:2px 6px;border-radius:4px;color:#1e3a8a;font-size:12px}
-  .norm{background:#e0f2fe;color:#075985;padding:2px 8px;border-radius:5px;font-weight:600;font-size:12px}
+  .btn-del{color:#dc2626;text-decoration:none;font-size:12px;padding:4px 8px;border-radius:6px}
+  .btn-del:hover{background:#fef2f2}
 </style>
 </head>
 <body>
@@ -346,15 +321,26 @@ function fmtNorm($n) {
   <?php endif; ?>
 
   <div class="card">
-    <h2>Загрузить файл .txt / .tsv (табулированный)</h2>
+    <h2>Загрузить файл .txt / .tsv для модели</h2>
     <div class="alert alert-info" style="font-size:13px;">
       <b>Как выгрузить файл из 1С:</b><br>
       1. Отчёт «Трудоёмкость операций по нормам времени» → «ДляВыгрузки»<br>
       2. Сохранить как <code>.txt</code> в кодировке <b>UTF-8</b>, разделитель — <b>табуляция</b><br>
-      3. Загрузить сюда
+      3. Загрузить сюда, указав <b>модель автотехники</b> (например, 54901)
     </div>
 
     <form method="post" enctype="multipart/form-data" id="uploadForm">
+      <div class="model-row">
+        <div>
+          <label>Код модели (шасси)</label>
+          <input type="text" name="model_code" id="modelCode" placeholder="54901" required>
+        </div>
+        <div>
+          <label>Название модели</label>
+          <input type="text" name="model_name" id="modelName" placeholder="КАМАЗ 54901" required>
+        </div>
+      </div>
+
       <label class="dropzone" id="dropzone">
         <input type="file" name="datafile" id="fileInput" accept=".txt,.tsv,.csv">
         <div class="icon">📄</div>
@@ -369,35 +355,41 @@ function fmtNorm($n) {
   </div>
 
   <div class="card">
-    <h2>Текущее состояние справочника</h2>
-    <div class="stats">
-      <div class="stat"><b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b><small>групп</small></div>
-      <div class="stat"><b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b><small>работ</small></div>
-      <div class="stat"><b><?= number_format((int)$stats['with_norm'], 0, '.', ' ') ?></b><small>с нормой времени</small></div>
-    </div>
-    <p style="font-size:13px;color:#666;text-align:center;">
-      Последнее обновление: <b><?= e(fmtTs($lastUpdate)) ?></b>
-    </p>
-  </div>
-
-  <?php if ($sampleWorks): ?>
-    <div class="card">
-      <h2>Первые 15 работ в базе</h2>
+    <h2>Модели в справочнике</h2>
+    <?php if (!$models): ?>
+      <p style="color:#888;">Справочник пуст — загрузите первый файл.</p>
+    <?php else: ?>
       <table>
-        <thead><tr><th>Код операции</th><th>Наименование</th><th>Норма</th><th>Родитель</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Код</th>
+            <th>Название</th>
+            <th style="width:120px;">Работ</th>
+            <th style="width:180px;">Обновлено</th>
+            <th style="width:100px;"></th>
+          </tr>
+        </thead>
         <tbody>
-          <?php foreach ($sampleWorks as $w): ?>
+          <?php foreach ($models as $m): ?>
             <tr>
-              <td><code><?= e($w['operation_code'] ?: $w['code']) ?></code></td>
-              <td><?= e(mb_substr($w['name'], 0, 80)) ?></td>
-              <td><?php if ($w['norm_time'] !== null): ?><span class="norm"><?= e(fmtNorm($w['norm_time'])) ?> ч</span><?php else: ?>—<?php endif; ?></td>
-              <td><code><?= e($w['parent_code'] ?: '—') ?></code></td>
+              <td><code><?= e($m['code']) ?></code></td>
+              <td><?= e($m['name']) ?></td>
+              <td><b><?= number_format((int)$m['works_cnt'], 0, '.', ' ') ?></b></td>
+              <td style="font-size:12px;color:#666;"><?= e(fmtTs($m['updated_at'])) ?></td>
+              <td>
+                <a href="?model=<?= urlencode($m['code']) ?>" class="btn btn-secondary btn-small">Открыть</a>
+              </td>
             </tr>
           <?php endforeach; ?>
         </tbody>
       </table>
-    </div>
-  <?php endif; ?>
+    <?php endif; ?>
+
+    <p style="font-size:12px;color:#888;margin-top:12px;">
+      Всего работ в справочнике: <b><?= number_format((int)$totalStats['works'], 0, '.', ' ') ?></b> ·
+      с нормой времени: <b><?= number_format((int)$totalStats['with_norm'], 0, '.', ' ') ?></b>
+    </p>
+  </div>
 
 </div>
 
@@ -420,7 +412,6 @@ function fmtNorm($n) {
   input.addEventListener('change', function() {
     if (input.files && input.files[0]) showFile(input.files[0]);
   });
-
   ['dragenter','dragover'].forEach(function(ev){
     drop.addEventListener(ev, function(e){ e.preventDefault(); drop.style.borderColor = '#2563eb'; });
   });
