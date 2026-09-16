@@ -11,7 +11,68 @@ $error = null;
 $importResult = null;
 
 /**
- * Парсит загруженный TSV/TXT-файл и импортирует в work_operations.
+ * Определяет роль каждой колонки по формату значения.
+ * Устойчиво к сдвигам колонок в отчёте 1С.
+ */
+function detect_roles(array $cols): array {
+    $roles = ['group'=>null, 'subgroup'=>null, 'opCode'=>null, 'name'=>null, 'norm'=>null];
+
+    foreach ($cols as $i => $raw) {
+        $v = trim($raw);
+        if ($v === '') continue;
+
+        // Норма времени: "0,500" или "0.500" (только цифры, запятая/точка, цифры)
+        if (preg_match('/^\d+[,.]\d+$/', $v)) {
+            $roles['norm'] = ['idx'=>$i, 'val'=>$v];
+            continue;
+        }
+
+        // Код операции: "00-000", "П10-008", "C10-0211", "X99-9910", "P-35-02-02-01", "Р10-0511", "Д40-0010"
+        // Начинается с буквы ИЛИ двух цифр, потом дефис(ы) и цифры
+        if (preg_match('/^([A-Za-zА-Яа-я]+\-?\d[\d\-]*|\d{2}\-\d[\d\-]*)$/u', $v)) {
+            $roles['opCode'] = ['idx'=>$i, 'val'=>$v];
+            continue;
+        }
+
+        // Подгруппа: ровно 4 цифры в начале, потом " . " или " - " ("0000. Автомобиль", "8228 - Холодильник")
+        if (preg_match('/^\d{4}\s*[.\-–]\s*/', $v)) {
+            if ($roles['subgroup'] === null) {
+                $roles['subgroup'] = ['idx'=>$i, 'val'=>$v];
+            }
+            continue;
+        }
+
+        // Группа: ровно 2 цифры в начале, потом " . " или " - " ("00. Автомобиль", "82 - Принадлежности")
+        if (preg_match('/^\d{2}\s*[.\-–]\s*/', $v)) {
+            if ($roles['group'] === null) {
+                $roles['group'] = ['idx'=>$i, 'val'=>$v];
+            }
+            continue;
+        }
+    }
+
+    // Название работы — колонка сразу после кода операции
+    if ($roles['opCode'] !== null) {
+        $opIdx = $roles['opCode']['idx'];
+        if (isset($cols[$opIdx + 1])) {
+            $nameVal = trim($cols[$opIdx + 1]);
+            if ($nameVal !== '') $roles['name'] = $nameVal;
+        }
+    }
+
+    return $roles;
+}
+
+/**
+ * Извлекает числовой код из строки типа "00. Автомобиль" или "8228 - Холодильник".
+ */
+function extract_code(string $s): ?string {
+    if (preg_match('/^(\d+)\s*[.\-–]/', trim($s), $m)) return $m[1];
+    return null;
+}
+
+/**
+ * Парсит TSV-файл и импортирует в БД.
  */
 function import_file(string $path): array {
     global $pdo;
@@ -20,8 +81,8 @@ function import_file(string $path): array {
     if (!$handle) throw new RuntimeException('Не удалось открыть файл');
 
     $headersFound = false;
-    $groups = [];      // код => полное имя (например '00' => '00. Автомобиль')
-    $subgroups = [];   // код => полное имя (например '0000' => '0000. Автомобиль')
+    $groups = [];      // '00' => '00. Автомобиль'
+    $subgroups = [];   // '0000' => '0000. Автомобиль'
     $works = [];
     $lineNo = 0;
 
@@ -40,40 +101,43 @@ function import_file(string $path): array {
             continue;
         }
 
-        if (count($cols) < 8) continue;
+        // Ищем конец таблицы
+        if (isset($cols[0]) && trim($cols[0]) === 'Итого') break;
 
-        $col0 = trim($cols[0]);
-        if ($col0 === 'Итого') break;
-        if ($col0 === '' && trim($cols[5]) === '') continue;
+        // Определяем роли колонок
+        $r = detect_roles($cols);
 
-        $parent1 = trim($cols[3]);  // группа
-        $parent2 = trim($cols[4]);  // подгруппа
-        $opCode  = trim($cols[5]);  // код операции
-        $name    = trim($cols[6]);  // название работы
-        $norm    = trim($cols[7]);  // трудоёмкость
+        // Пропускаем строки без кода операции и названия — это заголовки/пустышки
+        if ($r['opCode'] === null || $r['name'] === null) continue;
 
-        if ($opCode === '' || $name === '') continue;
+        $opCode = $r['opCode']['val'];
+        $name   = $r['name'];
 
-        // Группа: "00. Автомобиль" или "00 - Название"
-        if ($parent1 !== '' && preg_match('/^(\d+)\s*[.\-–]\s*(.+)$/u', $parent1, $m)) {
-            $groups[$m[1]] = $parent1;
+        // Группа
+        if ($r['group'] !== null) {
+            $gCode = extract_code($r['group']['val']);
+            if ($gCode !== null) $groups[$gCode] = trim($r['group']['val']);
         }
 
-        // Подгруппа: "0000. Автомобиль"
-        if ($parent2 !== '' && preg_match('/^(\d+)\s*[.\-–]\s*(.+)$/u', $parent2, $m)) {
-            $subgroups[$m[1]] = $parent2;
+        // Подгруппа
+        $subCode = null;
+        if ($r['subgroup'] !== null) {
+            $subCode = extract_code($r['subgroup']['val']);
+            if ($subCode !== null) $subgroups[$subCode] = trim($r['subgroup']['val']);
         }
 
         // Норма времени
         $normVal = null;
-        if ($norm !== '') {
-            $normVal = (float)str_replace([' ', ','], ['', '.'], $norm);
+        if ($r['norm'] !== null) {
+            $normVal = (float)str_replace([' ', ','], ['', '.'], $r['norm']['val']);
         }
 
-        // Родитель работы: код подгруппы (0000, 1002, ...)
+        // Родитель работы = подгруппа, если есть; иначе группа
         $parentCode = null;
-        if ($parent2 !== '' && preg_match('/^(\d+)\s*[.\-–]/u', $parent2, $m)) {
-            $parentCode = $m[1];
+        if ($subCode !== null) {
+            $parentCode = $subCode;
+        } elseif ($r['group'] !== null) {
+            $parentCode = extract_code($r['group']['val']);
         }
 
         $works[] = [
@@ -86,10 +150,10 @@ function import_file(string $path): array {
     fclose($handle);
 
     if (empty($works)) {
-        throw new RuntimeException('В файле не найдено ни одной работы. Проверь формат (нужны табуляции).');
+        throw new RuntimeException('В файле не найдено ни одной работы. Проверь, что файл TSV/UTF-8 и содержит колонки с кодом операции.');
     }
 
-    // Родитель подгруппы: 1002 → 10
+    // Родитель подгруппы: '1002' → '10', '0900' → '09'
     $subgroupParents = [];
     foreach ($subgroups as $code => $_) {
         if (preg_match('/^(\d{2})\d{2}$/', $code, $m)) {
@@ -98,6 +162,7 @@ function import_file(string $path): array {
     }
 
     // Уникальные коды для работ (у двух работ может быть один operation_code)
+    // Если opCode повторяется — добавляем #2, #3 и т.д.
     $usedCodes = [];
     foreach ($works as &$w) {
         $base = $w['op_code'];
@@ -112,64 +177,56 @@ function import_file(string $path): array {
     }
     unset($w);
 
-    // === ЗАПИСЬ ===
-    $pdo->beginTransaction();
-    try {
-        $pdo->exec("TRUNCATE work_operations");
+    // === ЗАПИСЬ В БД ===
+    $pdo->exec("TRUNCATE work_operations");
 
-        $stmt = $pdo->prepare("
-            INSERT INTO work_operations
-                (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, updated_at)
-            VALUES
-                (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, NOW())
-        ");
+    $stmt = $pdo->prepare("
+        INSERT INTO work_operations
+            (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, updated_at)
+        VALUES
+            (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, NOW())
+    ");
 
-        // 1) Группы (00, 10, 13, ...)
-        foreach ($groups as $code => $name) {
-            $stmt->execute([
-                ':code'     => mb_substr($code, 0, 50),
-                ':parent'   => null,
-                ':is_group' => 1,
-                ':name'     => mb_substr($name, 0, 250),
-                ':op_code'  => null,
-                ':norm'     => null,
-            ]);
-        }
+    // 1) Группы (00, 10, 13, ...)
+    foreach ($groups as $code => $name) {
+        $stmt->execute([
+            ':code'     => mb_substr($code, 0, 50),
+            ':parent'   => null,
+            ':is_group' => 1,
+            ':name'     => mb_substr($name, 0, 250),
+            ':op_code'  => null,
+            ':norm'     => null,
+        ]);
+    }
 
-        // 2) Подгруппы (0000, 1002, ...)
-        foreach ($subgroups as $code => $name) {
-            $stmt->execute([
-                ':code'     => mb_substr($code, 0, 50),
-                ':parent'   => $subgroupParents[$code] ?? null,
-                ':is_group' => 1,
-                ':name'     => mb_substr($name, 0, 250),
-                ':op_code'  => null,
-                ':norm'     => null,
-            ]);
-        }
+    // 2) Подгруппы (0000, 1002, ...)
+    foreach ($subgroups as $code => $name) {
+        $stmt->execute([
+            ':code'     => mb_substr($code, 0, 50),
+            ':parent'   => $subgroupParents[$code] ?? null,
+            ':is_group' => 1,
+            ':name'     => mb_substr($name, 0, 250),
+            ':op_code'  => null,
+            ':norm'     => null,
+        ]);
+    }
 
-        // 3) Работы
-        foreach ($works as $w) {
-            $stmt->execute([
-                ':code'     => $w['code'],
-                ':parent'   => $w['parent'],
-                ':is_group' => 0,
-                ':name'     => mb_substr($w['name'], 0, 250),
-                ':op_code'  => mb_substr($w['op_code'], 0, 50),
-                ':norm'     => $w['norm'],
-            ]);
-        }
-
-        $pdo->commit();
-    } catch (Throwable $e) {
-        $pdo->rollBack();
-        throw $e;
+    // 3) Работы
+    foreach ($works as $w) {
+        $stmt->execute([
+            ':code'     => $w['code'],
+            ':parent'   => $w['parent'],
+            ':is_group' => 0,
+            ':name'     => mb_substr($w['name'], 0, 250),
+            ':op_code'  => mb_substr($w['op_code'], 0, 50),
+            ':norm'     => $w['norm'],
+        ]);
     }
 
     return [
-        'groups'    => count($groups),
-        'subgroups' => count($subgroups),
-        'works'     => count($works),
+        'groups'          => count($groups),
+        'subgroups'       => count($subgroups),
+        'works'           => count($works),
         'works_with_norm' => count(array_filter($works, fn($w) => $w['norm'] !== null)),
     ];
 }
@@ -179,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_nam
     try {
         $importResult = import_file($_FILES['datafile']['tmp_name']);
 
-        // Сохраним исходный файл в uploads (для истории)
+        // Сохраним исходный файл для истории
         $dir = __DIR__ . '/uploads';
         if (!is_dir($dir)) @mkdir($dir, 0775, true);
         @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/last_import.txt');
@@ -207,7 +264,7 @@ $stats = $pdo->query("
 
 $lastUpdate = $pdo->query("SELECT MAX(updated_at) FROM work_operations")->fetchColumn();
 
-// Примеры работ для превью
+// Примеры работ
 $sampleWorks = $pdo->query("
     SELECT code, name, operation_code, norm_time, parent_code
     FROM work_operations
@@ -217,6 +274,10 @@ $sampleWorks = $pdo->query("
 ")->fetchAll();
 
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; }
+function fmtNorm($n) {
+    if ($n === null) return null;
+    return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -242,24 +303,17 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .alert-success{background:#f0fdf4;color:#16a34a;border-left:4px solid #16a34a}
   .alert-error{background:#fef2f2;color:#dc2626;border-left:4px solid #dc2626}
   .alert-info{background:#eff6ff;color:#2563eb;border-left:4px solid #2563eb}
-  .alert-warn{background:#fffbeb;color:#b45309;border-left:4px solid #b45309}
-
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:12px 0}
   .stat{padding:14px;background:#f9fafb;border-radius:10px;text-align:center}
   .stat b{display:block;color:#2563eb;font-size:22px;font-weight:700}
   .stat small{color:#666;font-size:12px;text-transform:uppercase;letter-spacing:0.3px}
-
-  .dropzone {
-    border:2px dashed #cbd5e1;border-radius:14px;padding:40px 20px;text-align:center;
-    background:#f8fafc;transition:all 0.2s;cursor:pointer;margin-bottom:12px;
-  }
-  .dropzone:hover { border-color:#2563eb;background:#eff6ff; }
+  .dropzone{border:2px dashed #cbd5e1;border-radius:14px;padding:40px 20px;text-align:center;background:#f8fafc;transition:all 0.2s;cursor:pointer;margin-bottom:12px}
+  .dropzone:hover{border-color:#2563eb;background:#eff6ff}
   .dropzone input[type=file]{display:none}
   .dropzone .icon{font-size:42px;margin-bottom:8px}
   .dropzone .title{font-size:16px;font-weight:600;color:#1e3a8a}
   .dropzone .sub{font-size:13px;color:#666;margin-top:4px}
   .file-selected{background:#f0fdf4;border-color:#16a34a;color:#16a34a}
-
   table{width:100%;border-collapse:collapse;font-size:13px}
   table th{background:#f9fafb;text-align:left;padding:8px 10px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.3px}
   table td{padding:8px 10px;border-bottom:1px solid #f0f0f0}
@@ -336,7 +390,7 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
             <tr>
               <td><code><?= e($w['operation_code'] ?: $w['code']) ?></code></td>
               <td><?= e(mb_substr($w['name'], 0, 80)) ?></td>
-              <td><?php if ($w['norm_time'] !== null): ?><span class="norm"><?= e(rtrim(rtrim(number_format((float)$w['norm_time'], 3, ',', ' '), '0'), ',')) ?> ч</span><?php else: ?>—<?php endif; ?></td>
+              <td><?php if ($w['norm_time'] !== null): ?><span class="norm"><?= e(fmtNorm($w['norm_time'])) ?> ч</span><?php else: ?>—<?php endif; ?></td>
               <td><code><?= e($w['parent_code'] ?: '—') ?></code></td>
             </tr>
           <?php endforeach; ?>
