@@ -463,4 +463,367 @@ function fmtNorm($n) {
           <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию, коду операции…">
           <button type="submit" class="btn">🔍 Найти</button>
           <?php if ($q !== '' || $guardOnly || $factOnly): ?>
-            <a href="
+            <a href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $category ? '&cat=' . urlencode($category) : '' ?>" class="btn btn-secondary">Сбросить</a>
+          <?php endif; ?>
+        </div>
+        <div class="filters">
+          <label><input type="checkbox" name="guard" value="1" <?= $guardOnly ? 'checked' : '' ?>> Только постовые</label>
+          <label><input type="checkbox" name="fact"  value="1" <?= $factOnly  ? 'checked' : '' ?>> Только фактические</label>
+        </div>
+      </form>
+
+      <div class="stats" style="margin-top:12px;">
+        <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
+        Всего работ: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
+        · Групп: <b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b>
+      </div>
+
+      <?php if (!$rows): ?>
+        <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
+      <?php else: ?>
+        <table class="works">
+          <thead>
+            <tr>
+              <th style="width:120px;">Код операции</th>
+              <th>Наименование работы</th>
+              <th style="width:80px;">Норма</th>
+              <th style="width:90px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($rows as $r): ?>
+              <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
+              <tr>
+                <td>
+                  <?php if ($r['operation_code']): ?>
+                    <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
+                      <?= e($r['operation_code']) ?>
+                    </span>
+                  <?php else: ?>—<?php endif; ?>
+                </td>
+                <td>
+                  <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
+                  <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
+                </td>
+                <td>
+                  <?php if ($r['norm_time'] !== null): ?>
+                    <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
+                  <?php else: ?>—<?php endif; ?>
+                </td>
+                <td>
+                  <button type="button" class="add-btn"
+                    data-code="<?= e($r['code']) ?>"
+                    data-op="<?= e($r['operation_code']) ?>"
+                    data-name="<?= e($r['name']) ?>"
+                    data-norm="<?= e((string)$r['norm_time']) ?>">
+                    ➕
+                  </button>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+
+        <?php if ($pages > 1): ?>
+          <div class="pagination">
+            <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
+            <span class="active"><?= $page ?></span>
+            <span>из <?= $pages ?></span>
+            <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
+          </div>
+        <?php endif; ?>
+      <?php endif; ?>
+    </div>
+
+    <div class="card basket">
+      <div class="basket-header">
+        <h2>📋 Выбранные работы</h2>
+        <span class="basket-count" id="basketCount">0</span>
+      </div>
+
+      <div class="basket-total">
+        Суммарная норма: <b id="basketTotal">0,00</b> ч
+      </div>
+
+      <ul class="basket-list" id="basketList">
+        <li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>
+      </ul>
+
+      <div class="basket-actions" id="basketActions" style="display:none;">
+        <button class="btn btn-green btn-small" onclick="basketCopy()">📋 Копировать</button>
+        <button class="btn btn-secondary btn-small" onclick="basketDownload()">💾 Скачать</button>
+        <button class="btn btn-red btn-small" onclick="basketClear()">🗑️ Очистить</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="modal-overlay" id="prereqModal">
+  <div class="modal">
+    <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
+    <p id="prereqText">
+      В названии работы указано, что деталь уже снята.
+      Обычно для этого требуется <b>сначала снять</b> более крупный узел.
+      Отметьте, какие работы добавить:
+    </p>
+    <ul class="prereq-list" id="prereqList"></ul>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closePrereq()">Отмена</button>
+      <button class="btn btn-green" onclick="addPrereqSelected()">Добавить выбранные</button>
+    </div>
+  </div>
+</div>
+
+<div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
+
+<script>
+// ============ КОРЗИНА ============
+const BASKET_KEY = 'works_basket_v1';
+let basket = [];
+
+function basketLoad() {
+  try { basket = JSON.parse(localStorage.getItem(BASKET_KEY) || '[]'); }
+  catch(e) { basket = []; }
+  if (!Array.isArray(basket)) basket = [];
+}
+function basketSave() { localStorage.setItem(BASKET_KEY, JSON.stringify(basket)); }
+
+function escapeHtml(s) {
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+
+function basketRender() {
+  const list = document.getElementById('basketList');
+  const count = document.getElementById('basketCount');
+  const total = document.getElementById('basketTotal');
+  const actions = document.getElementById('basketActions');
+
+  count.textContent = basket.length;
+
+  let sum = 0;
+  basket.forEach(b => { if (b.norm) sum += parseFloat(b.norm); });
+  total.textContent = sum.toFixed(2).replace('.', ',');
+
+  if (basket.length === 0) {
+    list.innerHTML = '<li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>';
+    actions.style.display = 'none';
+    document.querySelectorAll('.add-btn').forEach(b => b.classList.remove('in-basket'));
+    return;
+  }
+  actions.style.display = 'flex';
+
+  list.innerHTML = basket.map((b, i) => `
+    <li class="basket-item">
+      <div class="basket-item-content">
+        ${b.op ? `<div class="basket-item-op">${escapeHtml(b.op)}</div>` : ''}
+        <div class="basket-item-name">${escapeHtml(b.name || '')}</div>
+        ${b.norm ? `<div class="basket-item-norm">${b.norm} ч</div>` : ''}
+      </div>
+      <span class="basket-item-del" onclick="basketRemove(${i})">×</span>
+    </li>
+  `).join('');
+
+  const codes = new Set(basket.map(b => b.code));
+  document.querySelectorAll('.add-btn').forEach(btn => {
+    if (codes.has(btn.dataset.code)) btn.classList.add('in-basket');
+    else btn.classList.remove('in-basket');
+  });
+}
+
+function basketAdd(item) {
+  if (basket.some(b => b.code === item.code)) return false;
+  basket.push(item);
+  basketSave();
+  basketRender();
+  return true;
+}
+function basketRemove(i) { basket.splice(i, 1); basketSave(); basketRender(); }
+function basketClear() {
+  if (!confirm('Очистить все выбранные работы?')) return;
+  basket = []; basketSave(); basketRender();
+}
+function basketCopy() {
+  const text = basket.map(b => {
+    const op = b.op ? `[${b.op}] ` : '';
+    const n = b.norm ? ` (${b.norm} ч)` : '';
+    return op + b.name + n;
+  }).join('\n');
+  navigator.clipboard.writeText(text).then(() => showMsg('✅ Скопировано в буфер'));
+}
+function basketDownload() {
+  const text = basket.map(b => [b.op || '', b.name || '', b.norm || ''].join('\t')).join('\n');
+  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'works_' + new Date().toISOString().slice(0,10) + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function showMsg(text) {
+  const el = document.getElementById('copyMsg');
+  el.textContent = text;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+// ============ ИЗВЛЕЧЕНИЕ ОБЪЕКТОВ ИЗ СКОБОК ============
+function extractPrereqObjects(name) {
+  if (!name) return [];
+  const results = [];
+  const re = /\(([^()]*?(?:снят|снята|снято|разобран|отсоедин)[^()]*?)\)/gi;
+  let m;
+  while ((m = re.exec(name)) !== null) {
+    let inner = m[1];
+    inner = inner
+      .replace(/\b(и\s+разобран[а-я]*|разобран[а-я]*|с\s+автомобиля\s+снят[а-я]*|снят[а-я]*|отсоединён[а-я]*|установлен[а-я]*)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (inner.length >= 3) results.push(inner);
+  }
+  return results;
+}
+
+// ============ РЕКУРСИВНЫЙ ПОИСК ЗАВИСИМОСТЕЙ ============
+async function findDependencies(item, existingCodes, depth) {
+  if (depth > 2) return null;
+
+  const objects = extractPrereqObjects(item.name);
+  if (objects.length === 0) return null;
+
+  let allPrereqs = [];
+  for (const obj of objects) {
+    try {
+      const excludeParam = encodeURIComponent([...existingCodes].join(','));
+      const url = '?model=' + encodeURIComponent('<?= $model ?>')
+                + '&find_prereq=1'
+                + '&object=' + encodeURIComponent(obj)
+                + '&exclude=' + excludeParam;
+      const resp = await fetch(url, {headers: {'X-Requested-With': 'fetch'}});
+      const items = await resp.json();
+      const filtered = items.filter(p => !existingCodes.has(p.code));
+      allPrereqs = allPrereqs.concat(filtered);
+    } catch(err) {
+      console.error('Ошибка поиска:', err);
+    }
+  }
+
+  const seen = new Set();
+  allPrereqs = allPrereqs.filter(p => {
+    if (seen.has(p.code)) return false;
+    seen.add(p.code);
+    return true;
+  });
+
+  if (allPrereqs.length === 0) return null;
+
+  const deeper = [];
+  for (const p of allPrereqs) {
+    const subCodes = new Set([...existingCodes, p.code, ...allPrereqs.map(x => x.code)]);
+    const subResult = await findDependencies(
+      { code: p.code, name: p.name, operation_code: p.operation_code, norm_time: p.norm_time },
+      subCodes,
+      depth + 1
+    );
+    if (subResult) {
+      subResult.parentCode = p.code;
+      deeper.push(subResult);
+    }
+  }
+
+  return { parent: item, prereqs: allPrereqs, deeper: deeper };
+}
+
+// ============ МОДАЛКА ============
+function renderPrereqModal(tree) {
+  const modal = document.getElementById('prereqModal');
+  const list = document.getElementById('prereqList');
+  const text = document.getElementById('prereqText');
+
+  text.innerHTML = 'Для работы <b style="color:#92400e;">' + escapeHtml(tree.parent.name) + '</b> нужны предварительные. Отметьте, что добавить:';
+
+  const flat = [];
+  function walk(node, level, parentLabel) {
+    node.prereqs.forEach(p => {
+      flat.push({ item: p, level: level, parentLabel: parentLabel });
+      const sub = node.deeper.find(d => d.parentCode === p.code);
+      if (sub) walk(sub, level + 1, p.name);
+    });
+  }
+  walk(tree, 0, null);
+
+  list.innerHTML = flat.map((entry, i) => {
+    const indent = entry.level * 24;
+    const subNote = entry.level > 0
+      ? '<div class="prereq-sub" style="margin-left:' + (indent + 28) + 'px;">↳ требуется для: ' + escapeHtml(entry.parentLabel || '') + '</div>'
+      : '';
+    return subNote + `
+      <li class="prereq-item" style="margin-left:${indent}px;">
+        <input type="checkbox" id="prereq-${i}" checked
+               data-code="${escapeHtml(entry.item.code)}"
+               data-op="${escapeHtml(entry.item.operation_code || '')}"
+               data-name="${escapeHtml(entry.item.name)}"
+               data-norm="${escapeHtml((entry.item.norm_time||'').toString())}">
+        <label for="prereq-${i}">
+          ${entry.item.operation_code ? `<span class="op-code">${escapeHtml(entry.item.operation_code)}</span> ` : ''}
+          ${escapeHtml(entry.item.name)}
+          ${entry.item.norm_time ? `<span class="badge-auto">${entry.item.norm_time} ч</span>` : ''}
+        </label>
+      </li>
+    `;
+  }).join('');
+
+  modal.classList.add('active');
+}
+function closePrereq() {
+  document.getElementById('prereqModal').classList.remove('active');
+}
+function addPrereqSelected() {
+  const checked = document.querySelectorAll('#prereqList input[type=checkbox]:checked');
+  let added = 0;
+  checked.forEach(chk => {
+    if (basketAdd({
+      code: chk.dataset.code,
+      op: chk.dataset.op,
+      name: chk.dataset.name,
+      norm: chk.dataset.norm || null
+    })) added++;
+  });
+  closePrereq();
+  if (added > 0) showMsg('✅ Добавлено работ: ' + added);
+}
+
+// ============ КЛИК ➕ ============
+document.addEventListener('click', async function(e) {
+  if (!e.target.classList.contains('add-btn')) return;
+  const btn = e.target;
+
+  const item = {
+    code: btn.dataset.code,
+    op: btn.dataset.op,
+    name: btn.dataset.name,
+    norm: btn.dataset.norm || null
+  };
+
+  if (basket.some(b => b.code === item.code)) {
+    showMsg('Уже в корзине');
+    return;
+  }
+
+  basketAdd(item);
+
+  const existingCodes = new Set(basket.map(b => b.code));
+  const tree = await findDependencies(item, existingCodes, 0);
+
+  if (tree && tree.prereqs.length > 0) {
+    renderPrereqModal(tree);
+  }
+});
+
+// ============ СТАРТ ============
+basketLoad();
+basketRender();
+</script>
+</body>
+</html>
