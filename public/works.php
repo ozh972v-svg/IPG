@@ -26,19 +26,60 @@ $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
 /**
- * Классификатор КАМАЗ по первому символу кода операции.
- * Источник: презентация «Гарантийная работа с автотехникой КАМАЗ», стр. 42.
+ * Классификатор КАМАЗ + авто-категория E (Диагностика) по названию.
  */
 $CATEGORIES = [
-    'A' => ['label' => 'Административные',                      'desc' => 'Работы по оформлению заказ-наряда, приёмке-выдаче, согласованиям', 'color' => '#dc2626'],
-    'B' => ['label' => 'Предпродажная подготовка',              'desc' => 'Работы по подготовке автотехники к продаже/передаче', 'color' => '#ea580c'],
-    'T' => ['label' => 'Техническое обслуживание',              'desc' => 'Регламентные работы ТО (ТО-1, ТО-2, сезонное обслуживание)', 'color' => '#ca8a04'],
-    'X' => ['label' => 'Комплекс работ ТО',                     'desc' => 'Комплексные регламентные работы (ПТО, ПЗР, А2, А3, ТОд и др.)', 'color' => '#65a30d'],
-    'E' => ['label' => 'Диагностика автотехники',               'desc' => 'Работы по оценке состояния техники в целом', 'color' => '#0891b2'],
-    'P' => ['label' => 'Постовые работы текущего ремонта',      'desc' => 'Работы по снятию и установке изделий, слив/залив жидкостей, прокачка систем, регулировка после установки', 'color' => '#2563eb'],
-    'C' => ['label' => 'Цеховые работы текущего ремонта',       'desc' => 'Разборка, очистка, оценка, сборка, регулировка, обкатка изделий, снятых с автотехники', 'color' => '#7c3aed'],
-    'M' => ['label' => 'Доработка (работы только для ОТМ)',     'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
+    'A' => ['label' => 'Административные',                   'desc' => 'Работы по оформлению заказ-наряда, приёмке-выдаче, согласованиям', 'color' => '#dc2626'],
+    'B' => ['label' => 'Предпродажная подготовка',           'desc' => 'Работы по подготовке автотехники к продаже/передаче', 'color' => '#ea580c'],
+    'T' => ['label' => 'Техническое обслуживание',           'desc' => 'Регламентные работы ТО (ТО-1, ТО-2, сезонное обслуживание)', 'color' => '#ca8a04'],
+    'X' => ['label' => 'Комплекс работ ТО',                  'desc' => 'Комплексные регламентные работы (ПТО, ПЗР, А2, А3, ТОд и др.)', 'color' => '#65a30d'],
+    'E' => ['label' => 'Диагностика автотехники',            'desc' => 'Работы по оценке состояния техники в целом', 'color' => '#0891b2'],
+    'P' => ['label' => 'Постовые работы текущего ремонта',   'desc' => 'Работы по снятию и установке изделий, слив/залив жидкостей, прокачка систем, регулировка', 'color' => '#2563eb'],
+    'C' => ['label' => 'Цеховые работы текущего ремонта',    'desc' => 'Разборка, очистка, оценка, сборка, регулировка, обкатка изделий, снятых с автотехники', 'color' => '#7c3aed'],
+    'M' => ['label' => 'Доработка (работы только для ОТМ)',  'desc' => 'Работы по доработке, выполняемые по решению ОТМ', 'color' => '#be185d'],
 ];
+
+/**
+ * Слова-триггеры, которые переводят работу в категорию E (Диагностика),
+ * даже если код начинается с другой буквы.
+ */
+$DIAG_TRIGGERS = [
+    'диагностика',
+    'диагностировать',
+    'поиск неисправност',
+    'поиск дефект',
+    'определить неисправност',
+    'выявление неисправност',
+    'проверить состояние',
+    'проверка состояния',
+    'проверка работоспособност',
+    'проверить работоспособност',
+    'проверить и при необходимости',
+    'дефектовка',
+    'оценка состояния',
+    'оценить состояние',
+    'оценка качества',
+];
+
+/**
+ * Возвращает категорию работы:
+ * 1) Сначала смотрим название на «диагностические» триггеры → E
+ * 2) Иначе — по первой букве кода операции
+ */
+function opCategoryKey(?string $op, ?string $name = null): string {
+    if ($name !== null) {
+        global $DIAG_TRIGGERS;
+        $lower = mb_strtolower($name);
+        foreach ($DIAG_TRIGGERS as $t) {
+            if (mb_strpos($lower, $t) !== false) return 'E';
+        }
+    }
+    if ($op === null || $op === '') return '';
+    $first = mb_substr($op, 0, 1);
+    $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X',
+            'Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
+    return $map[$first] ?? '';
+}
 
 /* ===== ДЕРЕВО ===== */
 $stmt = $pdo->prepare("
@@ -76,26 +117,32 @@ if ($groupCode !== '') {
     $params[':g'] = $groupCode;
 }
 if ($category !== '' && isset($CATEGORIES[$category])) {
-    // Классификатор КАМАЗ — по ПЕРВОМУ СИМВОЛУ кода операции.
-    // Коды бывают как кириллицей (А, Е, Р, С, Т, Х, М, В), так и латиницей (A, E, P, C, T, X, M, B).
-    $letters = [
-        'A' => ['А', 'A'],
-        'B' => ['В', 'B'],
-        'T' => ['Т', 'T'],
-        'X' => ['Х', 'X'],
-        'E' => ['Е', 'E'],
-        'P' => ['Р', 'P'],
-        'C' => ['С', 'C'],
-        'M' => ['М', 'M'],
-    ];
-    $set = $letters[$category] ?? [$category];
-    $ors = [];
-    foreach ($set as $i => $L) {
-        $key = ':p' . $category . $i;
-        $ors[] = "w.operation_code LIKE $key";
-        $params[$key] = $L . '%';
+    if ($category === 'E') {
+        // Диагностика: код начинается с E ИЛИ название содержит триггер
+        global $DIAG_TRIGGERS;
+        $ors = ["(w.operation_code LIKE 'Е%' OR w.operation_code LIKE 'E%')"];
+        $i = 0;
+        foreach ($DIAG_TRIGGERS as $t) {
+            $key = ':t' . $i;
+            $ors[] = "w.name ILIKE $key";
+            $params[$key] = '%' . $t . '%';
+            $i++;
+        }
+        $where[] = '(' . implode(' OR ', $ors) . ')';
+    } else {
+        $letters = [
+            'A' => ['А', 'A'], 'B' => ['В', 'B'], 'T' => ['Т', 'T'], 'X' => ['Х', 'X'],
+            'P' => ['Р', 'P'], 'C' => ['С', 'C'], 'M' => ['М', 'M'],
+        ];
+        $set = $letters[$category] ?? [$category];
+        $ors = [];
+        foreach ($set as $i => $L) {
+            $key = ':p' . $category . $i;
+            $ors[] = "w.operation_code LIKE $key";
+            $params[$key] = $L . '%';
+        }
+        $where[] = '(' . implode(' OR ', $ors) . ')';
     }
-    $where[] = '(' . implode(' OR ', $ors) . ')';
 }
 if ($guardOnly) $where[] = "w.guard_work = TRUE";
 if ($factOnly)  $where[] = "w.fact_work = TRUE";
@@ -118,7 +165,7 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll();
 $pages = max(1, (int)ceil($total / $perPage));
 
-/* ===== СТАТИСТИКА МОДЕЛИ ===== */
+/* ===== СТАТИСТИКА ===== */
 $stmt = $pdo->prepare("
     SELECT
         COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE AND model = :m) AS groups,
@@ -128,21 +175,6 @@ $stmt = $pdo->prepare("
 ");
 $stmt->execute([':m' => $model]);
 $stats = $stmt->fetch();
-
-// Сколько работ в каждой категории
-$stmt = $pdo->prepare("
-    SELECT operation_code FROM work_operations
-    WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m AND operation_code IS NOT NULL
-");
-$stmt->execute([':m' => $model]);
-$catCounts = array_fill_keys(array_keys($CATEGORIES), 0);
-$noCategory = 0;
-foreach ($stmt->fetchAll() as $r) {
-    $first = mb_substr($r['operation_code'], 0, 1);
-    $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X','Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
-    if (isset($map[$first])) $catCounts[$map[$first]]++;
-    else $noCategory++;
-}
 
 $currentGroup = null;
 if ($groupCode !== '') {
@@ -154,20 +186,46 @@ $stmt = $pdo->prepare("SELECT MAX(updated_at) FROM work_operations WHERE model =
 $stmt->execute([':m' => $model]);
 $lastSync = $stmt->fetchColumn();
 
+/* ===== ПОИСК «СНЯТИЕ/УСТАНОВКА» ДЛЯ АВТОСВЯЗЕЙ =====
+   Возвращаем список работ, подходящих под «снять/установить <объект>»,
+   для конкретной модели. Используется в JS через ajax-эндпоинт ниже.
+*/
+
+// AJAX-эндпоинт: ?find_prereq=1&object=двигатель
+if (!empty($_GET['find_prereq'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $obj = trim($_GET['object'] ?? '');
+    if ($obj === '' || mb_strlen($obj) < 3) { echo json_encode([]); exit; }
+
+    // Ищем работы с «Снять и установить <объект>» или «Снять <объект>»
+    $stmt = $pdo->prepare("
+        SELECT code, name, operation_code, norm_time
+        FROM work_operations
+        WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m
+          AND (name ILIKE :a OR name ILIKE :b)
+        ORDER BY
+            CASE WHEN name ILIKE :c THEN 0
+                 WHEN name ILIKE :d THEN 1
+                 ELSE 2 END,
+            LENGTH(name)
+        LIMIT 10
+    ");
+    $stmt->execute([
+        ':m' => $model,
+        ':a' => 'Снять и установить %' . $obj . '%',
+        ':b' => 'Снять %' . $obj . '%',
+        ':c' => 'Снять и установить ' . $obj . '%',
+        ':d' => 'Снять ' . $obj . '%',
+    ]);
+    echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i', strtotime($ts)) : '—'; }
 function buildUrl($o = []) { return '?' . http_build_query(array_merge($_GET, $o)); }
 function fmtNorm($n) {
     if ($n === null) return null;
     return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
-}
-function opFirstLetter(?string $op): string {
-    if ($op === null || $op === '') return '';
-    return mb_substr($op, 0, 1);
-}
-function opCategoryKey(?string $op): string {
-    $first = opFirstLetter($op);
-    $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X','Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
-    return $map[$first] ?? '';
 }
 ?>
 <!DOCTYPE html>
@@ -178,14 +236,17 @@ function opCategoryKey(?string $op): string {
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f0f2f5;margin:0;padding:16px;color:#1a1a1a;line-height:1.5}
-  .container{max-width:1400px;margin:0 auto}
+  .container{max-width:1700px;margin:0 auto}
   .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:12px}
   h1{font-size:22px;margin:0 0 8px} h2{font-size:16px;margin:0 0 12px;color:#1e3a8a}
   .top-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
   .user-info{font-size:13px;color:#666} .user-info b{color:#2563eb}
   .logout{color:#dc2626;text-decoration:none;font-size:13px;margin-left:12px}
-  .btn{display:inline-block;padding:9px 14px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;text-decoration:none;text-align:center}
+  .btn{display:inline-block;padding:9px 14px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;text-decoration:none;text-align:center;font-family:inherit}
+  .btn:hover{opacity:0.9}
   .btn-secondary{background:#fff;color:#2563eb;border:1.5px solid #2563eb}
+  .btn-green{background:#16a34a}
+  .btn-red{background:#dc2626}
   .btn-small{padding:7px 12px;font-size:13px}
   .btn-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
@@ -194,7 +255,6 @@ function opCategoryKey(?string $op): string {
   .model-bar select{padding:6px 10px;border:1.5px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:13px;background:#fff;color:#1e3a8a;font-weight:600;cursor:pointer}
   .model-bar select:focus{outline:none;border-color:#2563eb}
 
-  /* Сетка категорий */
   .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:12px}
   .cat-card{border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all 0.15s;text-decoration:none;color:inherit;display:block;background:#fff}
   .cat-card:hover{border-color:#2563eb;background:#f8faff;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,0.08)}
@@ -202,14 +262,14 @@ function opCategoryKey(?string $op): string {
   .cat-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
   .cat-letter{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#fff;flex-shrink:0}
   .cat-title{font-weight:700;font-size:14px;color:#1a1a1a}
-  .cat-count{font-size:11px;color:#666;margin-left:auto;background:#f3f4f6;padding:2px 8px;border-radius:10px;font-weight:600}
   .cat-desc{font-size:12px;color:#666;line-height:1.4;margin-left:42px}
-
   .clear-cat{display:inline-block;margin-top:12px;padding:8px 14px;background:#fff;border:1.5px solid #2563eb;color:#2563eb;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600}
   .clear-cat:hover{background:#eff6ff}
 
-  .layout{display:grid;grid-template-columns:340px 1fr;gap:12px}
-  @media (max-width:900px){.layout{grid-template-columns:1fr}}
+  /* 3 колонки: дерево | работы | корзина */
+  .layout{display:grid;grid-template-columns:300px 1fr 360px;gap:12px;align-items:start}
+  @media (max-width:1200px){.layout{grid-template-columns:280px 1fr;} .basket{grid-column:1/-1}}
+  @media (max-width:800px){.layout{grid-template-columns:1fr} .basket{grid-column:1}}
 
   .search-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .search-bar input[type=text]{flex:1;min-width:200px;padding:11px 14px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px;font-family:inherit}
@@ -250,6 +310,9 @@ function opCategoryKey(?string $op): string {
   .badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap;margin-right:4px}
   .badge-guard{background:#f0fdf4;color:#16a34a}
   .badge-fact{background:#f3e8ff;color:#7c3aed}
+  .add-btn{background:#16a34a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .add-btn:hover{background:#15803d}
+  .add-btn.in-basket{background:#9ca3af;cursor:default}
 
   .stats{font-size:12px;color:#666;padding:8px 0;border-bottom:1px solid #f0f0f0;margin-bottom:8px}
   .stats b{color:#2563eb}
@@ -261,6 +324,41 @@ function opCategoryKey(?string $op): string {
   .pagination .active{background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600}
 
   .warn{padding:12px 16px;border-radius:10px;background:#fffbeb;color:#b45309;border-left:4px solid #b45309;margin-bottom:12px;font-size:13px}
+
+  /* КОРЗИНА */
+  .basket{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto}
+  .basket-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .basket-header h2{margin:0;font-size:16px;color:#1e3a8a}
+  .basket-count{background:#2563eb;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:12px}
+  .basket-total{background:#eff6ff;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#1e3a8a}
+  .basket-total b{font-size:18px}
+  .basket-list{list-style:none;padding:0;margin:0}
+  .basket-item{border-bottom:1px solid #f0f0f0;padding:10px 0;display:flex;gap:8px;font-size:12px}
+  .basket-item:last-child{border-bottom:none}
+  .basket-item-content{flex:1;min-width:0}
+  .basket-item-op{font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;padding:1px 6px;border-radius:4px;display:inline-block;margin-bottom:3px}
+  .basket-item-name{color:#1a1a1a;line-height:1.3;word-wrap:break-word}
+  .basket-item-norm{color:#075985;font-weight:700;margin-top:3px;font-size:11px}
+  .basket-item-del{color:#dc2626;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;user-select:none}
+  .basket-item-del:hover{background:#fef2f2;border-radius:4px}
+  .basket-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+  .basket-actions .btn{flex:1;min-width:120px;font-size:12px;padding:8px 10px}
+
+  /* МОДАЛКА */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+  .modal-overlay.active{display:flex}
+  .modal{background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;overflow-y:auto;padding:24px}
+  .modal h3{margin:0 0 12px;font-size:18px;color:#1e3a8a}
+  .modal p{margin:0 0 14px;font-size:14px;color:#333}
+  .modal .prereq-list{list-style:none;padding:0;margin:0 0 18px}
+  .modal .prereq-item{padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:8px;margin-bottom:8px;font-size:13px;display:flex;align-items:center;gap:10px}
+  .modal .prereq-item input[type=checkbox]{width:18px;height:18px;flex-shrink:0}
+  .modal .prereq-item label{flex:1;cursor:pointer}
+  .modal-btns{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+  .modal .badge-auto{background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
+
+  .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
+  .copy-msg.show{opacity:1}
 </style>
 </head>
 <body>
@@ -294,21 +392,12 @@ function opCategoryKey(?string $op): string {
     </div>
   </div>
 
-  <?php if ((int)$stats['works'] === 0): ?>
-    <div class="warn">
-      ⚠️ Для модели «<?= e($modelName ?: $model) ?>» нет работ.
-      <?php if ($user['is_admin']): ?>Перейдите в <a href="sync.php">загрузку</a>.<?php endif; ?>
-    </div>
-  <?php endif; ?>
-
-  <!-- КАТЕГОРИИ ПО ПЕРВОМУ СИМВОЛУ КОДА ОПЕРАЦИИ -->
   <div class="card">
     <h2>📖 Категории работ — по первому символу кода операции</h2>
     <p style="font-size:13px;color:#666;margin:0 0 4px;">
-      Источник: регламент гарантийной работы с автотехникой КАМАЗ.
+      Диагностические работы определяются автоматически по названию (слова «диагностика», «поиск неисправности», «проверить состояние» и т.п.).
       Нажмите на категорию, чтобы отфильтровать работы.
     </p>
-
     <div class="cat-grid">
       <?php foreach ($CATEGORIES as $key => $cat): ?>
         <?php $isActive = ($category === $key); ?>
@@ -317,13 +406,11 @@ function opCategoryKey(?string $op): string {
           <div class="cat-head">
             <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($key) ?></div>
             <div class="cat-title"><?= e($cat['label']) ?></div>
-            <div class="cat-count"><?= number_format((int)($catCounts[$key] ?? 0), 0, '.', ' ') ?></div>
           </div>
           <div class="cat-desc"><?= e($cat['desc']) ?></div>
         </a>
       <?php endforeach; ?>
     </div>
-
     <?php if ($category !== ''): ?>
       <a class="clear-cat" href="?model=<?= urlencode($model) ?><?= $groupCode ? '&group=' . urlencode($groupCode) : '' ?><?= $q ? '&q=' . urlencode($q) : '' ?>">
         ✖ Сбросить фильтр категории
@@ -333,6 +420,7 @@ function opCategoryKey(?string $op): string {
 
   <div class="layout">
 
+    <!-- ДЕРЕВО -->
     <div class="card">
       <h2>📁 Группы</h2>
       <div class="tree">
@@ -361,6 +449,7 @@ function opCategoryKey(?string $op): string {
       </div>
     </div>
 
+    <!-- РАБОТЫ -->
     <div class="card">
       <h2>
         <?php if ($currentGroup): ?>
@@ -369,7 +458,7 @@ function opCategoryKey(?string $op): string {
           📋 Все работы
         <?php endif; ?>
         <?php if ($category && isset($CATEGORIES[$category])): ?>
-          <span style="font-weight:400;font-size:13px;color:#666;"> · категория: <b><?= e($CATEGORIES[$category]['label']) ?></b></span>
+          <span style="font-weight:400;font-size:13px;color:#666;"> · <b><?= e($CATEGORIES[$category]['label']) ?></b></span>
         <?php endif; ?>
       </h2>
 
@@ -392,9 +481,8 @@ function opCategoryKey(?string $op): string {
 
       <div class="stats" style="margin-top:12px;">
         <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
-        Всего работ в модели: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
+        Всего работ: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
         · Групп: <b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b>
-        · С нормой: <b><?= number_format((int)$stats['with_norm'], 0, '.', ' ') ?></b>
       </div>
 
       <?php if (!$rows): ?>
@@ -403,15 +491,15 @@ function opCategoryKey(?string $op): string {
         <table class="works">
           <thead>
             <tr>
-              <th style="width:130px;">Код операции</th>
+              <th style="width:120px;">Код операции</th>
               <th>Наименование работы</th>
-              <th style="width:110px;">Норма</th>
-              <th style="width:110px;">Флаги</th>
+              <th style="width:80px;">Норма</th>
+              <th style="width:90px;"></th>
             </tr>
           </thead>
           <tbody>
             <?php foreach ($rows as $r): ?>
-              <?php $catKey = opCategoryKey($r['operation_code']); ?>
+              <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
               <tr>
                 <td>
                   <?php if ($r['operation_code']): ?>
@@ -423,7 +511,6 @@ function opCategoryKey(?string $op): string {
                 <td>
                   <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
                   <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
-                  <?php if ($r['description'] && mb_strlen($r['description']) < 400): ?><div class="work-desc"><?= e($r['description']) ?></div><?php endif; ?>
                 </td>
                 <td>
                   <?php if ($r['norm_time'] !== null): ?>
@@ -431,9 +518,13 @@ function opCategoryKey(?string $op): string {
                   <?php else: ?>—<?php endif; ?>
                 </td>
                 <td>
-                  <?php if ($r['guard_work']): ?><span class="badge badge-guard">Постовая</span><?php endif; ?>
-                  <?php if ($r['fact_work']):  ?><span class="badge badge-fact">Факт</span><?php endif; ?>
-                  <?php if (!$r['guard_work'] && !$r['fact_work']): ?>—<?php endif; ?>
+                  <button type="button" class="add-btn"
+                    data-code="<?= e($r['code']) ?>"
+                    data-op="<?= e($r['operation_code']) ?>"
+                    data-name="<?= e($r['name']) ?>"
+                    data-norm="<?= e((string)$r['norm_time']) ?>">
+                    ➕
+                  </button>
                 </td>
               </tr>
             <?php endforeach; ?>
@@ -451,7 +542,268 @@ function opCategoryKey(?string $op): string {
       <?php endif; ?>
     </div>
 
+    <!-- КОРЗИНА -->
+    <div class="card basket">
+      <div class="basket-header">
+        <h2>📋 Выбранные работы</h2>
+        <span class="basket-count" id="basketCount">0</span>
+      </div>
+
+      <div class="basket-total">
+        Суммарная норма: <b id="basketTotal">0,00</b> ч
+      </div>
+
+      <ul class="basket-list" id="basketList">
+        <li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>
+      </ul>
+
+      <div class="basket-actions" id="basketActions" style="display:none;">
+        <button class="btn btn-green btn-small" onclick="basketCopy()">📋 Копировать</button>
+        <button class="btn btn-secondary btn-small" onclick="basketDownload()">💾 Скачать</button>
+        <button class="btn btn-red btn-small" onclick="basketClear()">🗑️ Очистить</button>
+      </div>
+    </div>
+
   </div>
 </div>
+
+<!-- МОДАЛКА ПРЕДВАРИТЕЛЬНЫХ РАБОТ -->
+<div class="modal-overlay" id="prereqModal">
+  <div class="modal">
+    <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
+    <p id="prereqText">
+      В названии работы указано, что деталь уже снята.
+      Обычно для этого требуется <b>сначала снять</b> более крупный узел.
+      Хотите добавить связанные работы?
+    </p>
+    <ul class="prereq-list" id="prereqList"></ul>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closePrereq()">Отмена</button>
+      <button class="btn btn-green" onclick="addPrereqSelected()">Добавить выбранные</button>
+    </div>
+  </div>
+</div>
+
+<div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
+
+<script>
+// ============ КОРЗИНА (localStorage) ============
+const BASKET_KEY = 'works_basket_v1';
+let basket = [];
+
+function basketLoad() {
+  try { basket = JSON.parse(localStorage.getItem(BASKET_KEY) || '[]'); }
+  catch(e) { basket = []; }
+  if (!Array.isArray(basket)) basket = [];
+}
+function basketSave() {
+  localStorage.setItem(BASKET_KEY, JSON.stringify(basket));
+}
+function basketRender() {
+  const list = document.getElementById('basketList');
+  const count = document.getElementById('basketCount');
+  const total = document.getElementById('basketTotal');
+  const actions = document.getElementById('basketActions');
+
+  count.textContent = basket.length;
+
+  let sum = 0;
+  basket.forEach(b => { if (b.norm) sum += parseFloat(b.norm); });
+  total.textContent = sum.toFixed(2).replace('.', ',');
+
+  if (basket.length === 0) {
+    list.innerHTML = '<li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>';
+    actions.style.display = 'none';
+    document.querySelectorAll('.add-btn').forEach(b => b.classList.remove('in-basket'));
+    return;
+  }
+  actions.style.display = 'flex';
+
+  list.innerHTML = basket.map((b, i) => `
+    <li class="basket-item">
+      <div class="basket-item-content">
+        ${b.op ? `<div class="basket-item-op">${escapeHtml(b.op)}</div>` : ''}
+        <div class="basket-item-name">${escapeHtml(b.name || '')}</div>
+        ${b.norm ? `<div class="basket-item-norm">${b.norm} ч</div>` : ''}
+      </div>
+      <span class="basket-item-del" onclick="basketRemove(${i})">×</span>
+    </li>
+  `).join('');
+
+  // отметить уже добавленные кнопки
+  const codes = new Set(basket.map(b => b.code));
+  document.querySelectorAll('.add-btn').forEach(btn => {
+    if (codes.has(btn.dataset.code)) btn.classList.add('in-basket');
+    else btn.classList.remove('in-basket');
+  });
+}
+function escapeHtml(s) {
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+function basketAdd(item) {
+  if (basket.some(b => b.code === item.code)) return false;
+  basket.push(item);
+  basketSave();
+  basketRender();
+  return true;
+}
+function basketRemove(i) {
+  basket.splice(i, 1);
+  basketSave();
+  basketRender();
+}
+function basketClear() {
+  if (!confirm('Очистить все выбранные работы?')) return;
+  basket = [];
+  basketSave();
+  basketRender();
+}
+function basketCopy() {
+  const text = basket.map(b => {
+    const op = b.op ? `[${b.op}] ` : '';
+    const n = b.norm ? ` (${b.norm} ч)` : '';
+    return op + b.name + n;
+  }).join('\n');
+  navigator.clipboard.writeText(text).then(() => showMsg('✅ Скопировано в буфер'));
+}
+function basketDownload() {
+  const text = basket.map(b => {
+    const op = b.op || '';
+    const name = b.name || '';
+    const n = b.norm || '';
+    return [op, name, n].join('\t');
+  }).join('\n');
+  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'works_' + new Date().toISOString().slice(0,10) + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function showMsg(text) {
+  const el = document.getElementById('copyMsg');
+  el.textContent = text;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+// ============ АВТОСВЯЗИ (вариант А) ============
+/**
+ * Ищем в названии паттерн "(X снят|снята|снято|разобран|отсоединён)"
+ * или "(X снят и разобран)" и т.п.
+ */
+function extractPrereqObject(name) {
+  if (!name) return null;
+  // В скобках — ищем «снят / снята / снято / разобран / снят и разобран»
+  const m = name.match(/\(([^()]*(?:снят|снята|снято|разобран|отсоединён)[^()]*)\)/i);
+  if (!m) return null;
+  let inner = m[1];
+
+  // Убираем «и разобран», «и снят», «с автомобиля снят» и т.д.
+  inner = inner
+    .replace(/\b(и\s+разобран[а-я]*|разобран[а-я]*|с\s+автомобиля\s+снят[а-я]*|снят[а-я]*|отсоединён[а-я]*|установлен[а-я]*)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Убираем лишнее: "(снят)", "(доступ обеспечен)" — уже отсеялось по regexp
+  if (inner.length < 3) return null;
+
+  return inner;
+}
+
+function openPrereqModal(originalItem, objectText, prereqItems) {
+  const modal = document.getElementById('prereqModal');
+  const list = document.getElementById('prereqList');
+  const text = document.getElementById('prereqText');
+
+  text.innerHTML = `В названии работы: <b>«${escapeHtml(originalItem.name)}»</b><br>
+    указано, что деталь уже снята (<b>${escapeHtml(objectText)}</b>).
+    Обычно для этого нужно сначала выполнить работу по снятию. Добавить?`;
+
+  list.innerHTML = prereqItems.map((p, i) => `
+    <li class="prereq-item">
+      <input type="checkbox" id="prereq-${i}" checked
+             data-code="${escapeHtml(p.code)}"
+             data-op="${escapeHtml(p.operation_code || '')}"
+             data-name="${escapeHtml(p.name)}"
+             data-norm="${escapeHtml((p.norm_time||'').toString())}">
+      <label for="prereq-${i}">
+        ${p.operation_code ? `<span class="op-code">${escapeHtml(p.operation_code)}</span> ` : ''}
+        ${escapeHtml(p.name)}
+        ${p.norm_time ? `<span class="badge-auto">${p.norm_time} ч</span>` : ''}
+      </label>
+    </li>
+  `).join('');
+
+  modal.classList.add('active');
+}
+function closePrereq() {
+  document.getElementById('prereqModal').classList.remove('active');
+}
+function addPrereqSelected() {
+  const checked = document.querySelectorAll('#prereqList input[type=checkbox]:checked');
+  let added = 0;
+  checked.forEach(chk => {
+    if (basketAdd({
+      code: chk.dataset.code,
+      op: chk.dataset.op,
+      name: chk.dataset.name,
+      norm: chk.dataset.norm || null
+    })) added++;
+  });
+  closePrereq();
+  if (added > 0) showMsg('✅ Добавлено работ: ' + added);
+}
+
+// ============ ОБРАБОТКА КЛИКА ПО КНОПКЕ «+» ============
+document.addEventListener('click', async function(e) {
+  if (!e.target.classList.contains('add-btn')) return;
+
+  const btn = e.target;
+  const item = {
+    code: btn.dataset.code,
+    op: btn.dataset.op,
+    name: btn.dataset.name,
+    norm: btn.dataset.norm || null
+  };
+
+  // Уже в корзине?
+  if (basket.some(b => b.code === item.code)) {
+    showMsg('Уже в корзине');
+    return;
+  }
+
+  // 1. Ищем в названии паттерн «(X снят)»
+  const objectText = extractPrereqObject(item.name);
+
+  // 2. Добавляем основную работу
+  basketAdd(item);
+
+  // 3. Если нашли объект — ищем предварительные работы
+  if (objectText) {
+    try {
+      const url = `?model=<?= urlencode($model) ?>&find_prereq=1&object=${encodeURIComponent(objectText)}`;
+      const resp = await fetch(url, {headers: {'X-Requested-With': 'fetch'}});
+      const prereq = await resp.json();
+
+      // Отфильтруем те, что уже в корзине, и те, что равны самой работе
+      const filtered = prereq.filter(p =>
+        p.code !== item.code && !basket.some(b => b.code === p.code)
+      );
+
+      if (filtered.length > 0) {
+        openPrereqModal(item, objectText, filtered);
+      }
+    } catch(err) {
+      console.error('Ошибка поиска предварительных работ:', err);
+    }
+  }
+});
+
+// ============ ИНИЦИАЛИЗАЦИЯ ============
+basketLoad();
+basketRender();
+</script>
 </body>
 </html>
