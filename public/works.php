@@ -25,9 +25,6 @@ $factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
-/**
- * Классификатор КАМАЗ + авто-категория E (Диагностика) по названию.
- */
 $CATEGORIES = [
     'A' => ['label' => 'Административные',                   'desc' => 'Работы по оформлению заказ-наряда, приёмке-выдаче, согласованиям', 'color' => '#dc2626'],
     'B' => ['label' => 'Предпродажная подготовка',           'desc' => 'Работы по подготовке автотехники к продаже/передаче', 'color' => '#ea580c'],
@@ -111,6 +108,85 @@ if (!empty($_GET['find_prereq'])) {
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
+    echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/* ===== AJAX: поиск парной работы (Снять ↔ Установить) ===== */
+if (!empty($_GET['find_pair'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $name = trim($_GET['name'] ?? '');
+    $exclude = trim($_GET['exclude'] ?? '');
+    if ($name === '') { echo json_encode([]); exit; }
+
+    // Если уже «Снять и установить» — пара есть, ничего не ищем
+    if (preg_match('/^Снять и установить\s/ui', $name)) {
+        echo json_encode([]); exit;
+    }
+
+    $tail = null;
+    $pairVerb = null;
+
+    if (preg_match('/^Снять\s+(.+)$/ui', $name, $m)) {
+        $tail = $m[1];
+        $pairVerb = 'Установить';
+    } elseif (preg_match('/^Установить\s+(.+)$/ui', $name, $m)) {
+        $tail = $m[1];
+        $pairVerb = 'Снять';
+    }
+
+    if ($tail === null) { echo json_encode([]); exit; }
+
+    // Убираем хвостовые скобки для поиска
+    $tailKey = preg_replace('/\s*\([^)]*\)\s*$/u', '', $tail);
+    $tailKey = trim($tailKey);
+    if ($tailKey === '') $tailKey = $tail;
+
+    // Обрезаем хвост по первой запятой для более широкого поиска
+    if (mb_strlen($tailKey) > 60) {
+        $tailKey = mb_substr($tailKey, 0, 60);
+    }
+
+    $exclArr = $exclude !== '' ? array_filter(array_map('trim', explode(',', $exclude))) : [];
+    $exclSql = '';
+    $exclParams = [];
+    if ($exclArr) {
+        $ph = [];
+        foreach ($exclArr as $i => $c) {
+            $key = ':ex' . $i;
+            $ph[] = $key;
+            $exclParams[$key] = $c;
+        }
+        $exclSql = ' AND code NOT IN (' . implode(',', $ph) . ') ';
+    }
+
+    // Варианты парной работы
+    $variants = [
+        $pairVerb . ' ' . $tailKey . '%',
+        $pairVerb . ' и установить ' . $tailKey . '%',
+        $pairVerb . ' и снять ' . $tailKey . '%',
+    ];
+
+    $ors = [];
+    $params = [':m' => $model];
+    foreach ($variants as $i => $pat) {
+        $key = ':v' . $i;
+        $ors[] = "name ILIKE $key";
+        $params[$key] = $pat;
+    }
+    $orsSql = '(' . implode(' OR ', $ors) . ')';
+
+    $sql = "
+        SELECT code, name, operation_code, norm_time
+        FROM work_operations
+        WHERE it_is_group = FALSE AND deleted = FALSE AND model = :m
+          AND $orsSql
+          $exclSql
+        ORDER BY LENGTH(name)
+        LIMIT 5
+    ";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute(array_merge($params, $exclParams));
     echo json_encode($stmt->fetchAll(), JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -342,7 +418,7 @@ function fmtNorm($n) {
 
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
   .modal-overlay.active{display:flex}
-  .modal{background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;overflow-y:auto;padding:24px}
+  .modal{background:#fff;border-radius:14px;max-width:680px;width:100%;max-height:80vh;overflow-y:auto;padding:24px}
   .modal h3{margin:0 0 12px;font-size:18px;color:#1e3a8a}
   .modal p{margin:0 0 14px;font-size:14px;color:#333}
   .modal .prereq-list{list-style:none;padding:0;margin:0 0 18px}
@@ -351,6 +427,7 @@ function fmtNorm($n) {
   .modal .prereq-item label{flex:1;cursor:pointer}
   .modal-btns{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
   .modal .badge-auto{background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
+  .modal .badge-pair{background:#dbeafe;color:#1e40af;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
   .prereq-sub{margin-left:24px;font-size:10px;color:#888;padding:4px 0 0;}
 
   .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
@@ -391,7 +468,8 @@ function fmtNorm($n) {
   <div class="card">
     <h2>📖 Категории работ — по первому символу кода операции</h2>
     <p style="font-size:13px;color:#666;margin:0 0 4px;">
-      Диагностические работы определяются автоматически по названию (слова «диагностика», «поиск неисправности», «проверить состояние» и т.п.).
+      Диагностические работы определяются автоматически по названию.
+      Нажмите на категорию, чтобы отфильтровать работы.
     </p>
     <div class="cat-grid">
       <?php foreach ($CATEGORIES as $key => $cat): ?>
@@ -563,9 +641,7 @@ function fmtNorm($n) {
   <div class="modal">
     <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
     <p id="prereqText">
-      В названии работы указано, что деталь уже снята.
-      Обычно для этого требуется <b>сначала снять</b> более крупный узел.
-      Отметьте, какие работы добавить:
+      Отметьте, какие работы добавить в заказ-наряд:
     </p>
     <ul class="prereq-list" id="prereqList"></ul>
     <div class="modal-btns">
@@ -692,6 +768,7 @@ async function findDependencies(item, existingCodes, depth) {
   const objects = extractPrereqObjects(item.name);
   if (objects.length === 0) return null;
 
+  // 1. Ищем предварительные работы по объектам в скобках
   let allPrereqs = [];
   for (const obj of objects) {
     try {
@@ -718,6 +795,34 @@ async function findDependencies(item, existingCodes, depth) {
 
   if (allPrereqs.length === 0) return null;
 
+  // 2. Для каждой работы без «и установить» ищем парную (Установить / Снять)
+  const pairsToAdd = [];
+  for (const p of allPrereqs) {
+    if (/^Снять и установить\s/ui.test(p.name)) continue;
+    if (!/^(Снять|Установить)\s/ui.test(p.name)) continue;
+
+    try {
+      const excludeParam = encodeURIComponent([...existingCodes, ...allPrereqs.map(x => x.code)].join(','));
+      const url = '?model=' + encodeURIComponent('<?= $model ?>')
+                + '&find_pair=1'
+                + '&name=' + encodeURIComponent(p.name)
+                + '&exclude=' + excludeParam;
+      const resp = await fetch(url, {headers: {'X-Requested-With': 'fetch'}});
+      const pairs = await resp.json();
+
+      pairs.forEach(pair => {
+        if (allPrereqs.some(x => x.code === pair.code)) return;
+        if (pairsToAdd.some(x => x.code === pair.code)) return;
+        pair._pairedWith = p.code;
+        pairsToAdd.push(pair);
+      });
+    } catch(err) {
+      console.error('Ошибка поиска пары:', err);
+    }
+  }
+  allPrereqs = allPrereqs.concat(pairsToAdd);
+
+  // 3. Для каждой найденной работы ищем её собственные зависимости
   const deeper = [];
   for (const p of allPrereqs) {
     const subCodes = new Set([...existingCodes, p.code, ...allPrereqs.map(x => x.code)]);
@@ -741,12 +846,12 @@ function renderPrereqModal(tree) {
   const list = document.getElementById('prereqList');
   const text = document.getElementById('prereqText');
 
-  text.innerHTML = 'Для работы <b style="color:#92400e;">' + escapeHtml(tree.parent.name) + '</b> нужны предварительные. Отметьте, что добавить:';
+  text.innerHTML = 'Для работы <b style="color:#92400e;">' + escapeHtml(tree.parent.name) + '</b> нужны предварительные работы. Отметьте, что добавить:';
 
   const flat = [];
   function walk(node, level, parentLabel) {
     node.prereqs.forEach(p => {
-      flat.push({ item: p, level: level, parentLabel: parentLabel });
+      flat.push({ item: p, level: level, parentLabel: parentLabel, isPair: !!p._pairedWith });
       const sub = node.deeper.find(d => d.parentCode === p.code);
       if (sub) walk(sub, level + 1, p.name);
     });
@@ -757,6 +862,9 @@ function renderPrereqModal(tree) {
     const indent = entry.level * 24;
     const subNote = entry.level > 0
       ? '<div class="prereq-sub" style="margin-left:' + (indent + 28) + 'px;">↳ требуется для: ' + escapeHtml(entry.parentLabel || '') + '</div>'
+      : '';
+    const pairBadge = entry.isPair
+      ? '<span class="badge-pair">парная</span>'
       : '';
     return subNote + `
       <li class="prereq-item" style="margin-left:${indent}px;">
@@ -769,6 +877,7 @@ function renderPrereqModal(tree) {
           ${entry.item.operation_code ? `<span class="op-code">${escapeHtml(entry.item.operation_code)}</span> ` : ''}
           ${escapeHtml(entry.item.name)}
           ${entry.item.norm_time ? `<span class="badge-auto">${entry.item.norm_time} ч</span>` : ''}
+          ${pairBadge}
         </label>
       </li>
     `;
