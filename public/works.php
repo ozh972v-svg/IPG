@@ -13,53 +13,55 @@ $factOnly   = !empty($_GET['fact']);
 $page       = max(1, (int)($_GET['page'] ?? 1));
 $perPage    = 100;
 
-/* ===== Дерево групп: только группы (it_is_group = TRUE), максимум 5000 ===== */
+/* ===== ДЕРЕВО ===== */
+// Группы: код 2 цифры (00, 09, 10, ...)
+// Подгруппы: код 4 цифры (0000, 0900, 1000, ...)
+// Работа: code — код операции (00-000, П10-008), parent — подгруппа
+
 $stmt = $pdo->query("
-    SELECT code, parent_code, name, operation_code
+    SELECT code, parent_code, name, it_is_group
     FROM work_operations
     WHERE it_is_group = TRUE AND deleted = FALSE
-    ORDER BY code
-    LIMIT 5000
+    ORDER BY LENGTH(code), code
 ");
 $allGroups = $stmt->fetchAll();
 
-$groupByCode = [];
-$groupByParent = [];
+$topGroups = [];    // 2-значные: 00, 09, 10
+$subgroups = [];    // 4-значные: 0000, 1002
 foreach ($allGroups as $g) {
-    $groupByCode[$g['code']] = $g;
-    $pc = $g['parent_code'] ?? '__ROOT__';
-    $groupByParent[$pc][] = $g;
+    $len = strlen($g['code']);
+    if ($len === 2) $topGroups[] = $g;
+    elseif ($len === 4) $subgroups[$g['parent_code'] ?? ''][] = $g;
 }
 
-// Корневые группы — у которых parent_code пустой или которого нет в списке
-$rootGroups = [];
-foreach ($allGroups as $g) {
-    $pc = $g['parent_code'] ?? '';
-    if ($pc === '' || !isset($groupByCode[$pc])) $rootGroups[] = $g;
-}
-
-/* ===== Работы ===== */
-// Если выбрана группа — берём работы в ней И во всех подгруппах (рекурсивно)
+/* ===== РАБОТЫ ===== */
 $where  = ['w.it_is_group = FALSE', 'w.deleted = FALSE'];
 $params = [];
 
 if ($q !== '') {
-    $where[] = "(w.code ILIKE :q OR w.name ILIKE :q OR w.name_work ILIKE :q OR w.operation_code ILIKE :q OR w.eng_name ILIKE :q)";
+    $where[] = "(w.name ILIKE :q OR w.operation_code ILIKE :q OR w.code ILIKE :q)";
     $params[':q'] = '%' . $q . '%';
 }
 
-// Рекурсивный CTE для поиска всех подгрупп
-$groupFilterSql = '';
+// При выборе группы — показываем работы всех её подгрупп
+$groupFilter = '';
 if ($groupCode !== '') {
-    $groupFilterSql = "
-        WITH RECURSIVE sub AS (
-            SELECT code FROM work_operations WHERE code = :g
-            UNION ALL
-            SELECT wo.code FROM work_operations wo JOIN sub ON wo.parent_code = sub.code
-            WHERE wo.it_is_group = TRUE
-        )
-    ";
-    $where[] = "w.parent_code IN (SELECT code FROM sub)";
+    if (strlen($groupCode) === 2) {
+        // Верхняя группа → работы всех подгрупп группы
+        $groupFilter = "
+            WITH RECURSIVE sub AS (
+                SELECT code FROM work_operations WHERE code = :g
+                UNION ALL
+                SELECT wo.code FROM work_operations wo
+                JOIN sub ON wo.parent_code = sub.code
+                WHERE wo.it_is_group = TRUE
+            )
+        ";
+        $where[] = "w.parent_code IN (SELECT code FROM sub)";
+    } else {
+        // Подгруппа → работы только её
+        $where[] = "w.parent_code = :g";
+    }
     $params[':g'] = $groupCode;
 }
 
@@ -67,13 +69,14 @@ if ($guardOnly) $where[] = "w.guard_work = TRUE";
 if ($factOnly)  $where[] = "w.fact_work = TRUE";
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
-$stmt = $pdo->prepare($groupFilterSql . " SELECT COUNT(*) FROM work_operations w $whereSql");
+$stmt = $pdo->prepare($groupFilter . " SELECT COUNT(*) FROM work_operations w $whereSql");
 $stmt->execute($params);
 $total = (int)$stmt->fetchColumn();
 
 $offset = ($page - 1) * $perPage;
-$stmt = $pdo->prepare($groupFilterSql . "
-    SELECT w.code, w.name, w.operation_code, w.eng_name, w.description, w.guard_work, w.fact_work, w.norm_time
+$stmt = $pdo->prepare($groupFilter . "
+    SELECT w.code, w.name, w.operation_code, w.eng_name, w.description,
+           w.guard_work, w.fact_work, w.norm_time, w.parent_code
     FROM work_operations w
     $whereSql
     ORDER BY w.operation_code NULLS LAST, w.name
@@ -83,44 +86,28 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll();
 $pages = max(1, (int)ceil($total / $perPage));
 
-/* ===== Статистика ===== */
+/* ===== СТАТИСТИКА ===== */
 $stats = $pdo->query("
     SELECT
-        COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS items,
-        COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE) AS groups
+        COUNT(*) FILTER (WHERE it_is_group = TRUE  AND deleted = FALSE) AS groups,
+        COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS works,
+        COUNT(*) FILTER (WHERE it_is_group = FALSE AND norm_time IS NOT NULL) AS with_norm
     FROM work_operations
 ")->fetch();
 
-$currentGroup = ($groupCode !== '' && isset($groupByCode[$groupCode])) ? $groupByCode[$groupCode] : null;
+$currentGroup = null;
+if ($groupCode !== '') {
+    $stmt = $pdo->prepare("SELECT code, name FROM work_operations WHERE code = :c AND it_is_group = TRUE");
+    $stmt->execute([':c' => $groupCode]);
+    $currentGroup = $stmt->fetch() ?: null;
+}
+
 $lastSync = $pdo->query("SELECT MAX(updated_at) FROM work_operations")->fetchColumn();
 
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i', strtotime($ts)) : '—'; }
 function buildUrl($o = []) { return '?' . http_build_query(array_merge($_GET, $o)); }
-
-/** Рекурсивный рендер группы */
-function renderGroup(array $g, array $byParent, string $selectedCode, int $depth = 0): void {
-    if ($depth > 5) return;
-    $code = $g['code'];
-    $children = $byParent[$code] ?? [];
-    $isSelected = ($code === $selectedCode);
-    $indent = $depth * 14;
-    $name = $g['name'] ?: $code;
-    $display = preg_replace('/^\d+[\.\s]+/u', '', $name);
-    $prefix  = '';
-    if (preg_match('/^(\d+[\.]?)/u', $name, $mm)) $prefix = $mm[1];
-
-    echo '<div class="tree-row' . ($isSelected ? ' selected' : '') . '" style="padding-left:' . (8 + $indent) . 'px;">';
-    if ($prefix) echo '<span class="tree-prefix">' . e($prefix) . '</span>';
-    echo '<a href="?group=' . urlencode($code) . '" class="tree-link">' . e($display) . '</a>';
-    echo '</div>';
-
-    foreach ($children as $c) {
-        renderGroup($c, $byParent, $selectedCode, $depth + 1);
-    }
-}
-
 function fmtNorm($n) {
-    if ($n === null) return '—';
+    if ($n === null) return null;
     return rtrim(rtrim(number_format((float)$n, 3, ',', ' '), '0'), ',');
 }
 ?>
@@ -153,14 +140,15 @@ function fmtNorm($n) {
   .filters label{display:flex;align-items:center;gap:5px;cursor:pointer}
 
   .tree{font-size:13px;max-height:75vh;overflow-y:auto}
-  .tree-row{padding:5px 8px;border-radius:6px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .tree-row:hover{background:#f8faff}
-  .tree-row.selected{background:#eff6ff;font-weight:600}
-  .tree-row.selected .tree-link{color:#1e3a8a}
-  .tree-prefix{color:#2563eb;font-weight:700;font-size:12px;min-width:38px;display:inline-block}
-  .tree-link{color:#333;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
-  .tree-link:hover{color:#2563eb}
-  .tree-group-header{padding:8px;color:#999;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+  .tree-top{padding:8px 12px;font-weight:700;border-radius:8px;margin-bottom:2px;display:flex;align-items:center;gap:8px;color:#1e3a8a;cursor:pointer}
+  .tree-top:hover{background:#f8faff}
+  .tree-top.selected{background:#eff6ff}
+  .tree-sub{padding:5px 12px 5px 32px;border-radius:6px;margin-left:8px;color:#333;display:flex;align-items:center;gap:6px}
+  .tree-sub:hover{background:#f8faff}
+  .tree-sub.selected{background:#eff6ff;color:#1e3a8a;font-weight:600}
+  .tree a{text-decoration:none;color:inherit;display:flex;align-items:center;gap:6px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tree a:hover{color:#2563eb}
+  .tree-icon{color:#2563eb;font-size:12px}
 
   table.works{width:100%;border-collapse:collapse;font-size:13px}
   table.works th{background:#f9fafb;color:#666;font-weight:600;text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase;letter-spacing:0.4px}
@@ -170,7 +158,7 @@ function fmtNorm($n) {
   .work-name{color:#1a1a1a;font-weight:500}
   .work-eng{color:#888;font-size:11px;margin-top:3px}
   .work-desc{color:#666;font-size:11px;margin-top:4px;font-style:italic}
-  .norm-time{background:#e0f2fe;color:#075985;padding:2px 8px;border-radius:5px;font-size:12px;font-weight:600;white-space:nowrap}
+  .norm-time{background:#e0f2fe;color:#075985;padding:3px 10px;border-radius:6px;font-size:13px;font-weight:700;white-space:nowrap}
   .badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;white-space:nowrap;margin-right:4px}
   .badge-guard{background:#f0fdf4;color:#16a34a}
   .badge-fact{background:#f3e8ff;color:#7c3aed}
@@ -201,34 +189,50 @@ function fmtNorm($n) {
     <div class="btn-row">
       <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
       <?php if ($user['is_admin']): ?>
-        <a href="sync.php?type=works" class="btn btn-small">🔄 Синхронизация</a>
+        <a href="sync.php" class="btn btn-small">📥 Загрузка справочника</a>
       <?php endif; ?>
     </div>
   </div>
 
-  <?php if ((int)$stats['items'] === 0): ?>
-    <div class="warn">⚠️ Справочник пуст. <?php if ($user['is_admin']): ?>Перейдите в <a href="sync.php?type=works">синхронизацию</a>.<?php endif; ?></div>
+  <?php if ((int)$stats['works'] === 0): ?>
+    <div class="warn">⚠️ Справочник пуст. <?php if ($user['is_admin']): ?>Перейдите в <a href="sync.php">загрузку</a>.<?php endif; ?></div>
   <?php endif; ?>
 
   <div class="layout">
 
+    <!-- ЛЕВАЯ ПАНЕЛЬ: дерево -->
     <div class="card">
       <h2>📁 Группы</h2>
       <div class="tree">
-        <div class="tree-row <?= $groupCode === '' && $q === '' ? 'selected' : '' ?>">
-          <a href="?" class="tree-link" style="font-weight:600;">🏠 Все работы</a>
+        <div class="tree-top <?= $groupCode === '' && $q === '' ? 'selected' : '' ?>">
+          <a href="?">🏠 <b>Все работы</b></a>
         </div>
-        <div class="tree-group-header">Дерево (<?= count($rootGroups) ?> верхних, <?= count($allGroups) ?> всего)</div>
-        <?php foreach ($rootGroups as $g): ?>
-          <?php renderGroup($g, $groupByParent, $groupCode); ?>
+        <?php foreach ($topGroups as $g): ?>
+          <?php $sel = ($g['code'] === $groupCode); ?>
+          <div class="tree-top <?= $sel ? 'selected' : '' ?>">
+            <a href="?group=<?= urlencode($g['code']) ?>">
+              <span class="tree-icon">📂</span>
+              <b><?= e($g['name']) ?></b>
+            </a>
+          </div>
+          <?php foreach ($subgroups[$g['code']] ?? [] as $sub): ?>
+            <?php $selSub = ($sub['code'] === $groupCode); ?>
+            <div class="tree-sub <?= $selSub ? 'selected' : '' ?>">
+              <a href="?group=<?= urlencode($sub['code']) ?>">
+                <span class="tree-icon">📄</span>
+                <?= e($sub['name']) ?>
+              </a>
+            </div>
+          <?php endforeach; ?>
         <?php endforeach; ?>
       </div>
     </div>
 
+    <!-- ПРАВАЯ ПАНЕЛЬ -->
     <div class="card">
       <h2>
         <?php if ($currentGroup): ?>
-          <?php $cn = $currentGroup['name'] ?: $currentGroup['code']; echo '📂 ' . e($cn); ?>
+          📂 <?= e($currentGroup['name']) ?>
         <?php else: ?>
           📋 Все работы
         <?php endif; ?>
@@ -237,7 +241,7 @@ function fmtNorm($n) {
       <form method="get">
         <input type="hidden" name="group" value="<?= e($groupCode) ?>">
         <div class="search-bar">
-          <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию, коду операции, английскому…">
+          <input type="text" name="q" value="<?= e($q) ?>" placeholder="Поиск по названию, коду операции…">
           <button type="submit" class="btn">🔍 Найти</button>
           <?php if ($q !== '' || $guardOnly || $factOnly): ?>
             <a href="?<?= $groupCode ? 'group=' . urlencode($groupCode) : '' ?>" class="btn btn-secondary">Сбросить</a>
@@ -251,8 +255,9 @@ function fmtNorm($n) {
 
       <div class="stats" style="margin-top:12px;">
         <?php if ($q !== ''): ?>Найдено: <b><?= number_format($total, 0, '.', ' ') ?></b> · <?php endif; ?>
-        Всего работ: <b><?= number_format((int)$stats['items'], 0, '.', ' ') ?></b>
+        Всего работ: <b><?= number_format((int)$stats['works'], 0, '.', ' ') ?></b>
         · Групп: <b><?= number_format((int)$stats['groups'], 0, '.', ' ') ?></b>
+        · С нормой: <b><?= number_format((int)$stats['with_norm'], 0, '.', ' ') ?></b>
         · Обновлено: <b><?= e(fmtTs($lastSync)) ?></b>
       </div>
 
@@ -262,9 +267,9 @@ function fmtNorm($n) {
         <table class="works">
           <thead>
             <tr>
-              <th style="width:120px;">Код операции</th>
+              <th style="width:130px;">Код операции</th>
               <th>Наименование работы</th>
-              <th style="width:100px;">Норма</th>
+              <th style="width:110px;">Норма</th>
               <th style="width:110px;">Флаги</th>
             </tr>
           </thead>
@@ -312,7 +317,6 @@ function fmtNorm($n) {
     </div>
 
   </div>
-
 </div>
 </body>
 </html>
