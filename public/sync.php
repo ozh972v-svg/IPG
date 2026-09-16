@@ -13,30 +13,44 @@ $error = null;
  * Определяет роли колонок по формату значения.
  */
 function detect_roles(array $cols): array {
-    $roles = ['group'=>null, 'subgroup'=>null, 'opCode'=>null, 'name'=>null, 'norm'=>null];
+    $roles = ['group'=>null, 'subgroup'=>null, 'opCode'=>null, 'name'=>null, 'norm'=>null, 'complectation'=>null];
 
     foreach ($cols as $i => $raw) {
         $v = trim($raw);
         if ($v === '') continue;
 
+        // Норма времени: "0,500" или "0.500"
         if (preg_match('/^\d+[,.]\d+$/', $v)) {
-            $roles['norm'] = ['idx'=>$i, 'val'=>$v];
+            if ($roles['norm'] === null) $roles['norm'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
+
+        // Код комплектации: "54901-0070004-CA" или "КАМАЗ 54901-004-92 (94)"
+        if (preg_match('/^(КАМАЗ\s+)?\d{4,5}-\d+/u', $v)) {
+            if ($roles['complectation'] === null) $roles['complectation'] = ['idx'=>$i, 'val'=>$v];
+            continue;
+        }
+
+        // Код операции: "00-000", "П10-008", "C10-0211", "X99-9910", "P-35-02-02-01"
         if (preg_match('/^([A-Za-zА-Яа-я]+\-?\d[\d\-]*|\d{2}\-\d[\d\-]*)$/u', $v)) {
-            $roles['opCode'] = ['idx'=>$i, 'val'=>$v];
+            if ($roles['opCode'] === null) $roles['opCode'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
+
+        // Подгруппа: 4 цифры + разделитель ("0000. Автомобиль", "8228 - Холодильник")
         if (preg_match('/^\d{4}\s*[.\-–]\s*/', $v)) {
             if ($roles['subgroup'] === null) $roles['subgroup'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
+
+        // Группа: 2 цифры + разделитель ("00. Автомобиль", "82 - Принадлежности")
         if (preg_match('/^\d{2}\s*[.\-–]\s*/', $v)) {
             if ($roles['group'] === null) $roles['group'] = ['idx'=>$i, 'val'=>$v];
             continue;
         }
     }
 
+    // Название работы — колонка сразу после кода операции
     if ($roles['opCode'] !== null) {
         $opIdx = $roles['opCode']['idx'];
         if (isset($cols[$opIdx + 1])) {
@@ -44,6 +58,7 @@ function detect_roles(array $cols): array {
             if ($nameVal !== '') $roles['name'] = $nameVal;
         }
     }
+
     return $roles;
 }
 
@@ -53,9 +68,26 @@ function extract_code(string $s): ?string {
 }
 
 /**
- * Импорт файла для конкретной модели.
+ * Извлекает код модели из кода комплектации.
+ * "54901-0070004-CA"  → "54901"
+ * "КАМАЗ 54901-004-92" → "54901"
  */
-function import_file(string $path, string $modelCode, string $modelName): array {
+function extract_model_code(string $complectation): ?string {
+    if (preg_match('/(\d{4,5})\s*-/', $complectation, $m)) return $m[1];
+    return null;
+}
+
+/**
+ * Извлекает название комплектации (без префикса "КАМАЗ").
+ */
+function clean_complectation(string $c): string {
+    return trim(preg_replace('/^КАМАЗ\s+/u', '', $c));
+}
+
+/**
+ * Импорт файла.
+ */
+function import_file(string $path): array {
     global $pdo;
 
     $handle = fopen($path, 'r');
@@ -65,6 +97,7 @@ function import_file(string $path, string $modelCode, string $modelName): array 
     $groups = [];
     $subgroups = [];
     $works = [];
+    $complectations = [];
     $lineNo = 0;
 
     while (($line = fgets($handle)) !== false) {
@@ -86,6 +119,11 @@ function import_file(string $path, string $modelCode, string $modelName): array 
 
         $opCode = $r['opCode']['val'];
         $name   = $r['name'];
+
+        // Код комплектации
+        if ($r['complectation'] !== null) {
+            $complectations[clean_complectation($r['complectation']['val'])] = true;
+        }
 
         if ($r['group'] !== null) {
             $gCode = extract_code($r['group']['val']);
@@ -120,7 +158,19 @@ function import_file(string $path, string $modelCode, string $modelName): array 
     if (empty($works)) {
         throw new RuntimeException('В файле не найдено ни одной работы.');
     }
+    if (empty($complectations)) {
+        throw new RuntimeException('В файле не найдена колонка «Комплектация» (или она пустая).');
+    }
 
+    // Берём первую комплектацию (обычно одна в файле)
+    $complectation = array_key_first($complectations);
+    $modelCode = extract_model_code($complectation);
+    if ($modelCode === null) {
+        throw new RuntimeException('Не удалось определить код модели из комплектации "' . $complectation . '"');
+    }
+    $modelName = 'КАМАЗ ' . $modelCode;
+
+    // Родители подгрупп: '1002' → '10'
     $subgroupParents = [];
     foreach ($subgroups as $code => $_) {
         if (preg_match('/^(\d{2})\d{2}$/', $code, $m)) {
@@ -128,8 +178,7 @@ function import_file(string $path, string $modelCode, string $modelName): array 
         }
     }
 
-    // Уникальные коды в рамках модели: "code" + "@" + model
-    // Потому что "00-000" может быть для 54901 и для 65115 одновременно
+    // Уникальные коды работ (в рамках комплектации)
     $usedCodes = [];
     foreach ($works as &$w) {
         $base = $w['op_code'];
@@ -144,43 +193,52 @@ function import_file(string $path, string $modelCode, string $modelName): array 
     }
     unset($w);
 
-    // Регистрируем модель
-    $pdo->prepare("
-        INSERT INTO work_models (code, name, updated_at)
-        VALUES (:c, :n, NOW())
-        ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
-    ")->execute([':c' => $modelCode, ':n' => $modelName]);
+    // === ЗАПИСЬ В БД ===
 
-    // Удаляем старые записи для этой модели
-    $pdo->prepare("DELETE FROM work_operations WHERE model = :m")->execute([':m' => $modelCode]);
+    // Удаляем все старые записи для этой комплектации
+    $pdo->prepare("DELETE FROM work_operations WHERE complectation = :c")
+        ->execute([':c' => $complectation]);
+
+    // Регистрируем модель (если её ещё нет)
+    try {
+        $pdo->prepare("
+            INSERT INTO work_models (code, name, updated_at)
+            VALUES (:c, :n, NOW())
+            ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()
+        ")->execute([':c' => $modelCode, ':n' => $modelName]);
+    } catch (Throwable $e) {
+        // Если таблицы work_models нет — пропускаем
+    }
 
     $stmt = $pdo->prepare("
         INSERT INTO work_operations
-            (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, model, updated_at)
+            (code, parent_code, it_is_group, name, operation_code, norm_time, deleted, model, complectation, updated_at)
         VALUES
-            (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, :model, NOW())
+            (:code, :parent, :is_group, :name, :op_code, :norm, FALSE, :model, :complectation, NOW())
     ");
 
-    foreach ($groups as $code => $name) {
+    foreach ($groups as $code => $gName) {
         $stmt->execute([
             ':code' => mb_substr($code, 0, 50),
             ':parent' => null,
             ':is_group' => 1,
-            ':name' => mb_substr($name, 0, 250),
+            ':name' => mb_substr($gName, 0, 250),
             ':op_code' => null,
             ':norm' => null,
             ':model' => $modelCode,
+            ':complectation' => $complectation,
         ]);
     }
-    foreach ($subgroups as $code => $name) {
+    foreach ($subgroups as $code => $gName) {
         $stmt->execute([
             ':code' => mb_substr($code, 0, 50),
             ':parent' => $subgroupParents[$code] ?? null,
             ':is_group' => 1,
-            ':name' => mb_substr($name, 0, 250),
+            ':name' => mb_substr($gName, 0, 250),
             ':op_code' => null,
             ':norm' => null,
             ':model' => $modelCode,
+            ':complectation' => $complectation,
         ]);
     }
     foreach ($works as $w) {
@@ -192,57 +250,56 @@ function import_file(string $path, string $modelCode, string $modelName): array 
             ':op_code' => mb_substr($w['op_code'], 0, 50),
             ':norm' => $w['norm'],
             ':model' => $modelCode,
+            ':complectation' => $complectation,
         ]);
     }
 
     return [
-        'groups'    => count($groups),
-        'subgroups' => count($subgroups),
-        'works'     => count($works),
-        'with_norm' => count(array_filter($works, fn($w) => $w['norm'] !== null)),
+        'model'          => $modelName,
+        'complectation'  => $complectation,
+        'groups'         => count($groups),
+        'subgroups'      => count($subgroups),
+        'works'          => count($works),
+        'with_norm'      => count(array_filter($works, fn($w) => $w['norm'] !== null)),
     ];
 }
 
 // ============ ОБРАБОТКА ЗАГРУЗКИ ============
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['datafile']['tmp_name'])) {
-    $modelCode = trim($_POST['model_code'] ?? '');
-    $modelName = trim($_POST['model_name'] ?? '');
-    if ($modelCode === '' || $modelName === '') {
-        $error = 'Укажите код и название модели автотехники';
-    } else {
-        try {
-            $result = import_file($_FILES['datafile']['tmp_name'], $modelCode, $modelName);
+    try {
+        $result = import_file($_FILES['datafile']['tmp_name']);
 
-            $dir = __DIR__ . '/uploads';
-            if (!is_dir($dir)) @mkdir($dir, 0775, true);
-            @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/import_' . preg_replace('/[^\w\-]/', '_', $modelCode) . '.txt');
+        $dir = __DIR__ . '/uploads';
+        if (!is_dir($dir)) @mkdir($dir, 0775, true);
+        @move_uploaded_file($_FILES['datafile']['tmp_name'], $dir . '/import_' . preg_replace('/[^\w\-]/', '_', $result['complectation']) . '.txt');
 
-            $messages[] = sprintf(
-                'Импорт для «%s» выполнен: групп %d, подгрупп %d, работ %d (с нормой времени: %d)',
-                $modelName, $result['groups'], $result['subgroups'], $result['works'], $result['with_norm']
-            );
-        } catch (Throwable $e) {
-            $error = 'Ошибка импорта: ' . $e->getMessage();
-        }
+        $messages[] = sprintf(
+            'Импорт выполнен. Модель: <b>%s</b>, комплектация: <b>%s</b>. Групп: %d, подгрупп: %d, работ: %d (с нормой: %d)',
+            $result['model'], $result['complectation'],
+            $result['groups'], $result['subgroups'], $result['works'], $result['with_norm']
+        );
+    } catch (Throwable $e) {
+        $error = 'Ошибка импорта: ' . $e->getMessage();
     }
 }
 
-// Список моделей + статистика
-$models = $pdo->query("
-    SELECT m.code, m.name, m.updated_at,
-           COUNT(w.code) FILTER (WHERE w.it_is_group = FALSE AND w.deleted = FALSE) AS works_cnt
-    FROM work_models m
-    LEFT JOIN work_operations w ON w.model = m.code
-    GROUP BY m.code, m.name, m.updated_at
-    ORDER BY m.code
-")->fetchAll();
-
+// Статистика БД
 $totalStats = $pdo->query("
     SELECT
         COUNT(*) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS works,
-        COUNT(*) FILTER (WHERE it_is_group = FALSE AND norm_time IS NOT NULL) AS with_norm
+        COUNT(*) FILTER (WHERE it_is_group = FALSE AND norm_time IS NOT NULL) AS with_norm,
+        COUNT(DISTINCT complectation) AS complectations
     FROM work_operations
 ")->fetch();
+
+// Список загруженных комплектаций
+$complectations = $pdo->query("
+    SELECT complectation, model, COUNT(*) AS works_cnt, MAX(updated_at) AS updated_at
+    FROM work_operations
+    WHERE it_is_group = FALSE AND deleted = FALSE AND complectation IS NOT NULL
+    GROUP BY complectation, model
+    ORDER BY updated_at DESC
+")->fetchAll();
 
 function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; }
 ?>
@@ -274,12 +331,6 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .stat{padding:14px;background:#f9fafb;border-radius:10px;text-align:center}
   .stat b{display:block;color:#2563eb;font-size:22px;font-weight:700}
   .stat small{color:#666;font-size:12px;text-transform:uppercase;letter-spacing:0.3px}
-
-  .model-row{display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:12px}
-  .model-row label{display:block;font-size:13px;color:#666;margin-bottom:4px;font-weight:600}
-  .model-row input{padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:8px;font-family:inherit;font-size:14px;width:100%}
-  .model-row input:focus{outline:none;border-color:#2563eb}
-
   .dropzone{border:2px dashed #cbd5e1;border-radius:14px;padding:40px 20px;text-align:center;background:#f8fafc;transition:all 0.2s;cursor:pointer;margin-bottom:12px}
   .dropzone:hover{border-color:#2563eb;background:#eff6ff}
   .dropzone input[type=file]{display:none}
@@ -287,13 +338,10 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   .dropzone .title{font-size:16px;font-weight:600;color:#1e3a8a}
   .dropzone .sub{font-size:13px;color:#666;margin-top:4px}
   .file-selected{background:#f0fdf4;border-color:#16a34a;color:#16a34a}
-
   table{width:100%;border-collapse:collapse;font-size:13px}
   table th{background:#f9fafb;text-align:left;padding:10px 12px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.3px}
   table td{padding:10px 12px;border-bottom:1px solid #f0f0f0}
   code{background:#eff6ff;padding:2px 6px;border-radius:4px;color:#1e3a8a;font-size:12px}
-  .btn-del{color:#dc2626;text-decoration:none;font-size:12px;padding:4px 8px;border-radius:6px}
-  .btn-del:hover{background:#fef2f2}
 </style>
 </head>
 <body>
@@ -314,117 +362,21 @@ function fmtTs($ts) { return $ts ? date('d.m.Y H:i:s', strtotime($ts)) : '—'; 
   </div>
 
   <?php foreach ($messages as $m): ?>
-    <div class="alert alert-success">✅ <?= e($m) ?></div>
+    <div class="alert alert-success">✅ <?= $m ?></div>
   <?php endforeach; ?>
   <?php if ($error): ?>
     <div class="alert alert-error">❌ <?= e($error) ?></div>
   <?php endif; ?>
 
   <div class="card">
-    <h2>Загрузить файл .txt / .tsv для модели</h2>
+    <h2>Загрузить файл .txt / .tsv для комплектации</h2>
     <div class="alert alert-info" style="font-size:13px;">
       <b>Как выгрузить файл из 1С:</b><br>
       1. Отчёт «Трудоёмкость операций по нормам времени» → «ДляВыгрузки»<br>
       2. Сохранить как <code>.txt</code> в кодировке <b>UTF-8</b>, разделитель — <b>табуляция</b><br>
-      3. Загрузить сюда, указав <b>модель автотехники</b> (например, 54901)
+      3. Загрузить сюда — <b>код модели и код комплектации определятся автоматически из файла</b>
     </div>
 
     <form method="post" enctype="multipart/form-data" id="uploadForm">
-      <div class="model-row">
-        <div>
-          <label>Код модели (шасси)</label>
-          <input type="text" name="model_code" id="modelCode" placeholder="54901" required>
-        </div>
-        <div>
-          <label>Название модели</label>
-          <input type="text" name="model_name" id="modelName" placeholder="КАМАЗ 54901" required>
-        </div>
-      </div>
-
       <label class="dropzone" id="dropzone">
-        <input type="file" name="datafile" id="fileInput" accept=".txt,.tsv,.csv">
-        <div class="icon">📄</div>
-        <div class="title" id="fileName">Нажмите, чтобы выбрать файл</div>
-        <div class="sub" id="fileHint">или перетащите сюда · .txt / .tsv / .csv</div>
-      </label>
-
-      <div class="btn-row" style="justify-content:center;">
-        <button type="submit" class="btn btn-green" id="submitBtn" disabled>🚀 Импортировать</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2>Модели в справочнике</h2>
-    <?php if (!$models): ?>
-      <p style="color:#888;">Справочник пуст — загрузите первый файл.</p>
-    <?php else: ?>
-      <table>
-        <thead>
-          <tr>
-            <th>Код</th>
-            <th>Название</th>
-            <th style="width:120px;">Работ</th>
-            <th style="width:180px;">Обновлено</th>
-            <th style="width:100px;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($models as $m): ?>
-            <tr>
-              <td><code><?= e($m['code']) ?></code></td>
-              <td><?= e($m['name']) ?></td>
-              <td><b><?= number_format((int)$m['works_cnt'], 0, '.', ' ') ?></b></td>
-              <td style="font-size:12px;color:#666;"><?= e(fmtTs($m['updated_at'])) ?></td>
-              <td>
-                <a href="?model=<?= urlencode($m['code']) ?>" class="btn btn-secondary btn-small">Открыть</a>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    <?php endif; ?>
-
-    <p style="font-size:12px;color:#888;margin-top:12px;">
-      Всего работ в справочнике: <b><?= number_format((int)$totalStats['works'], 0, '.', ' ') ?></b> ·
-      с нормой времени: <b><?= number_format((int)$totalStats['with_norm'], 0, '.', ' ') ?></b>
-    </p>
-  </div>
-
-</div>
-
-<script>
-(function(){
-  var input = document.getElementById('fileInput');
-  var drop  = document.getElementById('dropzone');
-  var name  = document.getElementById('fileName');
-  var hint  = document.getElementById('fileHint');
-  var btn   = document.getElementById('submitBtn');
-
-  function showFile(file) {
-    if (!file) return;
-    name.textContent = file.name;
-    hint.textContent = (file.size / 1024).toFixed(1) + ' КБ — готов к загрузке';
-    drop.classList.add('file-selected');
-    btn.disabled = false;
-  }
-
-  input.addEventListener('change', function() {
-    if (input.files && input.files[0]) showFile(input.files[0]);
-  });
-  ['dragenter','dragover'].forEach(function(ev){
-    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.style.borderColor = '#2563eb'; });
-  });
-  ['dragleave','drop'].forEach(function(ev){
-    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.style.borderColor = ''; });
-  });
-  drop.addEventListener('drop', function(e){
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      input.files = e.dataTransfer.files;
-      showFile(e.dataTransfer.files[0]);
-    }
-  });
-})();
-</script>
-</body>
-</html>
+        <input type="file" name="datafile" id="fileInput"
