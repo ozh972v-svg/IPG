@@ -27,7 +27,7 @@ $viewKeyType = trim($_GET['key_type'] ?? '');
 $viewKeyValue = trim($_GET['key_value'] ?? '');
 $viewMode = $viewKeyType && $viewKeyValue;
 
-/* === Если пришли «+ Добавить» с новыми полями — сохраняем сразу === */
+/* === Если пришли «+ Добавить» — сохраняем === */
 if (!$viewMode
     && $_SERVER['REQUEST_METHOD'] === 'GET'
     && !empty($_GET['key_value'])
@@ -58,7 +58,7 @@ if (!$viewMode
                 ':uid2' => $user['id'],
             ]);
         } catch (Throwable $e) {
-            /* тихо — может, колонок ещё нет, тогда проигнорируем */
+            /* тихо */
         }
     }
 
@@ -77,14 +77,7 @@ if (!$viewMode) {
              WHERE k.key_value ILIKE :q
                 OR COALESCE(k.gos_number, '')   ILIKE :q
                 OR COALESCE(k.order_number, '') ILIKE :q
-            UNION
-            SELECT DISTINCT p.key_type, p.key_value,
-                   NULL::varchar AS gos_number, NULL::varchar AS order_number,
-                   NULL::integer AS user_id, NULL::timestamp AS created_at,
-                   NULL::integer AS updated_by, NULL::timestamp AS updated_at
-              FROM photos p
-             WHERE p.key_value ILIKE :q
-             ORDER BY key_value DESC
+             ORDER BY k.key_value DESC
         ");
         $stmt->execute([':q' => '%' . $searchQuery . '%']);
     } else {
@@ -92,18 +85,12 @@ if (!$viewMode) {
             SELECT k.key_type, k.key_value, k.gos_number, k.order_number,
                    k.user_id, k.created_at, k.updated_by, k.updated_at
               FROM keys k
-            UNION
-            SELECT DISTINCT p.key_type, p.key_value,
-                   NULL::varchar AS gos_number, NULL::varchar AS order_number,
-                   NULL::integer AS user_id, NULL::timestamp AS created_at,
-                   NULL::integer AS updated_by, NULL::timestamp AS updated_at
-              FROM photos p
-             ORDER BY key_value DESC
+             ORDER BY k.key_value DESC
         ");
     }
     $allKeys = $stmt->fetchAll();
 
-    // Счётчики фото
+    // Счётчики фото и дата последнего фото
     $stmt = $pdo->query("
         SELECT key_type, key_value, COUNT(*) AS cnt, MAX(created_at) AS last_date
         FROM photos GROUP BY key_type, key_value
@@ -135,13 +122,19 @@ if (!$viewMode) {
             'updated_at'   => $k['updated_at']   ?? null,
             'count'        => $row ? (int)$row['cnt'] : 0,
             'last_date'    => $row['last_date'] ?? null,
+            'creator_name' => null,
+            'updater_name' => null,
         ];
     }
 
     // Подмешиваем имена пользователей
     foreach ($groups as &$g) {
-        $g['creator_name'] = $g['user_id']    && isset($usersById[(int)$g['user_id']])    ? ($usersById[(int)$g['user_id']]['name'] ?: $usersById[(int)$g['user_id']]['email'])    : null;
-        $g['updater_name'] = $g['updated_by'] && isset($usersById[(int)$g['updated_by']]) ? ($usersById[(int)$g['updated_by']]['name'] ?: $usersById[(int)$g['updated_by']]['email']) : null;
+        $g['creator_name'] = $g['user_id']    && isset($usersById[(int)$g['user_id']])
+            ? ($usersById[(int)$g['user_id']]['name'] ?: $usersById[(int)$g['user_id']]['email'])
+            : null;
+        $g['updater_name'] = $g['updated_by'] && isset($usersById[(int)$g['updated_by']])
+            ? ($usersById[(int)$g['updated_by']]['name'] ?: $usersById[(int)$g['updated_by']]['email'])
+            : null;
     }
     unset($g);
 }
@@ -152,7 +145,6 @@ $totalPhotos = 0;
 $currentKey = null;
 
 if ($viewMode) {
-    // Данные самой папки
     try {
         $stmt = $pdo->prepare("SELECT * FROM keys WHERE key_type = :kt AND key_value = :kv");
         $stmt->execute([':kt' => $viewKeyType, ':kv' => $viewKeyValue]);
@@ -277,11 +269,11 @@ function formatSize($bytes) {
     </div>
 
     <?php if ($viewMode && $currentKey): ?>
-      <?php if ($currentKey['gos_number'] || $currentKey['order_number']): ?>
+      <?php if (!empty($currentKey['gos_number']) || !empty($currentKey['order_number'])): ?>
         <p class="subtitle">
-          <?php if ($currentKey['gos_number']): ?>🚗 Гос. номер: <b><?= e($currentKey['gos_number']) ?></b><?php endif; ?>
-          <?php if ($currentKey['gos_number'] && $currentKey['order_number']): ?> · <?php endif; ?>
-          <?php if ($currentKey['order_number']): ?>📋 Заказ-наряд: <b><?= e($currentKey['order_number']) ?></b><?php endif; ?>
+          <?php if (!empty($currentKey['gos_number'])): ?>🚗 Гос. номер: <b><?= e($currentKey['gos_number']) ?></b><?php endif; ?>
+          <?php if (!empty($currentKey['gos_number']) && !empty($currentKey['order_number'])): ?> · <?php endif; ?>
+          <?php if (!empty($currentKey['order_number'])): ?>📋 Заказ-наряд: <b><?= e($currentKey['order_number']) ?></b><?php endif; ?>
         </p>
       <?php endif; ?>
     <?php endif; ?>
@@ -398,13 +390,7 @@ function formatSize($bytes) {
                   </div>
                 <?php endif; ?>
 
-                <?php if ($g['updater_name'] && $g['updated_at'] && ($g['updater_name'] !== $g['creator_name'])): ?>
-                  <div class="group-item-meta">
-                    🔄 Изменил:
-                    <?= e($g['updater_name']) ?>,
-                    <?= e(date('d.m.Y H:i', strtotime($g['updated_at']))) ?>
-                  </div>
-                <?php elseif ($g['last_date']): ?>
+                <?php if ($g['last_date']): ?>
                   <div class="group-item-meta">
                     🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?>
                   </div>
