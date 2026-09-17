@@ -323,11 +323,12 @@ foreach ($stmt->fetchAll() as $r) {
                                         WHERE parent_code = :g AND it_is_group = TRUE AND complectation = :c2
                                       ))");
         $stmt->execute([':c' => $complectation, ':c2' => $complectation, ':g' => $gFull]);
-        foreach ($stmt->fetchAll() as $r) {
-            $letter = opCategoryKey($r['operation_code'], $r['name']);
-            $grp = categoryGroupKey($letter);
-            if ($grp !== null) $catCountsInGroup[$grp]++;
-        }
+foreach ($stmt->fetchAll() as $r) {
+    $letter = opCategoryKey($r['operation_code'], $r['name']);
+    foreach (categoryGroupKeys($letter) as $grp) {
+        $catCountsInGroup[$grp]++;
+    }
+}
     }
 }
 
