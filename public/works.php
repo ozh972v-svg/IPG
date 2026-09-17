@@ -533,9 +533,10 @@ function fmtNorm($n) {
     </div>
   </div>
 
-  <?php if ($complectation === null): ?>
-    <div class="card">
-      <h2>Выберите комплектацию</h2>
+      </div>
+
+  <?php else: ?>
+    <div class="layout">
       <div class="step-hint">
         Введите VIN в поле выше, чтобы система нашла комплектацию через 1С:ГОА.
         Или выберите комплектацию вручную из загруженных в базе:
