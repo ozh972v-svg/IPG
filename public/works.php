@@ -20,10 +20,11 @@ if ($vin !== '') {
         $vinError = 'Не настроены ONEC_LOGIN и ONEC_PASSWORD';
     } else {
         // Если ввели короткий номер (до 10 символов) — ищем по номеру шасси.
-// Если длинный (полный VIN) — ищем по VIN шасси.
-$method = (mb_strlen($vin) >= 10) ? 'VINShassis' : 'NumberChassis';
-$url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $method
-     . '?Number=' . urlencode($vin);
+        // Если длинный (полный VIN) — ищем по VIN шасси.
+        $method = (mb_strlen($vin) >= 10) ? 'VINShassis' : 'NumberChassis';
+        $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $method
+             . '?Number=' . urlencode($vin);
+
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -61,7 +62,7 @@ $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $method
     }
 }
 
-/* Ручной выбор комплектации (если VIN не введён) */
+/* Ручной выбор комплектации (если VIN не введён) — на всякий случай оставлено */
 if ($complectation === null && $vin === '') {
     $manual = trim($_GET['complectation'] ?? '');
     if ($manual !== '') $complectation = $manual;
@@ -203,7 +204,7 @@ if (!empty($_GET['find_pair'])) {
 }
 
 /* ============================================================
-   5. СПИСОК КОМПЛЕКТАЦИЙ
+   5. СПИСОК КОМПЛЕКТАЦИЙ (оставлен — может пригодиться)
    ============================================================ */
 $complectations = $pdo->query("
     SELECT complectation,
@@ -308,12 +309,12 @@ if ($complectation !== null) {
     $stmt = $pdo->prepare("SELECT DISTINCT operation_code, name FROM work_operations
                             WHERE it_is_group = FALSE AND deleted = FALSE AND complectation = :c");
     $stmt->execute([':c' => $complectation]);
-foreach ($stmt->fetchAll() as $r) {
-    $letter = opCategoryKey($r['operation_code'], $r['name']);
-    foreach (categoryGroupKeys($letter) as $grp) {
-        $catCountsAll[$grp]++;
+    foreach ($stmt->fetchAll() as $r) {
+        $letter = opCategoryKey($r['operation_code'], $r['name']);
+        foreach (categoryGroupKeys($letter) as $grp) {
+            $catCountsAll[$grp]++;
+        }
     }
-}
 
     if ($groupCode !== '') {
         $gFull = $groupCode . '@' . $complectation;
@@ -325,12 +326,12 @@ foreach ($stmt->fetchAll() as $r) {
                                         WHERE parent_code = :g AND it_is_group = TRUE AND complectation = :c2
                                       ))");
         $stmt->execute([':c' => $complectation, ':c2' => $complectation, ':g' => $gFull]);
-foreach ($stmt->fetchAll() as $r) {
-    $letter = opCategoryKey($r['operation_code'], $r['name']);
-    foreach (categoryGroupKeys($letter) as $grp) {
-        $catCountsInGroup[$grp]++;
-    }
-}
+        foreach ($stmt->fetchAll() as $r) {
+            $letter = opCategoryKey($r['operation_code'], $r['name']);
+            foreach (categoryGroupKeys($letter) as $grp) {
+                $catCountsInGroup[$grp]++;
+            }
+        }
     }
 }
 
@@ -515,7 +516,7 @@ function fmtNorm($n) {
       <form method="get">
         <label for="vinInput">🔍 Поиск по VIN:</label>
         <input type="text" name="vin" id="vinInput" value="<?= e($vin) ?>"
-               placeholder="Введите VIN (17 символов)" maxlength="17" autocomplete="off">
+               placeholder="Введите VIN (17 символов) или последние 7 цифр" autocomplete="off">
         <button type="submit" class="btn">Найти работы</button>
         <?php if ($vin !== '' || $complectation !== null): ?>
           <a href="works.php" class="btn btn-secondary btn-small">Сбросить</a>
@@ -533,28 +534,18 @@ function fmtNorm($n) {
     </div>
   </div>
 
-      </div>
-
-  <?php else: ?>
-    <div class="layout">
+  <?php if ($complectation === null): ?>
+    <div class="card">
+      <h2>🔍 Введите VIN</h2>
       <div class="step-hint">
-        Введите VIN в поле выше, чтобы система нашла комплектацию через 1С:ГОА.
-        Или выберите комплектацию вручную из загруженных в базе:
+        Введите VIN шасси в поле выше, чтобы система нашла комплектацию через 1С:ГОА и показала работы.
+        Можно вводить как полный VIN (17 символов), так и последние 7 цифр номера шасси.
       </div>
-      <div class="cat-grid">
-        <?php foreach ($complectations as $c): ?>
-          <a class="cat-card" href="?complectation=<?= urlencode($c['complectation']) ?>">
-            <div class="cat-head">
-              <div class="cat-letter" style="background:#2563eb;">📦</div>
-              <div class="cat-title"><?= e($c['complectation']) ?></div>
-            </div>
-            <div class="cat-desc">Работ: <b><?= number_format((int)$c['works_cnt'], 0, '.', ' ') ?></b></div>
-          </a>
-        <?php endforeach; ?>
-        <?php if (!$complectations): ?>
-          <div class="empty">В базе ещё нет загруженных комплектаций. Загрузите файл через sync.php.</div>
-        <?php endif; ?>
-      </div>
+      <?php if (!$vin): ?>
+        <p style="color:#888;font-size:14px;margin:0;">
+          Пример: <code>XTC549010M1234567</code> или <code>1234567</code>
+        </p>
+      <?php endif; ?>
     </div>
 
   <?php else: ?>
@@ -757,6 +748,7 @@ function fmtNorm($n) {
 </div>
 
 <div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
+
 <script>
 const BASKET_KEY = 'works_basket_v1';
 let basket = [];
