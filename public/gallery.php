@@ -27,27 +27,83 @@ $viewKeyType = trim($_GET['key_type'] ?? '');
 $viewKeyValue = trim($_GET['key_value'] ?? '');
 $viewMode = $viewKeyType && $viewKeyValue;
 
-// === Данные для главного экрана ===
+/* === Если пришли «+ Добавить» с новыми полями — сохраняем сразу === */
+if (!$viewMode
+    && $_SERVER['REQUEST_METHOD'] === 'GET'
+    && !empty($_GET['key_value'])
+    && !empty($_GET['key_type'])
+    && in_array($_GET['key_type'], ['ra', 'vin'], true)
+) {
+    $newKeyValue = trim($_GET['key_value']);
+    $newGos      = trim($_GET['gos_number'] ?? '');
+    $newOrder    = trim($_GET['order_number'] ?? '');
+
+    if ($newKeyValue !== '') {
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO keys (key_type, key_value, gos_number, order_number, user_id, created_at, updated_by, updated_at)
+                VALUES (:kt, :kv, :gos, :ord, :uid, NOW(), :uid2, NOW())
+                ON CONFLICT (key_type, key_value) DO UPDATE
+                    SET gos_number   = COALESCE(NULLIF(EXCLUDED.gos_number, ''),   keys.gos_number),
+                        order_number = COALESCE(NULLIF(EXCLUDED.order_number, ''), keys.order_number),
+                        updated_by   = EXCLUDED.updated_by,
+                        updated_at   = NOW()
+            ");
+            $stmt->execute([
+                ':kt'   => $_GET['key_type'],
+                ':kv'   => $newKeyValue,
+                ':gos'  => $newGos ?: null,
+                ':ord'  => $newOrder ?: null,
+                ':uid'  => $user['id'],
+                ':uid2' => $user['id'],
+            ]);
+        } catch (Throwable $e) {
+            /* тихо — может, колонок ещё нет, тогда проигнорируем */
+        }
+    }
+
+    header('Location: gallery.php?key_type=' . urlencode($_GET['key_type']) . '&key_value=' . urlencode($newKeyValue));
+    exit;
+}
+
+/* === Данные для главного экрана === */
 $groups = [];
 if (!$viewMode) {
     if ($searchQuery !== '') {
         $stmt = $pdo->prepare("
-            SELECT key_type, key_value FROM keys WHERE key_value ILIKE :q
+            SELECT k.key_type, k.key_value, k.gos_number, k.order_number,
+                   k.user_id, k.created_at, k.updated_by, k.updated_at
+              FROM keys k
+             WHERE k.key_value ILIKE :q
+                OR COALESCE(k.gos_number, '')   ILIKE :q
+                OR COALESCE(k.order_number, '') ILIKE :q
             UNION
-            SELECT DISTINCT key_type, key_value FROM photos WHERE key_value ILIKE :q
-            ORDER BY key_value DESC
+            SELECT DISTINCT p.key_type, p.key_value,
+                   NULL::varchar AS gos_number, NULL::varchar AS order_number,
+                   NULL::integer AS user_id, NULL::timestamp AS created_at,
+                   NULL::integer AS updated_by, NULL::timestamp AS updated_at
+              FROM photos p
+             WHERE p.key_value ILIKE :q
+             ORDER BY key_value DESC
         ");
         $stmt->execute([':q' => '%' . $searchQuery . '%']);
     } else {
         $stmt = $pdo->query("
-            SELECT key_type, key_value FROM keys
+            SELECT k.key_type, k.key_value, k.gos_number, k.order_number,
+                   k.user_id, k.created_at, k.updated_by, k.updated_at
+              FROM keys k
             UNION
-            SELECT DISTINCT key_type, key_value FROM photos
-            ORDER BY key_value DESC
+            SELECT DISTINCT p.key_type, p.key_value,
+                   NULL::varchar AS gos_number, NULL::varchar AS order_number,
+                   NULL::integer AS user_id, NULL::timestamp AS created_at,
+                   NULL::integer AS updated_by, NULL::timestamp AS updated_at
+              FROM photos p
+             ORDER BY key_value DESC
         ");
     }
     $allKeys = $stmt->fetchAll();
 
+    // Счётчики фото
     $stmt = $pdo->query("
         SELECT key_type, key_value, COUNT(*) AS cnt, MAX(created_at) AS last_date
         FROM photos GROUP BY key_type, key_value
@@ -57,22 +113,54 @@ if (!$viewMode) {
         $photoCounts[$row['key_type'] . '::' . $row['key_value']] = $row;
     }
 
+    // Пользователи (для имён авторов)
+    $usersById = [];
+    try {
+        foreach ($pdo->query("SELECT id, name, email FROM users")->fetchAll() as $u) {
+            $usersById[(int)$u['id']] = $u;
+        }
+    } catch (Throwable $e) {}
+
     foreach ($allKeys as $k) {
         $key = $k['key_type'] . '::' . $k['key_value'];
         $row = $photoCounts[$key] ?? null;
         $groups[] = [
-            'key_type' => $k['key_type'],
-            'key_value' => $k['key_value'],
-            'count' => $row ? (int)$row['cnt'] : 0,
-            'last_date' => $row['last_date'] ?? null
+            'key_type'     => $k['key_type'],
+            'key_value'    => $k['key_value'],
+            'gos_number'   => $k['gos_number']   ?? null,
+            'order_number' => $k['order_number'] ?? null,
+            'user_id'      => $k['user_id']      ?? null,
+            'created_at'   => $k['created_at']   ?? null,
+            'updated_by'   => $k['updated_by']   ?? null,
+            'updated_at'   => $k['updated_at']   ?? null,
+            'count'        => $row ? (int)$row['cnt'] : 0,
+            'last_date'    => $row['last_date'] ?? null,
         ];
     }
+
+    // Подмешиваем имена пользователей
+    foreach ($groups as &$g) {
+        $g['creator_name'] = $g['user_id']    && isset($usersById[(int)$g['user_id']])    ? ($usersById[(int)$g['user_id']]['name'] ?: $usersById[(int)$g['user_id']]['email'])    : null;
+        $g['updater_name'] = $g['updated_by'] && isset($usersById[(int)$g['updated_by']]) ? ($usersById[(int)$g['updated_by']]['name'] ?: $usersById[(int)$g['updated_by']]['email']) : null;
+    }
+    unset($g);
 }
 
-// === Данные для экрана внутри РА ===
+/* === Данные для экрана внутри РА === */
 $photos = [];
 $totalPhotos = 0;
+$currentKey = null;
+
 if ($viewMode) {
+    // Данные самой папки
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM keys WHERE key_type = :kt AND key_value = :kv");
+        $stmt->execute([':kt' => $viewKeyType, ':kv' => $viewKeyValue]);
+        $currentKey = $stmt->fetch() ?: null;
+    } catch (Throwable $e) {
+        $currentKey = null;
+    }
+
     $stmt = $pdo->prepare("
         SELECT p.*, u.name AS user_name, u.email AS user_email
         FROM photos p
@@ -131,6 +219,7 @@ function formatSize($bytes) {
   .group-item:hover { border-color: #2563eb; background: #f8faff; }
   .group-item-title { font-weight: 700; font-size: 16px; color: #1e3a8a; }
   .group-item-sub { font-size: 12px; color: #888; margin-top: 4px; }
+  .group-item-meta { font-size: 11px; color: #999; margin-top: 4px; }
   .group-item-count { font-size: 13px; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 12px; font-weight: 600; }
   .group-link { flex: 1; text-decoration: none; color: inherit; }
   .group-actions { display: flex; align-items: center; gap: 8px; }
@@ -165,6 +254,7 @@ function formatSize($bytes) {
   .alert { padding: 12px 16px; border-radius: 10px; font-size: 14px; margin-bottom: 16px; }
   .alert-success { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .alert-error { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
+  .alert-info { background: #eff6ff; color: #2563eb; border-left: 4px solid #2563eb; }
 
   .upload-status { position: fixed; top: 0; left: 0; right: 0; padding: 14px; text-align: center; font-weight: 600; z-index: 9999; color: #fff; }
 
@@ -185,9 +275,21 @@ function formatSize($bytes) {
         <a href="logout.php" class="logout">Выйти</a>
       </div>
     </div>
+
+    <?php if ($viewMode && $currentKey): ?>
+      <?php if ($currentKey['gos_number'] || $currentKey['order_number']): ?>
+        <p class="subtitle">
+          <?php if ($currentKey['gos_number']): ?>🚗 Гос. номер: <b><?= e($currentKey['gos_number']) ?></b><?php endif; ?>
+          <?php if ($currentKey['gos_number'] && $currentKey['order_number']): ?> · <?php endif; ?>
+          <?php if ($currentKey['order_number']): ?>📋 Заказ-наряд: <b><?= e($currentKey['order_number']) ?></b><?php endif; ?>
+        </p>
+      <?php endif; ?>
+    <?php endif; ?>
+
     <?php if (!$viewMode): ?>
       <p class="subtitle">Всего фото: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
     <?php endif; ?>
+
     <div class="btn-row">
       <?php if ($viewMode): ?>
         <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
@@ -242,6 +344,14 @@ function formatSize($bytes) {
           <label>Номер</label>
           <input type="text" name="key_value" required placeholder="Например: 12345">
         </div>
+        <div class="form-row">
+          <label>Гос. номер (необязательно)</label>
+          <input type="text" name="gos_number" placeholder="Например: А123БВ 116">
+        </div>
+        <div class="form-row">
+          <label>Номер заказ-наряда (необязательно)</label>
+          <input type="text" name="order_number" placeholder="Например: ЗН-00456">
+        </div>
         <button type="submit" class="btn btn-green">+ Добавить</button>
       </form>
     </div>
@@ -249,7 +359,7 @@ function formatSize($bytes) {
     <div class="card">
       <h2>🔍 Поиск</h2>
       <form method="get" class="search-bar">
-        <input type="text" name="q" placeholder="Поиск по номеру РА или VIN" value="<?= e($searchQuery) ?>">
+        <input type="text" name="q" placeholder="Поиск по РА, VIN, гос. номеру, заказ-наряду" value="<?= e($searchQuery) ?>">
         <button type="submit" class="btn btn-secondary btn-small">Найти</button>
         <?php if ($searchQuery): ?>
           <a href="gallery.php" class="btn btn-secondary btn-small">Сбросить</a>
@@ -271,9 +381,35 @@ function formatSize($bytes) {
             <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
               <div>
                 <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
-                <?php if ($g['last_date']): ?>
-                  <div class="group-item-sub">Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
+
+                <?php if ($g['gos_number'] || $g['order_number']): ?>
+                  <div class="group-item-sub">
+                    <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
+                    <?php if ($g['gos_number'] && $g['order_number']): ?> · <?php endif; ?>
+                    <?php if ($g['order_number']): ?>📋 ЗН: <?= e($g['order_number']) ?><?php endif; ?>
+                  </div>
                 <?php endif; ?>
+
+                <?php if ($g['creator_name'] || $g['created_at']): ?>
+                  <div class="group-item-meta">
+                    ✏️ Создал:
+                    <?= $g['creator_name'] ? e($g['creator_name']) : '—' ?>
+                    <?php if ($g['created_at']): ?>, <?= e(date('d.m.Y H:i', strtotime($g['created_at']))) ?><?php endif; ?>
+                  </div>
+                <?php endif; ?>
+
+                <?php if ($g['updater_name'] && $g['updated_at'] && ($g['updater_name'] !== $g['creator_name'])): ?>
+                  <div class="group-item-meta">
+                    🔄 Изменил:
+                    <?= e($g['updater_name']) ?>,
+                    <?= e(date('d.m.Y H:i', strtotime($g['updated_at']))) ?>
+                  </div>
+                <?php elseif ($g['last_date']): ?>
+                  <div class="group-item-meta">
+                    🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?>
+                  </div>
+                <?php endif; ?>
+
               </div>
             </a>
             <div class="group-actions">
