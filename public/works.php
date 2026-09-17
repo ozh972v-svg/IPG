@@ -100,16 +100,20 @@ function opCategoryKey(?string $op, ?string $name = null): string {
     return $map[$first] ?? '';
 }
 
-function categoryGroupKey(string $letter): ?string {
+/* Возвращает СПИСОК групп, к которым относится буква.
+   P, C, E попадают сразу в две группы: warranty и commercial. */
+function categoryGroupKeys(string $letter): array {
     static $map = null;
     if ($map === null) {
         global $CATEGORIES;
         $map = [];
         foreach ($CATEGORIES as $grp => $cat) {
-            foreach ($cat['letters'] as $L) $map[$L] = $grp;
+            foreach ($cat['letters'] as $L) {
+                $map[$L][] = $grp;
+            }
         }
     }
-    return $map[$letter] ?? null;
+    return $map[$letter] ?? [];
 }
 
 /* ============================================================
