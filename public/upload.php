@@ -112,9 +112,28 @@ $storagePath = $data['path'] ?? '';
 try {
     $pdo = get_db();
 
+        // Гос. номер и номер заказ-наряда (приходят из формы)
+    $gosNumber   = trim($_POST['gos_number'] ?? '');
+    $orderNumber = trim($_POST['order_number'] ?? '');
+
     // Ключ (РА/VIN) в таблицу keys
-    $stmt = $pdo->prepare("INSERT INTO keys (key_type, key_value) VALUES (:kt, :kv) ON CONFLICT (key_type, key_value) DO NOTHING");
-    $stmt->execute([':kt' => $keyType, ':kv' => $keyValue]);
+    $stmt = $pdo->prepare("
+        INSERT INTO keys (key_type, key_value, gos_number, order_number, user_id, created_at, updated_by, updated_at)
+        VALUES (:kt, :kv, :gos, :ord, :uid, NOW(), :uid2, NOW())
+        ON CONFLICT (key_type, key_value) DO UPDATE
+            SET gos_number   = COALESCE(NULLIF(EXCLUDED.gos_number, ''),   keys.gos_number),
+                order_number = COALESCE(NULLIF(EXCLUDED.order_number, ''), keys.order_number),
+                updated_by   = EXCLUDED.updated_by,
+                updated_at   = NOW()
+    ");
+    $stmt->execute([
+        ':kt'  => $keyType,
+        ':kv'  => $keyValue,
+        ':gos' => $gosNumber ?: null,
+        ':ord' => $orderNumber ?: null,
+        ':uid' => $user['id'],
+        ':uid2'=> $user['id'],
+    ]);
 
     // Фото
     $stmt = $pdo->prepare('
