@@ -306,11 +306,12 @@ if ($complectation !== null) {
     $stmt = $pdo->prepare("SELECT DISTINCT operation_code, name FROM work_operations
                             WHERE it_is_group = FALSE AND deleted = FALSE AND complectation = :c");
     $stmt->execute([':c' => $complectation]);
-    foreach ($stmt->fetchAll() as $r) {
-        $letter = opCategoryKey($r['operation_code'], $r['name']);
-        $grp = categoryGroupKey($letter);
-        if ($grp !== null) $catCountsAll[$grp]++;
+foreach ($stmt->fetchAll() as $r) {
+    $letter = opCategoryKey($r['operation_code'], $r['name']);
+    foreach (categoryGroupKeys($letter) as $grp) {
+        $catCountsAll[$grp]++;
     }
+}
 
     if ($groupCode !== '') {
         $gFull = $groupCode . '@' . $complectation;
