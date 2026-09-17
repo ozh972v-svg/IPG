@@ -19,9 +19,11 @@ if ($vin !== '') {
     if (!$login || !$password) {
         $vinError = 'Не настроены ONEC_LOGIN и ONEC_PASSWORD';
     } else {
-        $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/VINShassis'
-             . '?Number=' . urlencode($vin);
-
+        // Если ввели короткий номер (до 10 символов) — ищем по номеру шасси.
+// Если длинный (полный VIN) — ищем по VIN шасси.
+$method = (mb_strlen($vin) >= 10) ? 'VINShassis' : 'NumberChassis';
+$url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $method
+     . '?Number=' . urlencode($vin);
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
