@@ -15,45 +15,64 @@ $done = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name'])) {
     $tmp = $_FILES['csv']['tmp_name'];
-    $fh = fopen($tmp, 'r');
-    if (!$fh) {
-        $messages[] = '❌ Не удалось открыть загруженный файл.';
+    $raw = file_get_contents($tmp);
+
+    if ($raw === false || $raw === '') {
+        $messages[] = '❌ Не удалось прочитать загруженный файл.';
     } else {
+        // Убираем BOM
+        $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
+
+        // Определяем разделитель по первой строке
+        $firstLine = strtok($raw, "\r\n");
+        $countSemi = substr_count($firstLine, ';');
+        $countComma = substr_count($firstLine, ',');
+        $countTab = substr_count($firstLine, "\t");
+
+        if ($countSemi >= $countComma && $countSemi >= $countTab) {
+            $delim = ';';
+        } elseif ($countTab >= $countComma) {
+            $delim = "\t";
+        } else {
+            $delim = ',';
+        }
+
+        $messages[] = "Разделитель определён: '" . ($delim === "\t" ? 'TAB' : $delim) . "'";
+
+        // Читаем через временный поток
+        $fh = fopen('php://memory', 'r+');
+        fwrite($fh, $raw);
+        rewind($fh);
+
         $db = get_db();
 
-        // Читаем первую строку — заголовки
-        $header = fgetcsv($fh, 0, ',');
-        // Нормализуем BOM и пробелы
+        $header = fgetcsv($fh, 0, $delim);
         if ($header) {
-            $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', $header[0]);
             $header = array_map('trim', $header);
         }
 
-        // Ожидаемые колонки
         $colIdx = [
-            'узел'               => array_search('Узел', $header),
-            'код'                => array_search('Код', $header),
-            'наименование'       => array_search('Наименование', $header),
-            'нормочас'           => array_search('Нормочас', $header),
-            'макс_нормочас'      => array_search('Макс. нормочас', $header),
-            'применимость'       => array_search('Применимость шасси', $header),
+            'узел'          => array_search('Узел', $header),
+            'код'           => array_search('Код', $header),
+            'наименование'  => array_search('Наименование', $header),
+            'нормочас'      => array_search('Нормочас', $header),
+            'макс_нормочас' => array_search('Макс. нормочас', $header),
+            'применимость'  => array_search('Применимость шасси', $header),
         ];
 
         if (in_array(false, $colIdx, true)) {
-            $messages[] = '❌ Не найдены нужные колонки. Ожидаются: Узел, Код, Наименование, Нормочас, Макс. нормочас, Применимость шасси.';
+            $messages[] = '❌ Не найдены нужные колонки.';
             $messages[] = 'Найдены: ' . implode(' | ', $header);
         } else {
-            // Считаем все строки
             $rows = [];
-            while (($r = fgetcsv($fh, 0, ',')) !== false) {
+            while (($r = fgetcsv($fh, 0, $delim)) !== false) {
                 if (count($r) < 6) continue;
                 $rows[] = $r;
             }
 
             $messages[] = 'Прочитано строк: ' . count($rows);
 
-            // Накапливаем данные по шасси
-            $byChassis = []; // chassis => [ [code, parent, group?, name, norm], ... ]
+            $byChassis = [];
 
             foreach ($rows as $r) {
                 $uzel    = trim($r[$colIdx['узел']] ?? '');
@@ -65,25 +84,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
 
                 if ($code === '' || $chassis === '') continue;
 
-                // Нормочас
                 $normRaw = str_replace(',', '.', $normRaw);
                 $maxRaw  = str_replace(',', '.', $maxRaw);
                 $normVal = is_numeric($normRaw) ? (float)$normRaw : null;
                 $maxVal  = is_numeric($maxRaw)  ? (float)$maxRaw  : null;
 
-                // Если основной нормочас 0, но есть Макс — используем его
                 if (($normVal === null || $normVal == 0.0) && $maxVal !== null && $maxVal > 0) {
                     $normVal = $maxVal;
                 }
 
-                // Разбиваем применимость по запятой/точке с запятой
                 $chassisList = preg_split('/\s*[,;]\s*/', $chassis);
                 $chassisList = array_filter(array_map('trim', $chassisList));
 
                 foreach ($chassisList as $ch) {
                     if (!isset($byChassis[$ch])) $byChassis[$ch] = [];
 
-                    // Группа верхнего уровня — по «Узел»
                     $groupCode = 'UZEL_' . preg_replace('/\s+/u', '_', $uzel) . '@' . $ch;
 
                     $byChassis[$ch][] = [
@@ -98,7 +113,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
 
             $messages[] = 'Шасси найдено: ' . implode(', ', array_keys($byChassis));
 
-            // Записываем в базу
             $db->beginTransaction();
             try {
                 $delStmt = $db->prepare("DELETE FROM work_operations WHERE brand = 'COMPASS' AND complectation = :c");
@@ -118,10 +132,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
                 foreach ($byChassis as $ch => $items) {
                     $model = 'KOMPAS_' . $ch;
 
-                    // Удаляем старые записи по этому шасси
                     $delStmt->execute([':c' => $ch]);
 
-                    // Вставляем группы (уникальные)
                     $seenGroups = [];
                     foreach ($items as $it) {
                         if (!isset($seenGroups[$it['group_code']])) {
@@ -135,7 +147,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
                         }
                     }
 
-                    // Вставляем работы
                     foreach ($items as $it) {
                         $insWork->execute([
                             ':code'   => $it['op_code'] . '@' . $ch,
@@ -225,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
 <main>
     <a class="back" href="works_brand.php">← К выбору марки</a>
     <h2>Загрузка справочника работ КОМПАС</h2>
-    <p class="lead">Загрузите CSV-файл, сохранённый из Excel в кодировке UTF-8. Данные по каждому шасси перезаписываются целиком.</p>
+    <p class="lead">Загрузите CSV-файл, сохранённый из Excel. Данные по каждому шасси перезаписываются целиком.</p>
 
     <div class="card">
         <form method="post" enctype="multipart/form-data">
