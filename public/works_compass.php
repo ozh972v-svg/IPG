@@ -3,7 +3,6 @@ require_once __DIR__ . '/db.php';
 start_session();
 $user = current_user();
 
-// Соответствие: модель → шасси
 $models = [
     '5'  => ['chassis' => '43085', 'name' => 'Компас 5'],
     '6'  => ['chassis' => '43086', 'name' => 'Компас 6'],
@@ -15,11 +14,8 @@ $modelKey = isset($_GET['model']) && isset($models[$_GET['model']]) ? $_GET['mod
 $chassis  = $models[$modelKey]['chassis'];
 
 $db = get_db();
-
-// Поиск
 $search = trim($_GET['q'] ?? '');
 
-// Список групп (узлов) для выбранного шасси
 $sqlGroups = "SELECT code, name FROM work_operations
               WHERE brand = 'COMPASS' AND complectation = :ch AND it_is_group = TRUE
               ORDER BY name";
@@ -27,10 +23,8 @@ $st = $db->prepare($sqlGroups);
 $st->execute([':ch' => $chassis]);
 $groups = $st->fetchAll(PDO::FETCH_ASSOC);
 
-// Выбранная группа
 $group = $_GET['group'] ?? ($groups[0]['code'] ?? null);
 
-// Работы выбранной группы (или результаты поиска)
 if ($search !== '') {
     $sqlWorks = "SELECT code, operation_code, name, norm_time
                  FROM work_operations
@@ -54,11 +48,12 @@ if ($search !== '') {
     $works = [];
 }
 
-// Имя выбранной группы для заголовка
 $groupName = '';
 foreach ($groups as $g) {
     if ($g['code'] === $group) { $groupName = $g['name']; break; }
 }
+
+$modelName = $models[$modelKey]['name'];
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -87,39 +82,59 @@ foreach ($groups as $g) {
     }
     .topbar .user a { color: #2563eb; text-decoration: none; }
 
-    .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 24px;
-    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
 
     .back {
         display: inline-block; margin-bottom: 16px;
         color: #2563eb; text-decoration: none; font-size: 14px;
     }
 
+    /* Кнопки моделей — активная ярко выделяется */
     .model-bar {
-        display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+        display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;
     }
     .model-bar a {
-        padding: 10px 18px;
+        padding: 12px 22px;
         background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
         text-decoration: none;
-        color: #1f2937;
+        color: #6b7280;
         font-weight: 500;
         font-size: 15px;
         transition: all .12s;
+        position: relative;
     }
-    .model-bar a:hover { border-color: #cbd5e1; }
+    .model-bar a:hover {
+        border-color: #93c5fd;
+        background: #f0f7ff;
+        color: #1d4ed8;
+    }
     .model-bar a.active {
-        background: #2563eb; border-color: #2563eb; color: #fff;
+        background: #2563eb;
+        border-color: #1d4ed8;
+        color: #fff;
+        font-weight: 700;
+        box-shadow: 0 6px 16px rgba(37,99,235,.35);
+        transform: translateY(-1px);
+    }
+    .model-bar a.active::before {
+        content: "✓ ";
+        font-weight: 900;
+    }
+    .model-bar a.active::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: -8px;
+        transform: translateX(-50%);
+        width: 0; height: 0;
+        border-left: 7px solid transparent;
+        border-right: 7px solid transparent;
+        border-top: 8px solid #2563eb;
     }
 
-    .search-box {
-        margin-bottom: 20px;
-    }
+    .search-box { margin-bottom: 20px; }
     .search-box input {
         width: 100%;
         padding: 12px 16px;
@@ -137,9 +152,7 @@ foreach ($groups as $g) {
         gap: 20px;
         align-items: start;
     }
-    @media (max-width: 800px) {
-        .layout { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
 
     .sidebar, .content {
         background: #fff;
@@ -148,11 +161,7 @@ foreach ($groups as $g) {
         padding: 8px;
         box-shadow: 0 1px 2px rgba(0,0,0,.03);
     }
-
-    .sidebar {
-        max-height: 75vh;
-        overflow-y: auto;
-    }
+    .sidebar { max-height: 75vh; overflow-y: auto; }
     .sidebar a {
         display: block;
         padding: 10px 14px;
@@ -164,27 +173,28 @@ foreach ($groups as $g) {
     }
     .sidebar a:hover { background: #f3f4f6; }
     .sidebar a.active {
-        background: #dbeafe;
-        color: #1d4ed8;
-        font-weight: 600;
+        background: #dbeafe; color: #1d4ed8; font-weight: 600;
     }
 
-    .content {
-        padding: 20px 24px;
-        min-height: 300px;
-    }
+    .content { padding: 20px 24px; min-height: 300px; }
     .content h2 {
         margin: 0 0 4px; font-size: 18px; font-weight: 600;
     }
-    .content .count {
-        color: #6b7280; font-size: 13px; margin: 0 0 16px;
+    .content .model-tag {
+        display: inline-block;
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 20px;
+        margin-left: 8px;
+        vertical-align: middle;
+        letter-spacing: .02em;
     }
+    .content .count { color: #6b7280; font-size: 13px; margin: 8px 0 16px; }
 
-    table.works {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 14px;
-    }
+    table.works { width: 100%; border-collapse: collapse; font-size: 14px; }
     table.works th, table.works td {
         padding: 10px 8px;
         border-bottom: 1px solid #f1f5f9;
@@ -192,30 +202,19 @@ foreach ($groups as $g) {
         vertical-align: top;
     }
     table.works th {
-        font-weight: 600;
-        color: #6b7280;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: .03em;
+        font-weight: 600; color: #6b7280; font-size: 12px;
+        text-transform: uppercase; letter-spacing: .03em;
     }
     table.works tr:hover td { background: #f9fafb; }
     table.works .code {
         font-family: ui-monospace, Menlo, monospace;
-        color: #4b5563;
-        white-space: nowrap;
-        font-size: 13px;
+        color: #4b5563; white-space: nowrap; font-size: 13px;
     }
     table.works .norm {
-        white-space: nowrap;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-        font-weight: 600;
+        white-space: nowrap; text-align: right;
+        font-variant-numeric: tabular-nums; font-weight: 600;
     }
-    .empty {
-        color: #9ca3af;
-        padding: 40px 0;
-        text-align: center;
-    }
+    .empty { color: #9ca3af; padding: 40px 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -267,13 +266,19 @@ foreach ($groups as $g) {
 
         <section class="content">
             <?php if ($search !== ''): ?>
-                <h2>Результаты поиска: «<?= e($search) ?>»</h2>
+                <h2>
+                    Результаты поиска: «<?= e($search) ?>»
+                    <span class="model-tag"><?= e($modelName) ?></span>
+                </h2>
                 <p class="count">Найдено: <?= count($works) ?></p>
             <?php elseif ($group): ?>
-                <h2><?= e($groupName) ?></h2>
+                <h2>
+                    <?= e($groupName) ?>
+                    <span class="model-tag"><?= e($modelName) ?></span>
+                </h2>
                 <p class="count">Работ в группе: <?= count($works) ?></p>
             <?php else: ?>
-                <h2>Работы</h2>
+                <h2>Работы <span class="model-tag"><?= e($modelName) ?></span></h2>
                 <p class="count">Выберите группу слева.</p>
             <?php endif; ?>
 
