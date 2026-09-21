@@ -688,7 +688,57 @@ if ($viewMode) {
     <button type="button" class="btn btn-cancel" onclick="finishUpload()">Пропустить</button>
   </div>
 </div>
+<!-- Модальное окно: PDF-редактор -->
+<div class="modal-backdrop" id="pdfEditorModal" style="align-items:flex-start; padding:0;">
+  <div style="background:#fff; width:100%; height:100%; max-width:none; border-radius:0; display:flex; flex-direction:column; overflow:hidden;">
 
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1.5px solid #e5e7eb; flex-shrink:0;">
+      <h3 style="margin:0; font-size:17px;">✏️ PDF-редактор</h3>
+      <button type="button" class="btn btn-secondary btn-small" onclick="closePdfEditor()">✕ Закрыть</button>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:16px; background:#f9fafb;">
+      <p style="color:#666; font-size:13px; margin:0 0 12px;">
+        Фото из этого <?= e($keyLabel) ?> уже подгружены. Перетаскивайте, чтобы поменять порядок.
+        Убирайте лишние тапом на ✕. Потом нажмите <b>«Собрать PDF»</b>.
+      </p>
+
+      <div id="pdfPagesGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:10px;"></div>
+
+      <div style="margin-top:16px; padding:14px; background:#fff; border-radius:10px; border:1.5px dashed #cbd5e1; text-align:center;">
+        <input type="file" id="pdfAppendInput" accept="application/pdf" multiple style="display:none;">
+        <button type="button" class="btn btn-secondary btn-small" onclick="document.getElementById('pdfAppendInput').click()">+ Добавить PDF-файл</button>
+        <div id="pdfAppendList" style="margin-top:10px; font-size:13px; color:#555;"></div>
+      </div>
+    </div>
+
+    <div style="padding:12px 16px; border-top:1.5px solid #e5e7eb; display:flex; gap:10px; flex-wrap:wrap; align-items:center; flex-shrink:0; background:#fff;">
+      <button type="button" class="btn btn-green btn-small" onclick="buildPdf()">📄 Собрать PDF</button>
+      <span id="pdfStatus" style="font-size:13px; color:#666;"></span>
+    </div>
+  </div>
+</div>
+
+<!-- pdf-lib для сборки PDF -->
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+<?php if ($viewMode): ?>
+<script>
+// Передаём список фото из PHP в JS
+window.IPG_PHOTOS = <?= json_encode(array_values(array_map(function($p) use ($PHOTO_TYPES) {
+    return [
+        'id'         => (int)$p['id'],
+        'path'       => $p['file_path'],
+        'type'       => $p['photo_type'],
+        'type_label' => $PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type'],
+        'comment'    => $p['comment'] ?? '',
+        'is_video'   => (strpos((string)($p['mime_type'] ?? ''), 'video/') === 0),
+    ];
+}, $photos)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+window.IPG_KEY_LABEL = <?= json_encode($keyLabel) ?>;
+window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
+</script>
+<?php endif; ?>
 <script>
 <?php if ($viewMode): ?>
 (function() {
