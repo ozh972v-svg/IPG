@@ -9,15 +9,19 @@ if (!$user) {
 }
 
 $PHOTO_TYPES = [
-    'general' => 'Общий вид автотехники',
-    'vin' => 'VIN / Номер шасси',
-    'odometer' => 'Одометр / Моточасы',
-    'before_dismount' => 'Дефект до демонтажа',
-    'after_dismount' => 'Дефект после демонтажа',
-    'marking' => 'Маркировка изделия',
-    'manifestation' => 'Проявление дефекта',
-    'numbered_unit' => 'Номерной агрегат'
+    'general'          => 'Общий вид автотехники',
+    'vin'              => 'VIN / Номер шасси',
+    'odometer'         => 'Одометр / Моточасы',
+    'before_dismount'  => 'Дефект до демонтажа',
+    'after_dismount'   => 'Дефект после демонтажа',
+    'marking'          => 'Маркировка изделия',
+    'manifestation'    => 'Проявление дефекта',
+    'numbered_unit'    => 'Номерной агрегат',
+    'other'            => 'Прочие фотографии',
+    'video_defect'     => 'Видео дефекта',
 ];
+
+$VIDEO_TYPES = ['video_defect'];
 
 $pdo = get_db();
 
@@ -60,9 +64,7 @@ if (!$viewMode
                 ':uid'   => $user['id'],
                 ':uid2'  => $user['id'],
             ]);
-        } catch (Throwable $e) {
-            /* тихо */
-        }
+        } catch (Throwable $e) {}
     }
 
     header('Location: gallery.php?key_type=' . urlencode($_GET['key_type']) . '&key_value=' . urlencode($newKeyValue));
@@ -94,7 +96,6 @@ if (!$viewMode) {
     }
     $allKeys = $stmt->fetchAll();
 
-    // Счётчики фото и дата последнего фото
     $stmt = $pdo->query("
         SELECT key_type, key_value, COUNT(*) AS cnt, MAX(created_at) AS last_date
         FROM photos GROUP BY key_type, key_value
@@ -104,7 +105,6 @@ if (!$viewMode) {
         $photoCounts[$row['key_type'] . '::' . $row['key_value']] = $row;
     }
 
-    // Превью: по одной последней фотографии типов general и before_dismount на каждую запись
     $thumbs = [];
     try {
         $stmt = $pdo->query("
@@ -119,7 +119,6 @@ if (!$viewMode) {
         }
     } catch (Throwable $e) {}
 
-    // Пользователи (для имён авторов)
     $usersById = [];
     try {
         foreach ($pdo->query("SELECT id, name, email FROM users")->fetchAll() as $u) {
@@ -149,7 +148,6 @@ if (!$viewMode) {
         ];
     }
 
-    // Подмешиваем имена пользователей
     foreach ($groups as &$g) {
         $g['creator_name'] = $g['user_id']    && isset($usersById[(int)$g['user_id']])
             ? ($usersById[(int)$g['user_id']]['name'] ?: $usersById[(int)$g['user_id']]['email'])
@@ -165,6 +163,7 @@ if (!$viewMode) {
 $photos = [];
 $totalPhotos = 0;
 $currentKey = null;
+$photosByType = [];
 
 if ($viewMode) {
     try {
@@ -185,6 +184,10 @@ if ($viewMode) {
     $stmt->execute([':kt' => $viewKeyType, ':kv' => $viewKeyValue]);
     $photos = $stmt->fetchAll();
     $totalPhotos = count($photos);
+
+    foreach ($photos as $p) {
+        $photosByType[$p['photo_type']] = true;
+    }
 }
 
 $stmt = $pdo->query("SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size),0) AS total_size FROM photos");
@@ -195,7 +198,11 @@ $allPhotosSize = (int)$summary['total_size'];
 function formatSize($bytes) {
     if ($bytes < 1024) return $bytes . ' Б';
     if ($bytes < 1048576) return round($bytes / 1024, 1) . ' КБ';
-    return round($bytes / 1048576, 1) . ' МБ';
+    if ($bytes < 1073741824) return round($bytes / 1048576, 1) . ' МБ';
+    return round($bytes / 1073741824, 2) . ' ГБ';
+}
+function isVideoMime(?string $mime): bool {
+    return $mime !== null && strpos($mime, 'video/') === 0;
 }
 ?>
 <!DOCTYPE html>
@@ -247,29 +254,19 @@ function formatSize($bytes) {
   }
   .group-main { flex: 1; min-width: 0; }
   .group-item-title { font-weight: 700; font-size: 16px; color: #1e3a8a; }
-  .group-item-desc {
-    font-size: 13px; color: #1a1a1a; margin-top: 4px;
-    font-weight: 500;
-  }
+  .group-item-desc { font-size: 13px; color: #1a1a1a; margin-top: 4px; font-weight: 500; }
   .group-item-sub { font-size: 12px; color: #888; margin-top: 4px; }
   .group-item-meta { font-size: 11px; color: #999; margin-top: 4px; }
 
   .group-thumbs { display: flex; gap: 6px; flex-shrink: 0; }
-  .group-thumb {
-    width: 64px; height: 64px; border-radius: 8px;
-    border: 1.5px solid #e5e7eb; background: #f9fafb;
-    object-fit: cover; display: block;
-  }
+  .group-thumb { width: 64px; height: 64px; border-radius: 8px; border: 1.5px solid #e5e7eb; background: #f9fafb; object-fit: cover; display: block; }
   .group-thumb-empty {
     width: 64px; height: 64px; border-radius: 8px;
     border: 1.5px dashed #e5e7eb; background: #fafafa;
     display: flex; align-items: center; justify-content: center;
     color: #cbd5e1; font-size: 20px;
   }
-  .group-thumb-label {
-    display: block; font-size: 9px; color: #999;
-    text-align: center; margin-top: 2px;
-  }
+  .group-thumb-label { display: block; font-size: 9px; color: #999; text-align: center; margin-top: 2px; }
 
   .group-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .group-item-count { font-size: 13px; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 12px; font-weight: 600; }
@@ -280,16 +277,81 @@ function formatSize($bytes) {
   .search-bar input { flex: 1; min-width: 200px; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 15px; }
   .search-bar input:focus { outline: none; border-color: #2563eb; }
 
-  .type-selector { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 12px; }
-  .type-option { padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 13px; cursor: pointer; background: #fff; text-align: center; transition: all 0.15s; user-select: none; }
+  /* === Плитки типов фото === */
+  .type-selector {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .type-option {
+    padding: 12px 14px;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    background: #fff;
+    text-align: center;
+    transition: all 0.15s;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 46px;
+    font-weight: 500;
+    color: #444;
+    position: relative;
+  }
   .type-option:hover { border-color: #2563eb; }
-  .type-option.selected { border-color: #2563eb; background: #eff6ff; color: #2563eb; font-weight: 600; }
 
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  /* Красная — фоток этого типа нет */
+  .type-option.is-empty {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #991b1b;
+  }
+  .type-option.is-empty::before {
+    content: '●';
+    color: #dc2626;
+    font-size: 10px;
+    position: absolute;
+    top: 6px; right: 8px;
+  }
+
+  /* Зелёная — уже есть фото этого типа */
+  .type-option.has-photos {
+    border-color: #86efac;
+    background: #f0fdf4;
+    color: #166534;
+    font-weight: 600;
+  }
+  .type-option.has-photos::before {
+    content: '✓';
+    color: #16a34a;
+    font-size: 14px;
+    font-weight: 800;
+    position: absolute;
+    top: 4px; right: 8px;
+  }
+
+  /* Видео-плитка — с иконкой */
+  .type-option[data-type="video_defect"] {
+    border-left: 4px solid #7c3aed;
+  }
+  .type-option[data-type="video_defect"].is-empty { border-left-color: #dc2626; }
+  .type-option[data-type="video_defect"].has-photos { border-left-color: #16a34a; }
+
+  /* === Сетка фото/видео === */
+  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .photo-card { background: #f9fafb; border-radius: 10px; overflow: hidden; border: 1.5px solid #e5e7eb; position: relative; }
-  .photo-card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #e5e7eb; cursor: pointer; }
+  .photo-card img, .photo-card video {
+    width: 100%; height: 160px; object-fit: cover; display: block;
+    background: #e5e7eb; cursor: pointer;
+  }
   .photo-meta { padding: 10px; font-size: 11px; color: #666; }
   .photo-type { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #eff6ff; color: #2563eb; font-weight: 600; font-size: 11px; margin-bottom: 4px; }
+  .photo-type.is-video { background: #ede9fe; color: #6d28d9; }
   .photo-user { font-size: 11px; color: #888; margin-top: 4px; }
   .photo-actions { display: flex; gap: 4px; margin-top: 8px; }
   .photo-actions a { flex: 1; padding: 5px 8px; border-radius: 6px; font-size: 11px; text-align: center; text-decoration: none; font-weight: 600; }
@@ -310,8 +372,8 @@ function formatSize($bytes) {
 
   @media (max-width: 700px) {
     .group-thumbs { display: none; }
-    .photo-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
-    .photo-card img { height: 120px; }
+    .photo-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    .photo-card img, .photo-card video { height: 130px; }
   }
 </style>
 </head>
@@ -341,7 +403,7 @@ function formatSize($bytes) {
     <?php endif; ?>
 
     <?php if (!$viewMode): ?>
-      <p class="subtitle">Всего фото: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
+      <p class="subtitle">Всего файлов: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
     <?php endif; ?>
 
     <div class="btn-row">
@@ -350,7 +412,7 @@ function formatSize($bytes) {
         <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
         <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?></a>
         <?php if ($totalPhotos > 0): ?>
-          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> фото по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все фото</a>
+          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
           <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
             <input type="hidden" name="key_type" value="<?= e($viewKeyType) ?>">
             <input type="hidden" name="key_value" value="<?= e($viewKeyValue) ?>">
@@ -363,19 +425,19 @@ function formatSize($bytes) {
   </div>
 
   <?php if (isset($_GET['uploaded'])): ?>
-    <div class="alert alert-success">✅ Фото успешно загружено</div>
+    <div class="alert alert-success">✅ Файл успешно загружен</div>
   <?php endif; ?>
   <?php if (isset($_GET['deleted'])): ?>
-    <div class="alert alert-success">🗑️ Фото удалено</div>
+    <div class="alert alert-success">🗑️ Файл удалён</div>
   <?php endif; ?>
   <?php if (isset($_GET['deleted_all_photos'])): ?>
-    <div class="alert alert-success">🗑️ Все фото по <?= e($_GET['deleted_all_photos'] === 'ra' ? 'РА' : 'VIN') ?> удалены</div>
+    <div class="alert alert-success">🗑️ Все файлы по <?= e($_GET['deleted_all_photos'] === 'ra' ? 'РА' : 'VIN') ?> удалены</div>
   <?php endif; ?>
   <?php if (isset($_GET['deleted_all_key'])): ?>
-    <div class="alert alert-success">🗑️ Запись и все её фото удалены</div>
+    <div class="alert alert-success">🗑️ Запись и все её файлы удалены</div>
   <?php endif; ?>
   <?php if (isset($_GET['edited'])): ?>
-    <div class="alert alert-success">✏️ Фото отредактировано</div>
+    <div class="alert alert-success">✏️ Изменения сохранены</div>
   <?php endif; ?>
   <?php if (isset($_GET['error'])): ?>
     <div class="alert alert-error">❌ Ошибка: <?= e($_GET['error']) ?></div>
@@ -439,11 +501,9 @@ function formatSize($bytes) {
             <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
               <div class="group-main">
                 <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
-
                 <?php if (!empty($g['description'])): ?>
                   <div class="group-item-desc">📝 <?= e($g['description']) ?></div>
                 <?php endif; ?>
-
                 <?php if ($g['gos_number'] || $g['order_number']): ?>
                   <div class="group-item-sub">
                     <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
@@ -451,7 +511,6 @@ function formatSize($bytes) {
                     <?php if ($g['order_number']): ?>📋 ЗН: <?= e($g['order_number']) ?><?php endif; ?>
                   </div>
                 <?php endif; ?>
-
                 <?php if ($g['creator_name'] || $g['created_at']): ?>
                   <div class="group-item-meta">
                     ✏️ Создал:
@@ -459,11 +518,8 @@ function formatSize($bytes) {
                     <?php if ($g['created_at']): ?>, <?= e(date('d.m.Y H:i', strtotime($g['created_at']))) ?><?php endif; ?>
                   </div>
                 <?php endif; ?>
-
                 <?php if ($g['last_date']): ?>
-                  <div class="group-item-meta">
-                    🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?>
-                  </div>
+                  <div class="group-item-meta">🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
                 <?php endif; ?>
               </div>
 
@@ -487,9 +543,9 @@ function formatSize($bytes) {
               </div>
             </a>
             <div class="group-actions">
-              <div class="group-item-count"><?= (int)$g['count'] ?> 📷</div>
-              <a href="#" class="group-del-btn" title="Удалить весь РА и все фото"
-                 onclick="if(confirm('Удалить <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?> и ВСЕ его фото?')){document.getElementById('<?= $delId ?>').submit();}return false;">🗑️</a>
+              <div class="group-item-count"><?= (int)$g['count'] ?> 📁</div>
+              <a href="#" class="group-del-btn" title="Удалить весь РА и все файлы"
+                 onclick="if(confirm('Удалить <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?> и ВСЕ его файлы?')){document.getElementById('<?= $delId ?>').submit();}return false;">🗑️</a>
               <form id="<?= $delId ?>" method="post" action="delete_all.php" style="display:none;">
                 <input type="hidden" name="key_type" value="<?= e($g['key_type']) ?>">
                 <input type="hidden" name="key_value" value="<?= e($g['key_value']) ?>">
@@ -505,17 +561,23 @@ function formatSize($bytes) {
     <!-- ЭКРАН 2: Внутри РА -->
 
     <div class="card">
-      <h2>Загрузить фото</h2>
+      <h2>Загрузить фото / видео</h2>
+      <div class="step-hint" style="font-size:13px;color:#666;margin-bottom:12px;padding:8px 12px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb;">
+        <b>Красные</b> плитки — по этому типу ещё ничего нет. <b>Зелёные</b> — уже загружено.
+        Нажми на плитку, чтобы снять или записать.
+      </div>
       <div class="form-row">
-        <label>Тип фото — тапни, чтобы снять</label>
+        <label>Тип файла</label>
         <div class="type-selector" id="typeSelector">
           <?php foreach ($PHOTO_TYPES as $id => $name): ?>
-            <div class="type-option" data-type="<?= e($id) ?>">
+            <?php $has = !empty($photosByType[$id]); ?>
+            <div class="type-option <?= $has ? 'has-photos' : 'is-empty' ?>" data-type="<?= e($id) ?>">
               <?= e($name) ?>
             </div>
           <?php endforeach; ?>
         </div>
         <input type="file" id="hiddenCamera" accept="image/*" capture="environment" style="display:none;">
+        <input type="file" id="hiddenVideo"  accept="video/*" capture="environment" style="display:none;">
       </div>
       <div class="form-row">
         <label>Комментарий (необязательно)</label>
@@ -524,34 +586,46 @@ function formatSize($bytes) {
     </div>
 
     <div class="card">
-      <h2>Фото (<?= $totalPhotos ?>)</h2>
+      <h2>Фото и видео (<?= $totalPhotos ?>)</h2>
       <?php if (empty($photos)): ?>
         <div class="empty-state">
           <div class="big">📷</div>
-          <div>Пока нет фото</div>
-          <div style="margin-top:6px;">Тапните по типу фото выше</div>
+          <div>Пока ничего нет</div>
+          <div style="margin-top:6px;">Тапните по типу файла выше</div>
         </div>
       <?php else: ?>
         <div class="photo-grid">
           <?php foreach ($photos as $p): ?>
-            <?php $canEdit = ((int)$p['user_id'] === (int)$user['id']) || $user['is_admin']; ?>
+            <?php
+              $canEdit  = ((int)$p['user_id'] === (int)$user['id']) || $user['is_admin'];
+              $isVideo  = isVideoMime($p['mime_type'] ?? null);
+            ?>
             <div class="photo-card">
-              <a href="<?= e($p['file_path']) ?>" target="_blank">
-                <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
-              </a>
+              <?php if ($isVideo): ?>
+                <video src="<?= e($p['file_path']) ?>" controls preload="metadata"></video>
+              <?php else: ?>
+                <a href="<?= e($p['file_path']) ?>" target="_blank">
+                  <img src="<?= e($p['file_path']) ?>" alt="<?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>" loading="lazy">
+                </a>
+              <?php endif; ?>
               <div class="photo-meta">
-                <div class="photo-type"><?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?></div>
+                <div class="photo-type <?= $isVideo ? 'is-video' : '' ?>">
+                  <?= $isVideo ? '🎥' : '🖼' ?>
+                  <?= e($PHOTO_TYPES[$p['photo_type']] ?? $p['photo_type']) ?>
+                </div>
                 <?php if ($p['comment']): ?>
                   <div style="margin-top:4px;color:#333;"><?= e($p['comment']) ?></div>
                 <?php endif; ?>
                 <div class="photo-user">👤 <?= e($p['user_name'] ?: $p['user_email']) ?></div>
                 <div style="margin-top:2px;font-size:10px;color:#aaa;"><?= e(date('d.m.Y H:i', strtotime($p['created_at']))) ?></div>
                 <div class="photo-actions">
-                  <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl" title="Скачать JPG">📥</a>
-                  <a href="print_pdf.php?id=<?= (int)$p['id'] ?>" target="_blank" class="action-pdf" title="Открыть PDF">📄</a>
+                  <a href="download.php?id=<?= (int)$p['id'] ?>" class="action-dl" title="Скачать">📥</a>
+                  <?php if (!$isVideo): ?>
+                    <a href="print_pdf.php?id=<?= (int)$p['id'] ?>" target="_blank" class="action-pdf" title="Открыть PDF">📄</a>
+                  <?php endif; ?>
                   <?php if ($canEdit): ?>
                     <a href="edit.php?id=<?= (int)$p['id'] ?>" class="action-edit" title="Редактировать">✏️</a>
-                    <a href="#" onclick="if(confirm('Удалить фото?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del" title="Удалить">🗑️</a>
+                    <a href="#" onclick="if(confirm('Удалить?')){document.getElementById('del-<?= (int)$p['id'] ?>').submit();}return false;" class="action-del" title="Удалить">🗑️</a>
                     <form id="del-<?= (int)$p['id'] ?>" method="post" action="delete.php" style="display:none;">
                       <input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
                       <input type="hidden" name="back_key_type" value="<?= e($viewKeyType) ?>">
@@ -574,24 +648,29 @@ function formatSize($bytes) {
 (function() {
   let selectedPhotoType = null;
   const cameraInput = document.getElementById('hiddenCamera');
-  const KEY_TYPE = <?= json_encode($viewKeyType) ?>;
-  const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
+  const videoInput  = document.getElementById('hiddenVideo');
+  const KEY_TYPE    = <?= json_encode($viewKeyType) ?>;
+  const KEY_VALUE   = <?= json_encode($viewKeyValue) ?>;
 
   document.querySelectorAll('.type-option').forEach(function(el) {
     el.addEventListener('click', function() {
       selectedPhotoType = el.dataset.type;
+
+      // Убираем «selected» у всех и ставим на эту
       document.querySelectorAll('.type-option').forEach(function(x) { x.classList.remove('selected'); });
       el.classList.add('selected');
-      cameraInput.click();
+
+      // Если тип видео — открываем запись видео, иначе — фото
+      if (selectedPhotoType === 'video_defect') {
+        videoInput.click();
+      } else {
+        cameraInput.click();
+      }
     });
   });
 
-  cameraInput.addEventListener('change', function() {
-    const file = cameraInput.files[0];
-    if (!file || !selectedPhotoType) return;
-
+  function uploadFile(file) {
     const comment = document.getElementById('commentInput').value.trim();
-
     const formData = new FormData();
     formData.append('key_type', KEY_TYPE);
     formData.append('key_value', KEY_VALUE);
@@ -606,9 +685,9 @@ function formatSize($bytes) {
     document.body.appendChild(status);
 
     fetch('upload.php', { method: 'POST', body: formData })
-      .then(function() {
+      .then(function(r) {
         status.style.background = '#16a34a';
-        status.textContent = '✅ Фото загружено';
+        status.textContent = '✅ Загружено';
         setTimeout(function() {
           window.location.href = 'gallery.php?key_type=' + KEY_TYPE + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
         }, 800);
@@ -618,8 +697,20 @@ function formatSize($bytes) {
         status.textContent = '❌ Ошибка: ' + err.message;
         setTimeout(function() { document.body.removeChild(status); }, 3000);
       });
+  }
 
+  cameraInput.addEventListener('change', function() {
+    const file = cameraInput.files[0];
+    if (!file || !selectedPhotoType) return;
+    uploadFile(file);
     cameraInput.value = '';
+  });
+
+  videoInput.addEventListener('change', function() {
+    const file = videoInput.files[0];
+    if (!file || !selectedPhotoType) return;
+    uploadFile(file);
+    videoInput.value = '';
   });
 })();
 <?php endif; ?>
