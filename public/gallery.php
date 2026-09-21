@@ -697,31 +697,58 @@ if ($viewMode) {
 
 <!-- Модальное окно: PDF-редактор -->
 <div class="modal-backdrop" id="pdfEditorModal" style="align-items:flex-start; padding:0;">
-  <div style="background:#fff; width:100%; height:100%; max-width:none; border-radius:0; display:flex; flex-direction:column; overflow:hidden;">
+  <div style="background:#fff; width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden;">
 
-    <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1.5px solid #e5e7eb; flex-shrink:0;">
-      <h3 style="margin:0; font-size:17px;">✏️ PDF-редактор</h3>
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 20px; border-bottom:1.5px solid #e5e7eb; flex-shrink:0;">
+      <h3 style="margin:0; font-size:18px;">✏️ PDF-редактор — <?= e($viewTitle) ?></h3>
       <button type="button" class="btn btn-secondary btn-small" onclick="closePdfEditor()">✕ Закрыть</button>
     </div>
 
-    <div style="flex:1; overflow-y:auto; padding:16px; background:#f9fafb;">
-      <p style="color:#666; font-size:13px; margin:0 0 12px;">
-        Фото из этого <?= e($keyLabel) ?> уже подгружены. Перетаскивайте, чтобы поменять порядок.
-        Убирайте лишние тапом на ✕. Потом нажмите <b>«Собрать PDF»</b>.
-      </p>
+    <div style="display:flex; gap:20px; align-items:center; padding:10px 20px; background:#f9fafb; border-bottom:1.5px solid #e5e7eb; flex-shrink:0; flex-wrap:wrap;">
+      <label style="font-size:14px; font-weight:600; color:#444;">
+        Качество PDF:
+        <select id="pdfQuality" style="padding:6px 10px; border-radius:8px; border:1.5px solid #e5e7eb; font-size:14px; margin-left:8px;">
+          <option value="original">Оригинал (большой файл)</option>
+          <option value="good" selected>Хорошее (рекомендую)</option>
+          <option value="medium">Среднее</option>
+          <option value="small">Малое</option>
+        </select>
+      </label>
+      <span style="font-size:13px; color:#666;">
+        Клик по фото — увеличить и повернуть. Перетаскивайте карточки для смены порядка.
+      </span>
+    </div>
 
-      <div id="pdfPagesGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:10px;"></div>
+    <div style="flex:1; overflow-y:auto; padding:20px; background:#f9fafb;">
+      <div id="pdfPagesGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:14px;"></div>
 
-      <div style="margin-top:16px; padding:14px; background:#fff; border-radius:10px; border:1.5px dashed #cbd5e1; text-align:center;">
+      <div style="margin-top:20px; padding:16px; background:#fff; border-radius:12px; border:1.5px dashed #cbd5e1; text-align:center;">
         <input type="file" id="pdfAppendInput" accept="application/pdf" multiple style="display:none;">
         <button type="button" class="btn btn-secondary btn-small" onclick="document.getElementById('pdfAppendInput').click()">+ Добавить PDF-файл</button>
-        <div id="pdfAppendList" style="margin-top:10px; font-size:13px; color:#555;"></div>
+        <div id="pdfAppendList" style="margin-top:12px; font-size:14px; color:#555;"></div>
       </div>
     </div>
 
-    <div style="padding:12px 16px; border-top:1.5px solid #e5e7eb; display:flex; gap:10px; flex-wrap:wrap; align-items:center; flex-shrink:0; background:#fff;">
-      <button type="button" class="btn btn-green btn-small" onclick="buildPdf()">📄 Собрать PDF</button>
-      <span id="pdfStatus" style="font-size:13px; color:#666;"></span>
+    <div style="padding:14px 20px; border-top:1.5px solid #e5e7eb; display:flex; gap:14px; flex-wrap:wrap; align-items:center; flex-shrink:0; background:#fff;">
+      <button type="button" class="btn btn-green" onclick="buildPdf()">📄 Собрать PDF</button>
+      <span id="pdfStatus" style="font-size:14px; color:#666; font-weight:600;"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Просмотрщик одного фото -->
+<div class="modal-backdrop" id="photoViewer" style="z-index:11000;">
+  <div style="background:#111; width:100%; height:100%; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 20px; background:#000; color:#fff;">
+      <div style="font-size:14px;" id="photoViewerTitle">—</div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn btn-small" style="background:#333;" onclick="viewerRotate()">↻ Повернуть</button>
+        <button type="button" class="btn btn-small" style="background:#333;" onclick="viewerReset()">⟲ Сброс</button>
+        <button type="button" class="btn btn-small btn-red" onclick="viewerClose()">✕ Закрыть</button>
+      </div>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; background:#111;">
+      <img id="photoViewerImg" src="" style="max-width:100%; max-height:100%; transition:transform 0.15s; transform-origin:center center;">
     </div>
   </div>
 </div>
@@ -731,7 +758,6 @@ if ($viewMode) {
 
 <?php if ($viewMode): ?>
 <script>
-// Передаём список фото из PHP в JS
 window.IPG_PHOTOS = <?= json_encode(array_values(array_map(function($p) use ($PHOTO_TYPES) {
     return [
         'id'         => (int)$p['id'],
@@ -748,161 +774,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 <?php endif; ?>
 
 <script>
-<?php if ($viewMode): ?>
-(function() {
-  const KEY_TYPE  = <?= json_encode($viewKeyType) ?>;
-  const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
-
-  let selectedPhotoType = null;
-  let lastUploadedFile  = null;
-  let lastSource        = null;   // 'camera' | 'gallery'
-
-  const photoCamera  = document.getElementById('photoCamera');
-  const photoGallery = document.getElementById('photoGallery');
-  const videoCamera  = document.getElementById('videoCamera');
-  const videoGallery = document.getElementById('videoGallery');
-
-  const sourceModal = document.getElementById('sourceModal');
-  const saveModal   = document.getElementById('saveModal');
-  const sourceTitle = document.getElementById('sourceModalTitle');
-
-  // === Тап по плитке ===
-  document.querySelectorAll('.type-option').forEach(function(el) {
-    el.addEventListener('click', function() {
-      selectedPhotoType = el.dataset.type;
-      document.querySelectorAll('.type-option').forEach(function(x) { x.classList.remove('selected'); });
-      el.classList.add('selected');
-
-      const isVideo = selectedPhotoType === 'video_defect';
-      sourceTitle.textContent = isVideo
-        ? 'Записать видео дефекта — как?'
-        : 'Загрузить: «' + el.textContent.trim() + '» — откуда?';
-      sourceModal.classList.add('is-open');
-    });
-  });
-
-  window.closeSourceModal = function() {
-    sourceModal.classList.remove('is-open');
-  };
-
-  window.chooseSource = function(source) {
-    sourceModal.classList.remove('is-open');
-    lastSource = source;
-    const isVideo = selectedPhotoType === 'video_defect';
-    let input;
-    if (isVideo) input = (source === 'camera') ? videoCamera  : videoGallery;
-    else         input = (source === 'camera') ? photoCamera  : photoGallery;
-    input.click();
-  };
-
-  // === Обработка выбранного файла ===
-  [photoCamera, photoGallery, videoCamera, videoGallery].forEach(function(input) {
-    input.addEventListener('change', function() {
-      const file = input.files && input.files[0];
-      if (!file || !selectedPhotoType) return;
-      lastUploadedFile = file;
-      uploadFile(file);
-      input.value = '';
-    });
-  });
-
-  function uploadFile(file) {
-    const comment = document.getElementById('commentInput').value.trim();
-    const formData = new FormData();
-    formData.append('key_type',   KEY_TYPE);
-    formData.append('key_value',  KEY_VALUE);
-    formData.append('photo_type', selectedPhotoType);
-    formData.append('comment',    comment);
-    formData.append('photo', file, file.name || ('upload_' + Date.now() + '.jpg'));
-
-    const status = document.createElement('div');
-    status.className = 'upload-status';
-    status.style.background = '#2563eb';
-    status.textContent = '📤 Загрузка...';
-    document.body.appendChild(status);
-
-    fetch('upload.php', { method: 'POST', body: formData, credentials: 'same-origin' })
-      .then(function(r) {
-        return r.text().then(function(text) {
-          return { ok: r.ok, status: r.status, text: text || '' };
-        });
-      })
-      .then(function(res) {
-        let serverError = null;
-        if (res.text) {
-          try {
-            const j = JSON.parse(res.text);
-            if (j && j.error) serverError = j.error;
-          } catch (e) {
-            if (!res.ok) serverError = 'HTTP ' + res.status + ': ' + res.text.slice(0, 200);
-          }
-        }
-        if (serverError) throw new Error(serverError);
-        if (!res.ok)     throw new Error('HTTP ' + res.status);
-
-        status.style.background = '#16a34a';
-        status.textContent = '✅ Загружено';
-        setTimeout(function() {
-          if (document.body.contains(status)) document.body.removeChild(status);
-        }, 500);
-
-        if (lastSource === 'camera' && navigator.share) {
-          saveModal.classList.add('is-open');
-        } else {
-          finishUpload();
-        }
-      })
-      .catch(function(err) {
-        status.style.background = '#dc2626';
-        status.textContent = '❌ ' + (err.message || 'ошибка загрузки');
-        console.error('upload error:', err);
-        setTimeout(function() {
-          if (document.body.contains(status)) document.body.removeChild(status);
-        }, 5000);
-      });
-  }
-
-  window.saveToPhone = async function() {
-    const file = lastUploadedFile;
-    if (!file) { finishUpload(); return; }
-
-    if (navigator.share && navigator.canShare) {
-      try {
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: 'Файл по ' + (KEY_TYPE === 'ra' ? 'РА' : 'VIN') + ' ' + KEY_VALUE,
-          });
-          finishUpload();
-          return;
-        }
-      } catch (e) {
-        if (e && e.name === 'AbortError') { finishUpload(); return; }
-      }
-    }
-    try {
-      const url = URL.createObjectURL(file);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name || ('photo_' + Date.now() + '.jpg');
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function() { URL.revokeObjectURL(url); }, 3000);
-    } catch (e) {}
-    finishUpload();
-  };
-
-  window.finishUpload = function() {
-    saveModal.classList.remove('is-open');
-    window.location.href = 'gallery.php?key_type=' + encodeURIComponent(KEY_TYPE)
-      + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
-  };
-})();
-<?php endif; ?>
-</script>
-
-<script>
 /* ========== PDF-РЕДАКТОР ========== */
 (function() {
   if (!window.IPG_PHOTOS) return;
@@ -913,53 +784,69 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
   const appendInp = document.getElementById('pdfAppendInput');
   const appendLst = document.getElementById('pdfAppendList');
 
+  const blobCache  = new Map();  // id -> Blob
   let pages        = [];
   let appendedPdfs = [];
 
+  // === Модалка редактора ===
   window.openPdfEditor = function() {
-        pages = window.IPG_PHOTOS
+    pages = window.IPG_PHOTOS
       .filter(function(p) { return !p.is_video; })
       .map(function(p) {
-        return { kind: 'img', id: p.id, path: p.path, label: p.type_label, comment: p.comment };
+        return { kind: 'img', id: p.id, path: p.path, label: p.type_label, comment: p.comment, rotation: 0 };
       });
     render();
     statusEl.textContent = '';
     modal.classList.add('is-open');
+    // Заранее прогреваем кэш — грузим всё параллельно в фоне
+    preloadAll();
   };
-
   window.closePdfEditor = function() {
     modal.classList.remove('is-open');
   };
 
+  async function preloadAll() {
+    const jobs = pages.filter(function(p) { return p.kind === 'img' && !blobCache.has(p.id); });
+    await Promise.all(jobs.map(async function(p) {
+      try {
+        const res = await fetch('download.php?id=' + p.id, { credentials: 'same-origin' });
+        if (!res.ok) return;
+        blobCache.set(p.id, await res.blob());
+      } catch (e) { /* тихо */ }
+    }));
+  }
+
   function render() {
     if (pages.length === 0) {
-      grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:#888; padding:30px;">Нет фото для сборки. Добавьте PDF-файл ниже.</div>';
+      grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:#888; padding:40px;">Нет фото. Добавьте PDF-файл ниже.</div>';
     } else {
       grid.innerHTML = '';
       pages.forEach(function(p, idx) {
         const card = document.createElement('div');
         card.draggable = true;
         card.dataset.idx = idx;
-        card.style.cssText = 'background:#fff; border:1.5px solid #e5e7eb; border-radius:10px; padding:8px; position:relative; cursor:grab;';
+        card.style.cssText = 'background:#fff; border:1.5px solid #e5e7eb; border-radius:12px; padding:10px; position:relative; cursor:grab;';
 
         let previewHtml = '';
         if (p.kind === 'img') {
-          previewHtml = '<img src="' + p.path + '" style="width:100%; height:120px; object-fit:cover; border-radius:6px; display:block;" loading="lazy">';
+          const rot = p.rotation || 0;
+          previewHtml = '<img src="' + p.path + '" data-idx="' + idx + '" ' +
+            'style="width:100%; height:200px; object-fit:cover; border-radius:8px; display:block; cursor:zoom-in; transform:rotate(' + rot + 'deg);" ' +
+            'loading="lazy" onclick="viewerOpen(' + idx + ')">';
         } else {
-          previewHtml = '<div style="width:100%; height:120px; display:flex; align-items:center; justify-content:center; background:#f1f5f9; border-radius:6px; font-size:36px;">📎</div>';
+          previewHtml = '<div style="width:100%; height:200px; display:flex; align-items:center; justify-content:center; background:#f1f5f9; border-radius:8px; font-size:56px;">📎</div>';
         }
 
         card.innerHTML = previewHtml +
-          '<div style="font-size:11px; color:#555; margin-top:6px; line-height:1.3;">' +
-            '<b>' + (idx + 1) + '.</b> ' + escapeHtml(p.label || '') +
+          '<div style="font-size:13px; color:#555; margin-top:8px; line-height:1.35; font-weight:600;">' +
+            (idx + 1) + '. ' + escapeHtml(p.label || '') +
+            (p.rotation ? ' <span style="color:#7c3aed;">(' + p.rotation + '°)</span>' : '') +
           '</div>' +
-          '<button type="button" style="position:absolute; top:6px; right:6px; background:#dc2626; color:#fff; border:none; border-radius:50%; width:24px; height:24px; cursor:pointer; font-size:12px; line-height:1;">✕</button>';
-
-        card.querySelector('button').onclick = function(e) {
-          e.stopPropagation();
-          pages.splice(idx, 1);
-          render();
-        };
+          '<div style="display:flex; gap:6px; margin-top:8px;">' +
+            (p.kind === 'img' ? '<button type="button" class="btn btn-small btn-secondary" style="flex:1; padding:6px;" onclick="rotateCard(' + idx + ')">↻</button>' : '') +
+            '<button type="button" class="btn btn-small btn-secondary" style="flex:1; padding:6px;" onclick="viewerOpen(' + idx + ')">⤢</button>' +
+            '<button type="button" class="btn btn-small btn-red" style="flex:1; padding:6px;" onclick="removeCard(' + idx + ')">✕</button>' +
+          '</div>';
 
         card.addEventListener('dragstart', function(e) {
           e.dataTransfer.setData('text/plain', idx);
@@ -968,10 +855,9 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         card.addEventListener('drop', function(e) {
           e.preventDefault();
           const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
-          const to   = idx;
-          if (from === to) return;
+          if (from === idx) return;
           const moved = pages.splice(from, 1)[0];
-          pages.splice(to, 0, moved);
+          pages.splice(idx, 0, moved);
           render();
         });
 
@@ -979,16 +865,30 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       });
     }
     appendLst.innerHTML = appendedPdfs.map(function(f, i) {
-      return '📎 ' + escapeHtml(f.name) + ' <a href="#" data-i="' + i + '" style="color:#dc2626;">убрать</a>';
+      return '📎 ' + escapeHtml(f.name) + ' <a href="#" data-i="' + i + '" style="color:#dc2626; margin-left:8px;">убрать</a>';
     }).join('<br>');
     appendLst.querySelectorAll('a[data-i]').forEach(function(a) {
       a.onclick = function(e) {
         e.preventDefault();
-        appendedPdfs.splice(parseInt(a.dataset.i, 10), 1);
+        const i = parseInt(a.dataset.i, 10);
+        appendedPdfs.splice(i, 1);
+        // удаляем и соответствующую страницу
+        pages = pages.filter(function(p) { return !(p.kind === 'pdf' && p.file === appendedPdfs[i]); });
         render();
       };
     });
   }
+
+  window.rotateCard = function(idx) {
+    if (pages[idx] && pages[idx].kind === 'img') {
+      pages[idx].rotation = ((pages[idx].rotation || 0) + 90) % 360;
+      render();
+    }
+  };
+  window.removeCard = function(idx) {
+    pages.splice(idx, 1);
+    render();
+  };
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function(c) {
@@ -1001,44 +901,168 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       const f = appendInp.files[i];
       if (f.type === 'application/pdf') {
         appendedPdfs.push(f);
-        pages.push({ kind: 'pdf', file: f, label: 'PDF: ' + f.name });
+        pages.push({ kind: 'pdf', file: f, label: 'PDF: ' + f.name, rotation: 0 });
       }
     }
     appendInp.value = '';
     render();
   });
 
+  // === Просмотрщик фото ===
+  const viewer       = document.getElementById('photoViewer');
+  const viewerImg    = document.getElementById('photoViewerImg');
+  const viewerTitle  = document.getElementById('photoViewerTitle');
+  let viewerIdx = -1, viewerRotation = 0, viewerZoom = 1;
+
+  window.viewerOpen = function(idx) {
+    const p = pages[idx];
+    if (!p || p.kind !== 'img') return;
+    viewerIdx = idx;
+    viewerRotation = p.rotation || 0;
+    viewerZoom = 1;
+    viewerImg.src = p.path;
+    viewerTitle.textContent = (idx + 1) + '. ' + (p.label || '');
+    applyViewerTransform();
+    viewer.classList.add('is-open');
+  };
+  window.viewerClose = function() { viewer.classList.remove('is-open'); };
+  window.viewerRotate = function() { viewerRotation = (viewerRotation + 90) % 360; applyViewerTransform(); };
+  window.viewerReset  = function() { viewerRotation = 0; viewerZoom = 1; applyViewerTransform(); };
+  function applyViewerTransform() {
+    viewerImg.style.transform = 'rotate(' + viewerRotation + 'deg) scale(' + viewerZoom + ')';
+  }
+  // Зум колесом
+  viewer.addEventListener('wheel', function(e) {
+    if (!viewer.classList.contains('is-open')) return;
+    e.preventDefault();
+    viewerZoom += (e.deltaY < 0 ? 0.1 : -0.1);
+    viewerZoom = Math.max(0.3, Math.min(4, viewerZoom));
+    applyViewerTransform();
+  }, { passive: false });
+  // Сохранить поворот при закрытии
+  viewer.addEventListener('click', function(e) {
+    if (e.target === viewer) viewerClose();
+  });
+  // По кнопке «Закрыть» применяем поворот к карточке
+  const origViewerClose = window.viewerClose;
+  window.viewerClose = function() {
+    if (viewerIdx >= 0 && pages[viewerIdx]) {
+      pages[viewerIdx].rotation = viewerRotation;
+    }
+    origViewerClose();
+    render();
+  };
+
+  // === Сборка PDF ===
+  const QUALITY = {
+    original: { maxW: null, q: null },
+    good:     { maxW: 1600, q: 0.85 },
+    medium:   { maxW: 1200, q: 0.7 },
+    small:    { maxW: 900,  q: 0.55 },
+  };
+
+  async function getBlobForPdf(p) {
+    if (p.kind === 'img') {
+      if (blobCache.has(p.id)) return blobCache.get(p.id);
+      const res = await fetch('download.php?id=' + p.id, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Фото id=' + p.id + ' → HTTP ' + res.status);
+      const b = await res.blob();
+      blobCache.set(p.id, b);
+      return b;
+    }
+    return null;
+  }
+
+  async function compressImage(blob, rotation, qualityKey) {
+    const q = QUALITY[qualityKey];
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise(function(res, rej) {
+        const i = new Image();
+        i.onload = function() { res(i); };
+        i.onerror = function() { rej(new Error('image load')); };
+        i.src = url;
+      });
+
+      // Размер исходника
+      let w = img.width, h = img.height;
+
+      // Если поворот 90 или 270 — размеры меняются местами
+      const rotated = (rotation % 180) !== 0;
+
+      // Уменьшение по ширине
+      let targetW = w, targetH = h;
+      if (q.maxW && w > q.maxW) {
+        const k = q.maxW / w;
+        targetW = Math.round(w * k);
+        targetH = Math.round(h * k);
+      }
+
+      // Итоговый canvas уже с учётом поворота
+      const canvas = document.createElement('canvas');
+      canvas.width  = rotated ? targetH : targetW;
+      canvas.height = rotated ? targetW : targetH;
+      const ctx = canvas.getContext('2d');
+
+      // Заливаем белым (на случай прозрачности)
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Поворот вокруг центра
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(rotation * Math.PI / 180);
+      ctx.drawImage(img, -targetW / 2, -targetH / 2, targetW, targetH);
+      ctx.restore();
+
+      // Возвращаем JPEG (или PNG-оригинал, если просили «Оригинал» без уменьшения)
+      if (qualityKey === 'original' && w <= 2400 && blob.type === 'image/jpeg') {
+        return { blob: blob, width: w, height: h, original: true };
+      }
+      const outBlob = await new Promise(function(res) {
+        canvas.toBlob(res, 'image/jpeg', q.q || 0.9);
+      });
+      return { blob: outBlob, width: canvas.width, height: canvas.height };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   window.buildPdf = async function() {
     if (pages.length === 0) { statusEl.textContent = '⚠️ Нет страниц'; return; }
     statusEl.textContent = '⏳ Собираю PDF...';
-
     try {
-      const { PDFDocument } = PDFLib;
+      const { PDFDocument, degrees } = PDFLib;
       const out = await PDFDocument.create();
+      const qualityKey = document.getElementById('pdfQuality').value;
+      const A4_W = 595.28, A4_H = 841.89;
 
       for (let i = 0; i < pages.length; i++) {
         const p = pages[i];
         statusEl.textContent = '⏳ Страница ' + (i + 1) + ' из ' + pages.length + '...';
 
-                if (p.kind === 'img') {
-          // Грузим через download.php — он ходит за файлом на сервере,
-          // и у него нет CORS-проблем с хранилищем
-          const res = await fetch('download.php?id=' + p.id, { credentials: 'same-origin' });
-          if (!res.ok) throw new Error('Не удалось загрузить фото id=' + p.id + ' (HTTP ' + res.status + ')');
-          const blob = await res.blob();
+        if (p.kind === 'img') {
+          const raw = await getBlobForPdf(p);
+          const out2 = await compressImage(raw, p.rotation || 0, qualityKey);
+          const buf  = await out2.blob.arrayBuffer();
+
+          // pdf-lib: пробуем JPEG, если не получится — PNG
           let img;
-          if (blob.type === 'image/png') {
-            img = await out.embedPng(await blob.arrayBuffer());
-          } else {
-            img = await out.embedJpg(await blob.arrayBuffer());
+          try {
+            img = await out.embedJpg(buf);
+          } catch (e) {
+            img = await out.embedPng(buf);
           }
-          const A4_W = 595.28, A4_H = 841.89;
+
           const scale = Math.min(A4_W / img.width, A4_H / img.height);
           const w = img.width  * scale;
           const h = img.height * scale;
           const page = out.addPage([A4_W, A4_H]);
-          page.drawImage(img, { x: (A4_W - w) / 2, y: (A4_H - h) / 2, width: w, height: h });
-
+          page.drawImage(img, {
+            x: (A4_W - w) / 2,
+            y: (A4_H - h) / 2,
+            width: w, height: h,
+          });
         } else if (p.kind === 'pdf') {
           const bytes    = await p.file.arrayBuffer();
           const srcDoc   = await PDFDocument.load(bytes);
@@ -1058,7 +1082,8 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       document.body.removeChild(a);
       setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
 
-      statusEl.textContent = '✅ Готово!';
+      const mb = (blob.size / 1048576).toFixed(1);
+      statusEl.textContent = '✅ Готово! Размер: ' + mb + ' МБ';
     } catch (err) {
       console.error(err);
       statusEl.textContent = '❌ Ошибка: ' + err.message;
