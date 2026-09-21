@@ -290,7 +290,7 @@ function fmtNorm($n) {
     <!-- Кнопки моделей: активная подсвечивается прямо в HTML (inline-стиль) -->
     <div class="model-bar">
         <?php foreach ($models as $key => $m): ?>
-            <?php $isActive = ($key === $modelKey); ?>
+            <?php $isActive = ((string)$key === (string)$modelKey); ?>
             <a href="?model=<?= e($key) ?>"
                style="<?= $isActive
                    ? 'background:#2563eb;color:#ffffff;border-color:#1d4ed8;font-weight:700;box-shadow:0 6px 16px rgba(37,99,235,.4);'
