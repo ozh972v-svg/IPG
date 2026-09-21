@@ -17,7 +17,6 @@ $modelName = $models[$modelKey]['name'];
 $db = get_db();
 $search = trim($_GET['q'] ?? '');
 
-/* Группы для выбранного шасси */
 $st = $db->prepare("SELECT code, name FROM work_operations
                     WHERE brand = 'COMPASS' AND complectation = :ch AND it_is_group = TRUE
                     ORDER BY name");
@@ -26,7 +25,6 @@ $groups = $st->fetchAll(PDO::FETCH_ASSOC);
 
 $group = $_GET['group'] ?? ($groups[0]['code'] ?? null);
 
-/* Работы: либо поиск, либо по выбранной группе */
 if ($search !== '') {
     $st = $db->prepare("SELECT code, operation_code, name, norm_time
                         FROM work_operations
@@ -92,11 +90,13 @@ function fmtNorm($n) {
         color: #2563eb; text-decoration: none; font-size: 14px;
     }
 
-    /* ===== Кнопки моделей ===== */
     .model-bar {
         display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
     }
     .model-bar a {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         padding: 12px 22px;
         background: #fff;
         border: 2px solid #e5e7eb;
@@ -106,35 +106,11 @@ function fmtNorm($n) {
         font-weight: 500;
         font-size: 15px;
         transition: all .12s;
-        position: relative;
     }
     .model-bar a:hover {
         border-color: #93c5fd;
         background: #f0f7ff;
         color: #1d4ed8;
-    }
-    .model-bar a.active {
-        background: #2563eb;
-        border-color: #1d4ed8;
-        color: #fff;
-        font-weight: 700;
-        box-shadow: 0 6px 16px rgba(37,99,235,.35);
-        transform: translateY(-1px);
-    }
-    .model-bar a.active::before {
-        content: "✓ ";
-        font-weight: 900;
-    }
-    .model-bar a.active::after {
-        content: "";
-        position: absolute;
-        left: 50%;
-        bottom: -9px;
-        transform: translateX(-50%);
-        width: 0; height: 0;
-        border-left: 8px solid transparent;
-        border-right: 8px solid transparent;
-        border-top: 9px solid #2563eb;
     }
 
     .search-box { margin-bottom: 20px; }
@@ -149,7 +125,6 @@ function fmtNorm($n) {
     }
     .search-box input:focus { border-color: #2563eb; }
 
-    /* ===== Три колонки: группы | работы | корзина ===== */
     .layout {
         display: grid;
         grid-template-columns: 280px 1fr 340px;
@@ -193,7 +168,7 @@ function fmtNorm($n) {
     }
     .content .model-tag {
         display: inline-block;
-        background: #eff6ff;
+        background: #dbeafe;
         color: #1d4ed8;
         font-size: 12px;
         font-weight: 700;
@@ -227,7 +202,6 @@ function fmtNorm($n) {
     }
     .empty { color: #9ca3af; padding: 40px 0; text-align: center; }
 
-    /* ===== Кнопка + у работы ===== */
     .add-btn {
         background: #16a34a; color: #fff; border: none;
         padding: 5px 12px; border-radius: 6px;
@@ -237,7 +211,6 @@ function fmtNorm($n) {
     .add-btn:hover { background: #15803d; }
     .add-btn.in-basket { background: #9ca3af; cursor: default; }
 
-    /* ===== Корзина ===== */
     .basket { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 16px; }
     .basket-header {
         display: flex; justify-content: space-between; align-items: center;
@@ -314,11 +287,15 @@ function fmtNorm($n) {
 <div class="container">
     <a class="back" href="works_brand.php">← К выбору марки</a>
 
+    <!-- Кнопки моделей: активная подсвечивается прямо в HTML (inline-стиль) -->
     <div class="model-bar">
         <?php foreach ($models as $key => $m): ?>
+            <?php $isActive = ($key === $modelKey); ?>
             <a href="?model=<?= e($key) ?>"
-               class="<?= $key === $modelKey ? 'active' : '' ?>">
-                <?= e($m['name']) ?>
+               style="<?= $isActive
+                   ? 'background:#2563eb;color:#ffffff;border-color:#1d4ed8;font-weight:700;box-shadow:0 6px 16px rgba(37,99,235,.4);'
+                   : '' ?>">
+                <?php if ($isActive): ?>✓ <?php endif; ?><?= e($m['name']) ?>
             </a>
         <?php endforeach; ?>
     </div>
@@ -331,7 +308,6 @@ function fmtNorm($n) {
 
     <div class="layout">
 
-        <!-- Группы -->
         <aside class="sidebar">
             <?php if (!$groups): ?>
                 <div style="padding: 20px; color:#9ca3af;">Групп не найдено.</div>
@@ -345,7 +321,6 @@ function fmtNorm($n) {
             <?php endif; ?>
         </aside>
 
-        <!-- Работы -->
         <section class="content">
             <?php if ($search !== ''): ?>
                 <h2>
@@ -398,7 +373,6 @@ function fmtNorm($n) {
             <?php endif; ?>
         </section>
 
-        <!-- Корзина -->
         <div class="basket">
             <div class="basket-header">
                 <h2>📋 Выбранные работы</h2>
