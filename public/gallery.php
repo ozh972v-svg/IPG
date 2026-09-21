@@ -431,7 +431,13 @@ if ($viewMode) {
 
     <?php if (!$viewMode): ?>
       <p class="subtitle">Всего файлов: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
-            <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
+    <?php endif; ?>
+
+    <div class="btn-row">
+      <?php if ($viewMode): ?>
+        <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
+        <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
+        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
         <button type="button" class="btn btn-small" style="background:#7c3aed;" onclick="openPdfEditor()">✏️ Редактировать PDF</button>
         <?php if ($totalPhotos > 0): ?>
           <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($keyLabel) ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
@@ -470,7 +476,7 @@ if ($viewMode) {
 
     <div class="card">
       <h2>+ Добавить новый РА / VIN</h2>
-            <form method="get" action="gallery.php">
+      <form method="get" action="gallery.php">
         <input type="hidden" name="save" value="1">
         <div class="form-row">
           <label>Тип привязки</label>
@@ -523,7 +529,7 @@ if ($viewMode) {
           <div class="group-item">
             <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
               <div class="group-main">
-                                <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?><?php if (!empty($g['description'])): ?><span style="font-weight:500;color:#555;"> — <?= e($g['description']) ?></span><?php endif; ?></div>
+                <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?><?php if (!empty($g['description'])): ?><span style="font-weight:500;color:#555;"> — <?= e($g['description']) ?></span><?php endif; ?></div>
                 <?php if ($g['gos_number'] || $g['order_number']): ?>
                   <div class="group-item-sub">
                     <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
@@ -688,6 +694,7 @@ if ($viewMode) {
     <button type="button" class="btn btn-cancel" onclick="finishUpload()">Пропустить</button>
   </div>
 </div>
+
 <!-- Модальное окно: PDF-редактор -->
 <div class="modal-backdrop" id="pdfEditorModal" style="align-items:flex-start; padding:0;">
   <div style="background:#fff; width:100%; height:100%; max-width:none; border-radius:0; display:flex; flex-direction:column; overflow:hidden;">
@@ -739,6 +746,7 @@ window.IPG_KEY_LABEL = <?= json_encode($keyLabel) ?>;
 window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 </script>
 <?php endif; ?>
+
 <script>
 <?php if ($viewMode): ?>
 (function() {
@@ -779,7 +787,7 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 
   window.chooseSource = function(source) {
     sourceModal.classList.remove('is-open');
-    lastSource = source;                 // запоминаем источник
+    lastSource = source;
     const isVideo = selectedPhotoType === 'video_defect';
     let input;
     if (isVideo) input = (source === 'camera') ? videoCamera  : videoGallery;
@@ -805,7 +813,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     formData.append('key_value',  KEY_VALUE);
     formData.append('photo_type', selectedPhotoType);
     formData.append('comment',    comment);
-    // Если у файла нет имени (бывает на iPhone с HEIC) — подставляем
     formData.append('photo', file, file.name || ('upload_' + Date.now() + '.jpg'));
 
     const status = document.createElement('div');
@@ -821,7 +828,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         });
       })
       .then(function(res) {
-        // Пытаемся вытащить ошибку из ответа сервера
         let serverError = null;
         if (res.text) {
           try {
@@ -840,7 +846,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
           if (document.body.contains(status)) document.body.removeChild(status);
         }, 500);
 
-        // «Сохранить в телефон» — ТОЛЬКО если снимали на камеру
         if (lastSource === 'camera' && navigator.share) {
           saveModal.classList.add('is-open');
         } else {
@@ -848,7 +853,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         }
       })
       .catch(function(err) {
-        // Показываем реальную ошибку 5 секунд
         status.style.background = '#dc2626';
         status.textContent = '❌ ' + (err.message || 'ошибка загрузки');
         console.error('upload error:', err);
@@ -858,7 +862,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       });
   }
 
-  // === Сохранение в галерею телефона (только после съёмки) ===
   window.saveToPhone = async function() {
     const file = lastUploadedFile;
     if (!file) { finishUpload(); return; }
@@ -910,11 +913,10 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
   const appendInp = document.getElementById('pdfAppendInput');
   const appendLst = document.getElementById('pdfAppendList');
 
-  let pages        = [];   // { kind:'img'|'pdf', path | file, label }
-  let appendedPdfs = [];   // File[] — подгруженные PDF для склейки
+  let pages        = [];
+  let appendedPdfs = [];
 
   window.openPdfEditor = function() {
-    // Собираем текущее состояние из IPG_PHOTOS (без видео)
     pages = window.IPG_PHOTOS
       .filter(function(p) { return !p.is_video; })
       .map(function(p) {
@@ -959,7 +961,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
           render();
         };
 
-        // Drag & drop
         card.addEventListener('dragstart', function(e) {
           e.dataTransfer.setData('text/plain', idx);
         });
@@ -977,7 +978,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         grid.appendChild(card);
       });
     }
-    // Обновим список подгруженных PDF
     appendLst.innerHTML = appendedPdfs.map(function(f, i) {
       return '📎 ' + escapeHtml(f.name) + ' <a href="#" data-i="' + i + '" style="color:#dc2626;">убрать</a>';
     }).join('<br>');
@@ -1008,7 +1008,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     render();
   });
 
-  // === Сборка PDF ===
   window.buildPdf = async function() {
     if (pages.length === 0) { statusEl.textContent = '⚠️ Нет страниц'; return; }
     statusEl.textContent = '⏳ Собираю PDF...';
@@ -1038,8 +1037,8 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
           page.drawImage(img, { x: (A4_W - w) / 2, y: (A4_H - h) / 2, width: w, height: h });
 
         } else if (p.kind === 'pdf') {
-          const bytes   = await p.file.arrayBuffer();
-          const srcDoc  = await PDFDocument.load(bytes);
+          const bytes    = await p.file.arrayBuffer();
+          const srcDoc   = await PDFDocument.load(bytes);
           const srcPages = await out.copyPages(srcDoc, srcDoc.getPageIndices());
           srcPages.forEach(function(sp) { out.addPage(sp); });
         }
