@@ -528,10 +528,7 @@ if ($viewMode) {
           <div class="group-item">
             <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
               <div class="group-main">
-                <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
-                <?php if (!empty($g['description'])): ?>
-                  <div class="group-item-desc">📝 <?= e($g['description']) ?></div>
-                <?php endif; ?>
+                                <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?><?php if (!empty($g['description'])): ?><span style="font-weight:500;color:#555;"> — <?= e($g['description']) ?></span><?php endif; ?></div>
                 <?php if ($g['gos_number'] || $g['order_number']): ?>
                   <div class="group-item-sub">
                     <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
