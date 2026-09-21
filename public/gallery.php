@@ -431,13 +431,8 @@ if ($viewMode) {
 
     <?php if (!$viewMode): ?>
       <p class="subtitle">Всего файлов: <?= $allPhotosCount ?> · Размер: <?= formatSize($allPhotosSize) ?></p>
-    <?php endif; ?>
-
-    <div class="btn-row">
-      <?php if ($viewMode): ?>
-        <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
-        <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
-        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
+            <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
+        <button type="button" class="btn btn-small" style="background:#7c3aed;" onclick="openPdfEditor()">✏️ Редактировать PDF</button>
         <?php if ($totalPhotos > 0): ?>
           <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($keyLabel) ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
           <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
