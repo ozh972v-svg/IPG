@@ -917,10 +917,10 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
   let appendedPdfs = [];
 
   window.openPdfEditor = function() {
-    pages = window.IPG_PHOTOS
+        pages = window.IPG_PHOTOS
       .filter(function(p) { return !p.is_video; })
       .map(function(p) {
-        return { kind: 'img', path: p.path, label: p.type_label, comment: p.comment };
+        return { kind: 'img', id: p.id, path: p.path, label: p.type_label, comment: p.comment };
       });
     render();
     statusEl.textContent = '';
