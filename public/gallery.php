@@ -21,15 +21,13 @@ $PHOTO_TYPES = [
     'video_defect'     => 'Видео дефекта',
 ];
 
-$VIDEO_TYPES = ['video_defect'];
-
 $pdo = get_db();
 
 $searchQuery = trim($_GET['q'] ?? '');
 
-$viewKeyType = trim($_GET['key_type'] ?? '');
+$viewKeyType  = trim($_GET['key_type'] ?? '');
 $viewKeyValue = trim($_GET['key_value'] ?? '');
-$viewMode = $viewKeyType && $viewKeyValue;
+$viewMode     = $viewKeyType && $viewKeyValue;
 
 /* === Если пришли «+ Добавить» — сохраняем === */
 if (!empty($_GET['save'])
@@ -193,7 +191,7 @@ if ($viewMode) {
 $stmt = $pdo->query("SELECT COUNT(*) AS cnt, COALESCE(SUM(file_size),0) AS total_size FROM photos");
 $summary = $stmt->fetch();
 $allPhotosCount = (int)$summary['cnt'];
-$allPhotosSize = (int)$summary['total_size'];
+$allPhotosSize  = (int)$summary['total_size'];
 
 function formatSize($bytes) {
     if ($bytes < 1024) return $bytes . ' Б';
@@ -206,7 +204,7 @@ function isVideoMime(?string $mime): bool {
 }
 
 /* Заголовки с описанием через дефис */
-$keyLabel = $viewKeyType === 'ra' ? 'РА' : 'VIN';
+$keyLabel  = $viewKeyType === 'ra' ? 'РА' : 'VIN';
 $viewTitle = '';
 if ($viewMode) {
     $viewTitle = $keyLabel . ': ' . $viewKeyValue;
@@ -251,7 +249,6 @@ if ($viewMode) {
   .form-row input:focus, .form-row select:focus, .form-row textarea:focus { outline: none; border-color: #2563eb; }
   .form-row textarea { resize: vertical; min-height: 60px; }
 
-  /* === Список записей === */
   .group-item {
     display: flex; align-items: center; gap: 12px;
     padding: 14px 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
@@ -287,7 +284,6 @@ if ($viewMode) {
   .search-bar input { flex: 1; min-width: 200px; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 15px; }
   .search-bar input:focus { outline: none; border-color: #2563eb; }
 
-  /* === Плитки типов фото === */
   .type-selector {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -315,7 +311,6 @@ if ($viewMode) {
   }
   .type-option:hover { border-color: #2563eb; }
 
-  /* Красная — фоток этого типа нет */
   .type-option.is-empty {
     border-color: #fca5a5;
     background: #fef2f2;
@@ -329,7 +324,6 @@ if ($viewMode) {
     top: 6px; right: 8px;
   }
 
-  /* Зелёная — уже есть фото этого типа */
   .type-option.has-photos {
     border-color: #86efac;
     background: #f0fdf4;
@@ -345,14 +339,12 @@ if ($viewMode) {
     top: 4px; right: 8px;
   }
 
-  /* Видео-плитка — с иконкой */
   .type-option[data-type="video_defect"] {
     border-left: 4px solid #7c3aed;
   }
   .type-option[data-type="video_defect"].is-empty { border-left-color: #dc2626; }
   .type-option[data-type="video_defect"].has-photos { border-left-color: #16a34a; }
 
-  /* === Сетка фото/видео === */
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .photo-card { background: #f9fafb; border-radius: 10px; overflow: hidden; border: 1.5px solid #e5e7eb; position: relative; }
   .photo-card img, .photo-card video {
@@ -380,7 +372,6 @@ if ($viewMode) {
 
   .upload-status { position: fixed; top: 0; left: 0; right: 0; padding: 14px; text-align: center; font-weight: 600; z-index: 9999; color: #fff; }
 
-  /* === Модальные окна === */
   .modal-backdrop {
     display: none;
     position: fixed; inset: 0; background: rgba(0,0,0,0.55);
@@ -436,16 +427,6 @@ if ($viewMode) {
     <div class="btn-row">
       <?php if ($viewMode): ?>
         <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
-        <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
-        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
-        <button type="button" class="btn btn-small" style="background:#7c3aed;" onclick="openPdfEditor()">✏️ Редактировать PDF</button>
-        <?php if ($totalPhotos > 0): ?>
-          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($keyLabel) ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
-          <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
-            <input type="hidden" name="key_type" value="<?= e($viewKeyType) ?>">
-            <input type="hidden" name="key_value" value="<?= e($viewKeyValue) ?>">
-          </form>
-        <?php endif; ?>
       <?php else: ?>
         <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
       <?php endif; ?>
@@ -602,10 +583,8 @@ if ($viewMode) {
             </div>
           <?php endforeach; ?>
         </div>
-        <!-- Фото: камера и галерея -->
         <input type="file" id="photoCamera"  accept="image/*" capture="environment" style="display:none;">
         <input type="file" id="photoGallery" accept="image/*" style="display:none;">
-        <!-- Видео: камера и галерея -->
         <input type="file" id="videoCamera"  accept="video/*" capture="environment" style="display:none;">
         <input type="file" id="videoGallery" accept="video/*" style="display:none;">
       </div>
@@ -616,7 +595,20 @@ if ($viewMode) {
     </div>
 
     <div class="card">
-      <h2>Фото и видео (<?= $totalPhotos ?>)</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+        <h2 style="margin:0;">Фото и видео (<?= $totalPhotos ?>)</h2>
+        <div class="btn-row" style="gap:8px;">
+          <button type="button" class="btn btn-small" style="background:#7c3aed;" onclick="openPdfEditor()">✏️ Редактировать PDF</button>
+          <?php if ($totalPhotos > 0): ?>
+            <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
+            <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($keyLabel) ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
+            <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
+              <input type="hidden" name="key_type" value="<?= e($viewKeyType) ?>">
+              <input type="hidden" name="key_value" value="<?= e($viewKeyValue) ?>">
+            </form>
+          <?php endif; ?>
+        </div>
+      </div>
       <?php if (empty($photos)): ?>
         <div class="empty-state">
           <div class="big">📷</div>
@@ -773,6 +765,161 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 </script>
 <?php endif; ?>
 
+<?php if ($viewMode): ?>
+<script>
+/* ========== ЗАГРУЗКА ФОТО/ВИДЕО ========== */
+(function() {
+  const KEY_TYPE  = <?= json_encode($viewKeyType) ?>;
+  const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
+
+  let selectedPhotoType = null;
+  let lastUploadedFile  = null;
+  let lastSource        = null;
+
+  const photoCamera  = document.getElementById('photoCamera');
+  const photoGallery = document.getElementById('photoGallery');
+  const videoCamera  = document.getElementById('videoCamera');
+  const videoGallery = document.getElementById('videoGallery');
+
+  const sourceModal = document.getElementById('sourceModal');
+  const saveModal   = document.getElementById('saveModal');
+  const sourceTitle = document.getElementById('sourceModalTitle');
+
+  // === Тап по плитке ===
+  document.querySelectorAll('.type-option').forEach(function(el) {
+    el.addEventListener('click', function() {
+      selectedPhotoType = el.dataset.type;
+      document.querySelectorAll('.type-option').forEach(function(x) { x.classList.remove('selected'); });
+      el.classList.add('selected');
+
+      const isVideo = selectedPhotoType === 'video_defect';
+      sourceTitle.textContent = isVideo
+        ? 'Записать видео дефекта — как?'
+        : 'Загрузить: «' + el.textContent.trim() + '» — откуда?';
+      sourceModal.classList.add('is-open');
+    });
+  });
+
+  window.closeSourceModal = function() {
+    sourceModal.classList.remove('is-open');
+  };
+
+  window.chooseSource = function(source) {
+    sourceModal.classList.remove('is-open');
+    lastSource = source;
+    const isVideo = selectedPhotoType === 'video_defect';
+    let input;
+    if (isVideo) input = (source === 'camera') ? videoCamera  : videoGallery;
+    else         input = (source === 'camera') ? photoCamera  : photoGallery;
+    input.click();
+  };
+
+  [photoCamera, photoGallery, videoCamera, videoGallery].forEach(function(input) {
+    input.addEventListener('change', function() {
+      const file = input.files && input.files[0];
+      if (!file || !selectedPhotoType) return;
+      lastUploadedFile = file;
+      uploadFile(file);
+      input.value = '';
+    });
+  });
+
+  function uploadFile(file) {
+    const comment = document.getElementById('commentInput').value.trim();
+    const formData = new FormData();
+    formData.append('key_type',   KEY_TYPE);
+    formData.append('key_value',  KEY_VALUE);
+    formData.append('photo_type', selectedPhotoType);
+    formData.append('comment',    comment);
+    formData.append('photo', file, file.name || ('upload_' + Date.now() + '.jpg'));
+
+    const status = document.createElement('div');
+    status.className = 'upload-status';
+    status.style.background = '#2563eb';
+    status.textContent = '📤 Загрузка...';
+    document.body.appendChild(status);
+
+    fetch('upload.php', { method: 'POST', body: formData, credentials: 'same-origin' })
+      .then(function(r) {
+        return r.text().then(function(text) {
+          return { ok: r.ok, status: r.status, text: text || '' };
+        });
+      })
+      .then(function(res) {
+        let serverError = null;
+        if (res.text) {
+          try {
+            const j = JSON.parse(res.text);
+            if (j && j.error) serverError = j.error;
+          } catch (e) {
+            if (!res.ok) serverError = 'HTTP ' + res.status + ': ' + res.text.slice(0, 200);
+          }
+        }
+        if (serverError) throw new Error(serverError);
+        if (!res.ok)     throw new Error('HTTP ' + res.status);
+
+        status.style.background = '#16a34a';
+        status.textContent = '✅ Загружено';
+        setTimeout(function() {
+          if (document.body.contains(status)) document.body.removeChild(status);
+        }, 500);
+
+        if (lastSource === 'camera' && navigator.share) {
+          saveModal.classList.add('is-open');
+        } else {
+          finishUpload();
+        }
+      })
+      .catch(function(err) {
+        status.style.background = '#dc2626';
+        status.textContent = '❌ ' + (err.message || 'ошибка загрузки');
+        console.error('upload error:', err);
+        setTimeout(function() {
+          if (document.body.contains(status)) document.body.removeChild(status);
+        }, 5000);
+      });
+  }
+
+  window.saveToPhone = async function() {
+    const file = lastUploadedFile;
+    if (!file) { finishUpload(); return; }
+
+    if (navigator.share && navigator.canShare) {
+      try {
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: 'Файл по ' + (KEY_TYPE === 'ra' ? 'РА' : 'VIN') + ' ' + KEY_VALUE,
+          });
+          finishUpload();
+          return;
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') { finishUpload(); return; }
+      }
+    }
+    try {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name || ('photo_' + Date.now() + '.jpg');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 3000);
+    } catch (e) {}
+    finishUpload();
+  };
+
+  window.finishUpload = function() {
+    saveModal.classList.remove('is-open');
+    window.location.href = 'gallery.php?key_type=' + encodeURIComponent(KEY_TYPE)
+      + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
+  };
+})();
+</script>
+<?php endif; ?>
+
 <script>
 /* ========== PDF-РЕДАКТОР ========== */
 (function() {
@@ -784,11 +931,10 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
   const appendInp = document.getElementById('pdfAppendInput');
   const appendLst = document.getElementById('pdfAppendList');
 
-  const blobCache  = new Map();  // id -> Blob
+  const blobCache  = new Map();
   let pages        = [];
   let appendedPdfs = [];
 
-  // === Модалка редактора ===
   window.openPdfEditor = function() {
     pages = window.IPG_PHOTOS
       .filter(function(p) { return !p.is_video; })
@@ -798,7 +944,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     render();
     statusEl.textContent = '';
     modal.classList.add('is-open');
-    // Заранее прогреваем кэш — грузим всё параллельно в фоне
     preloadAll();
   };
   window.closePdfEditor = function() {
@@ -812,7 +957,7 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         const res = await fetch('download.php?id=' + p.id, { credentials: 'same-origin' });
         if (!res.ok) return;
         blobCache.set(p.id, await res.blob());
-      } catch (e) { /* тихо */ }
+      } catch (e) {}
     }));
   }
 
@@ -871,9 +1016,9 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       a.onclick = function(e) {
         e.preventDefault();
         const i = parseInt(a.dataset.i, 10);
+        const removed = appendedPdfs[i];
         appendedPdfs.splice(i, 1);
-        // удаляем и соответствующую страницу
-        pages = pages.filter(function(p) { return !(p.kind === 'pdf' && p.file === appendedPdfs[i]); });
+        pages = pages.filter(function(p) { return !(p.kind === 'pdf' && p.file === removed); });
         render();
       };
     });
@@ -909,9 +1054,9 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
   });
 
   // === Просмотрщик фото ===
-  const viewer       = document.getElementById('photoViewer');
-  const viewerImg    = document.getElementById('photoViewerImg');
-  const viewerTitle  = document.getElementById('photoViewerTitle');
+  const viewer      = document.getElementById('photoViewer');
+  const viewerImg   = document.getElementById('photoViewerImg');
+  const viewerTitle = document.getElementById('photoViewerTitle');
   let viewerIdx = -1, viewerRotation = 0, viewerZoom = 1;
 
   window.viewerOpen = function(idx) {
@@ -925,13 +1070,11 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     applyViewerTransform();
     viewer.classList.add('is-open');
   };
-  window.viewerClose = function() { viewer.classList.remove('is-open'); };
   window.viewerRotate = function() { viewerRotation = (viewerRotation + 90) % 360; applyViewerTransform(); };
   window.viewerReset  = function() { viewerRotation = 0; viewerZoom = 1; applyViewerTransform(); };
   function applyViewerTransform() {
     viewerImg.style.transform = 'rotate(' + viewerRotation + 'deg) scale(' + viewerZoom + ')';
   }
-  // Зум колесом
   viewer.addEventListener('wheel', function(e) {
     if (!viewer.classList.contains('is-open')) return;
     e.preventDefault();
@@ -939,17 +1082,14 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     viewerZoom = Math.max(0.3, Math.min(4, viewerZoom));
     applyViewerTransform();
   }, { passive: false });
-  // Сохранить поворот при закрытии
   viewer.addEventListener('click', function(e) {
-    if (e.target === viewer) viewerClose();
+    if (e.target === viewer) window.viewerClose();
   });
-  // По кнопке «Закрыть» применяем поворот к карточке
-  const origViewerClose = window.viewerClose;
   window.viewerClose = function() {
     if (viewerIdx >= 0 && pages[viewerIdx]) {
       pages[viewerIdx].rotation = viewerRotation;
     }
-    origViewerClose();
+    viewer.classList.remove('is-open');
     render();
   };
 
@@ -984,13 +1124,9 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         i.src = url;
       });
 
-      // Размер исходника
-      let w = img.width, h = img.height;
-
-      // Если поворот 90 или 270 — размеры меняются местами
+      const w = img.width, h = img.height;
       const rotated = (rotation % 180) !== 0;
 
-      // Уменьшение по ширине
       let targetW = w, targetH = h;
       if (q.maxW && w > q.maxW) {
         const k = q.maxW / w;
@@ -998,31 +1134,24 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         targetH = Math.round(h * k);
       }
 
-      // Итоговый canvas уже с учётом поворота
       const canvas = document.createElement('canvas');
       canvas.width  = rotated ? targetH : targetW;
       canvas.height = rotated ? targetW : targetH;
       const ctx = canvas.getContext('2d');
 
-      // Заливаем белым (на случай прозрачности)
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Поворот вокруг центра
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate(rotation * Math.PI / 180);
       ctx.drawImage(img, -targetW / 2, -targetH / 2, targetW, targetH);
       ctx.restore();
 
-      // Возвращаем JPEG (или PNG-оригинал, если просили «Оригинал» без уменьшения)
-      if (qualityKey === 'original' && w <= 2400 && blob.type === 'image/jpeg') {
-        return { blob: blob, width: w, height: h, original: true };
-      }
       const outBlob = await new Promise(function(res) {
         canvas.toBlob(res, 'image/jpeg', q.q || 0.9);
       });
-      return { blob: outBlob, width: canvas.width, height: canvas.height };
+      return outBlob;
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -1032,7 +1161,7 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     if (pages.length === 0) { statusEl.textContent = '⚠️ Нет страниц'; return; }
     statusEl.textContent = '⏳ Собираю PDF...';
     try {
-      const { PDFDocument, degrees } = PDFLib;
+      const { PDFDocument } = PDFLib;
       const out = await PDFDocument.create();
       const qualityKey = document.getElementById('pdfQuality').value;
       const A4_W = 595.28, A4_H = 841.89;
@@ -1042,11 +1171,10 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         statusEl.textContent = '⏳ Страница ' + (i + 1) + ' из ' + pages.length + '...';
 
         if (p.kind === 'img') {
-          const raw = await getBlobForPdf(p);
-          const out2 = await compressImage(raw, p.rotation || 0, qualityKey);
-          const buf  = await out2.blob.arrayBuffer();
+          const raw  = await getBlobForPdf(p);
+          const comp = await compressImage(raw, p.rotation || 0, qualityKey);
+          const buf  = await comp.arrayBuffer();
 
-          // pdf-lib: пробуем JPEG, если не получится — PNG
           let img;
           try {
             img = await out.embedJpg(buf);
