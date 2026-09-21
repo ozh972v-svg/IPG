@@ -1,4 +1,6 @@
 <?php
+set_time_limit(600);
+
 require __DIR__ . '/db.php';
 start_session();
 
@@ -66,6 +68,36 @@ if ($vin !== '') {
 if ($complectation === null && $vin === '') {
     $manual = trim($_GET['complectation'] ?? '');
     if ($manual !== '') $complectation = $manual;
+}
+
+/* ============================================================
+   1.5 АВТОЗАГРУЗКА РАБОТ ИЗ 1С, ЕСЛИ ИХ НЕТ В БАЗЕ
+   ============================================================ */
+$autoSyncInfo = null;
+
+if ($complectation !== null
+    && empty($_GET['find_prereq'])
+    && empty($_GET['find_pair'])) {
+
+    $cntStmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations
+                               WHERE complectation = :c AND deleted = FALSE");
+    $cntStmt->execute([':c' => $complectation]);
+    $existingCount = (int)$cntStmt->fetchColumn();
+
+    if ($existingCount === 0) {
+        require_once __DIR__ . '/sync_works_lib.php';
+        $res = sync_works_for_complectation($complectation, '2021-01-01', date('Y-m-d'));
+        if (!empty($res['ok'])) {
+            $autoSyncInfo = sprintf(
+                'Работы загружены из 1С: групп — %d, работ — %d',
+                (int)$res['stats']['groups'],
+                (int)$res['stats']['works']
+            );
+        } else {
+            $vinError = 'Работы по этой комплектации ещё не загружены. '
+                      . 'Автозагрузка не удалась: ' . ($res['error'] ?? 'неизвестная ошибка');
+        }
+    }
 }
 
 /* ============================================================
@@ -530,6 +562,9 @@ function fmtNorm($n) {
           ✅ Комплектация: <b><?= e($complectation) ?></b>
           <?php if ($lastSync): ?> · обновлено: <b><?= e(fmtTs($lastSync)) ?></b><?php endif; ?>
         </div>
+        <?php if ($autoSyncInfo): ?>
+          <div class="vin-info" style="background:#dcfce7;color:#166534;margin-left:8px;">📥 <?= e($autoSyncInfo) ?></div>
+        <?php endif; ?>
       <?php endif; ?>
     </div>
   </div>
@@ -540,6 +575,9 @@ function fmtNorm($n) {
       <div class="step-hint">
         Введите VIN шасси в поле выше, чтобы система нашла комплектацию через 1С:ГОА и показала работы.
         Можно вводить как полный VIN (17 символов), так и последние 7 цифр номера шасси.
+        <br><br>
+        <b>Первый раз по новой комплектации</b> может занять 30–90 секунд: система автоматически
+        подтянет работы из 1С:ГОА.
       </div>
       <?php if (!$vin): ?>
         <p style="color:#888;font-size:14px;margin:0;">
