@@ -1020,8 +1020,11 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         const p = pages[i];
         statusEl.textContent = '⏳ Страница ' + (i + 1) + ' из ' + pages.length + '...';
 
-        if (p.kind === 'img') {
-          const res  = await fetch(p.path, { credentials: 'same-origin' });
+                if (p.kind === 'img') {
+          // Грузим через download.php — он ходит за файлом на сервере,
+          // и у него нет CORS-проблем с хранилищем
+          const res = await fetch('download.php?id=' + p.id, { credentials: 'same-origin' });
+          if (!res.ok) throw new Error('Не удалось загрузить фото id=' + p.id + ' (HTTP ' + res.status + ')');
           const blob = await res.blob();
           let img;
           if (blob.type === 'image/png') {
