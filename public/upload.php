@@ -39,7 +39,8 @@ if ($keyValue === '') {
 
 $allowedTypes = [
     'general', 'vin', 'odometer', 'before_dismount',
-    'after_dismount', 'marking', 'manifestation', 'numbered_unit'
+    'after_dismount', 'marking', 'manifestation', 'numbered_unit',
+    'other', 'video_defect'
 ];
 if (!in_array($photoType, $allowedTypes, true)) {
     redirect_error('Неверный тип фото');
