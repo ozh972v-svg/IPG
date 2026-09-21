@@ -37,25 +37,28 @@ if (!$viewMode
     $newKeyValue = trim($_GET['key_value']);
     $newGos      = trim($_GET['gos_number'] ?? '');
     $newOrder    = trim($_GET['order_number'] ?? '');
+    $newDescr    = trim($_GET['description'] ?? '');
 
     if ($newKeyValue !== '') {
         try {
             $stmt = $pdo->prepare("
-                INSERT INTO keys (key_type, key_value, gos_number, order_number, user_id, created_at, updated_by, updated_at)
-                VALUES (:kt, :kv, :gos, :ord, :uid, NOW(), :uid2, NOW())
+                INSERT INTO keys (key_type, key_value, gos_number, order_number, description, user_id, created_at, updated_by, updated_at)
+                VALUES (:kt, :kv, :gos, :ord, :descr, :uid, NOW(), :uid2, NOW())
                 ON CONFLICT (key_type, key_value) DO UPDATE
                     SET gos_number   = COALESCE(NULLIF(EXCLUDED.gos_number, ''),   keys.gos_number),
                         order_number = COALESCE(NULLIF(EXCLUDED.order_number, ''), keys.order_number),
+                        description  = COALESCE(NULLIF(EXCLUDED.description, ''),  keys.description),
                         updated_by   = EXCLUDED.updated_by,
                         updated_at   = NOW()
             ");
             $stmt->execute([
-                ':kt'   => $_GET['key_type'],
-                ':kv'   => $newKeyValue,
-                ':gos'  => $newGos ?: null,
-                ':ord'  => $newOrder ?: null,
-                ':uid'  => $user['id'],
-                ':uid2' => $user['id'],
+                ':kt'    => $_GET['key_type'],
+                ':kv'    => $newKeyValue,
+                ':gos'   => $newGos ?: null,
+                ':ord'   => $newOrder ?: null,
+                ':descr' => $newDescr ?: null,
+                ':uid'   => $user['id'],
+                ':uid2'  => $user['id'],
             ]);
         } catch (Throwable $e) {
             /* тихо */
@@ -71,18 +74,19 @@ $groups = [];
 if (!$viewMode) {
     if ($searchQuery !== '') {
         $stmt = $pdo->prepare("
-            SELECT k.key_type, k.key_value, k.gos_number, k.order_number,
+            SELECT k.key_type, k.key_value, k.gos_number, k.order_number, k.description,
                    k.user_id, k.created_at, k.updated_by, k.updated_at
               FROM keys k
              WHERE k.key_value ILIKE :q
                 OR COALESCE(k.gos_number, '')   ILIKE :q
                 OR COALESCE(k.order_number, '') ILIKE :q
+                OR COALESCE(k.description, '')  ILIKE :q
              ORDER BY k.key_value DESC
         ");
         $stmt->execute([':q' => '%' . $searchQuery . '%']);
     } else {
         $stmt = $pdo->query("
-            SELECT k.key_type, k.key_value, k.gos_number, k.order_number,
+            SELECT k.key_type, k.key_value, k.gos_number, k.order_number, k.description,
                    k.user_id, k.created_at, k.updated_by, k.updated_at
               FROM keys k
              ORDER BY k.key_value DESC
@@ -100,6 +104,21 @@ if (!$viewMode) {
         $photoCounts[$row['key_type'] . '::' . $row['key_value']] = $row;
     }
 
+    // Превью: по одной последней фотографии типов general и before_dismount на каждую запись
+    $thumbs = [];
+    try {
+        $stmt = $pdo->query("
+            SELECT DISTINCT ON (key_type, key_value, photo_type)
+                   key_type, key_value, photo_type, file_path
+              FROM photos
+             WHERE photo_type IN ('general', 'before_dismount')
+             ORDER BY key_type, key_value, photo_type, created_at DESC
+        ");
+        foreach ($stmt->fetchAll() as $t) {
+            $thumbs[$t['key_type'] . '::' . $t['key_value']][$t['photo_type']] = $t['file_path'];
+        }
+    } catch (Throwable $e) {}
+
     // Пользователи (для имён авторов)
     $usersById = [];
     try {
@@ -116,14 +135,17 @@ if (!$viewMode) {
             'key_value'    => $k['key_value'],
             'gos_number'   => $k['gos_number']   ?? null,
             'order_number' => $k['order_number'] ?? null,
+            'description'  => $k['description']  ?? null,
             'user_id'      => $k['user_id']      ?? null,
             'created_at'   => $k['created_at']   ?? null,
             'updated_by'   => $k['updated_by']   ?? null,
             'updated_at'   => $k['updated_at']   ?? null,
             'count'        => $row ? (int)$row['cnt'] : 0,
             'last_date'    => $row['last_date'] ?? null,
-            'creator_name' => null,
-            'updater_name' => null,
+            'thumb_general'  => $thumbs[$key]['general']         ?? null,
+            'thumb_defect'   => $thumbs[$key]['before_dismount'] ?? null,
+            'creator_name'   => null,
+            'updater_name'   => null,
         ];
     }
 
@@ -190,6 +212,11 @@ function formatSize($bytes) {
   h1 { font-size: 22px; margin: 0 0 8px; }
   h2 { font-size: 18px; margin: 0 0 16px; }
   .subtitle { color: #666; font-size: 14px; margin: 0 0 16px; }
+  .key-description {
+    font-size: 15px; color: #1a1a1a; font-weight: 600;
+    background: #fffbeb; border-left: 4px solid #f59e0b;
+    padding: 10px 14px; border-radius: 10px; margin: 0 0 14px;
+  }
   .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   .user-info { font-size: 13px; color: #666; }
   .user-info b { color: #2563eb; }
@@ -207,14 +234,45 @@ function formatSize($bytes) {
   .form-row input:focus, .form-row select:focus, .form-row textarea:focus { outline: none; border-color: #2563eb; }
   .form-row textarea { resize: vertical; min-height: 60px; }
 
-  .group-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px; margin-bottom: 10px; background: #fff; transition: all 0.15s; }
+  /* === Список записей === */
+  .group-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
+    margin-bottom: 10px; background: #fff; transition: all 0.15s;
+  }
   .group-item:hover { border-color: #2563eb; background: #f8faff; }
+  .group-link {
+    flex: 1; min-width: 0; text-decoration: none; color: inherit;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .group-main { flex: 1; min-width: 0; }
   .group-item-title { font-weight: 700; font-size: 16px; color: #1e3a8a; }
+  .group-item-desc {
+    font-size: 13px; color: #1a1a1a; margin-top: 4px;
+    font-weight: 500;
+  }
   .group-item-sub { font-size: 12px; color: #888; margin-top: 4px; }
   .group-item-meta { font-size: 11px; color: #999; margin-top: 4px; }
+
+  .group-thumbs { display: flex; gap: 6px; flex-shrink: 0; }
+  .group-thumb {
+    width: 64px; height: 64px; border-radius: 8px;
+    border: 1.5px solid #e5e7eb; background: #f9fafb;
+    object-fit: cover; display: block;
+  }
+  .group-thumb-empty {
+    width: 64px; height: 64px; border-radius: 8px;
+    border: 1.5px dashed #e5e7eb; background: #fafafa;
+    display: flex; align-items: center; justify-content: center;
+    color: #cbd5e1; font-size: 20px;
+  }
+  .group-thumb-label {
+    display: block; font-size: 9px; color: #999;
+    text-align: center; margin-top: 2px;
+  }
+
+  .group-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .group-item-count { font-size: 13px; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 12px; font-weight: 600; }
-  .group-link { flex: 1; text-decoration: none; color: inherit; }
-  .group-actions { display: flex; align-items: center; gap: 8px; }
   .group-del-btn { color: #dc2626; font-size: 18px; text-decoration: none; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
   .group-del-btn:hover { background: #fef2f2; }
 
@@ -250,7 +308,8 @@ function formatSize($bytes) {
 
   .upload-status { position: fixed; top: 0; left: 0; right: 0; padding: 14px; text-align: center; font-weight: 600; z-index: 9999; color: #fff; }
 
-  @media (max-width: 600px) {
+  @media (max-width: 700px) {
+    .group-thumbs { display: none; }
     .photo-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
     .photo-card img { height: 120px; }
   }
@@ -269,6 +328,9 @@ function formatSize($bytes) {
     </div>
 
     <?php if ($viewMode && $currentKey): ?>
+      <?php if (!empty($currentKey['description'])): ?>
+        <div class="key-description">📝 <?= e($currentKey['description']) ?></div>
+      <?php endif; ?>
       <?php if (!empty($currentKey['gos_number']) || !empty($currentKey['order_number'])): ?>
         <p class="subtitle">
           <?php if (!empty($currentKey['gos_number'])): ?>🚗 Гос. номер: <b><?= e($currentKey['gos_number']) ?></b><?php endif; ?>
@@ -337,6 +399,10 @@ function formatSize($bytes) {
           <input type="text" name="key_value" required placeholder="Например: 12345">
         </div>
         <div class="form-row">
+          <label>Краткое описание (обязательно)</label>
+          <input type="text" name="description" required placeholder="Например: течь гидроцилиндра подъёма кабины" maxlength="250">
+        </div>
+        <div class="form-row">
           <label>Гос. номер (необязательно)</label>
           <input type="text" name="gos_number" placeholder="Например: А123БВ 116">
         </div>
@@ -351,7 +417,7 @@ function formatSize($bytes) {
     <div class="card">
       <h2>🔍 Поиск</h2>
       <form method="get" class="search-bar">
-        <input type="text" name="q" placeholder="Поиск по РА, VIN, гос. номеру, заказ-наряду" value="<?= e($searchQuery) ?>">
+        <input type="text" name="q" placeholder="Поиск по РА, VIN, гос. номеру, заказ-наряду, описанию" value="<?= e($searchQuery) ?>">
         <button type="submit" class="btn btn-secondary btn-small">Найти</button>
         <?php if ($searchQuery): ?>
           <a href="gallery.php" class="btn btn-secondary btn-small">Сбросить</a>
@@ -371,8 +437,12 @@ function formatSize($bytes) {
           <?php $delId = 'delAll-' . md5($g['key_type'] . $g['key_value']); ?>
           <div class="group-item">
             <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
-              <div>
+              <div class="group-main">
                 <div class="group-item-title"><?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?></div>
+
+                <?php if (!empty($g['description'])): ?>
+                  <div class="group-item-desc">📝 <?= e($g['description']) ?></div>
+                <?php endif; ?>
 
                 <?php if ($g['gos_number'] || $g['order_number']): ?>
                   <div class="group-item-sub">
@@ -395,7 +465,25 @@ function formatSize($bytes) {
                     🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?>
                   </div>
                 <?php endif; ?>
+              </div>
 
+              <div class="group-thumbs">
+                <div>
+                  <?php if ($g['thumb_general']): ?>
+                    <img class="group-thumb" src="<?= e($g['thumb_general']) ?>" alt="Общий вид" loading="lazy">
+                  <?php else: ?>
+                    <div class="group-thumb-empty">📷</div>
+                  <?php endif; ?>
+                  <span class="group-thumb-label">Общий вид</span>
+                </div>
+                <div>
+                  <?php if ($g['thumb_defect']): ?>
+                    <img class="group-thumb" src="<?= e($g['thumb_defect']) ?>" alt="Дефект" loading="lazy">
+                  <?php else: ?>
+                    <div class="group-thumb-empty">🔍</div>
+                  <?php endif; ?>
+                  <span class="group-thumb-label">Дефект</span>
+                </div>
               </div>
             </a>
             <div class="group-actions">
