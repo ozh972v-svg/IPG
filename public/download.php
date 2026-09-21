@@ -24,6 +24,11 @@ $MIME_EXT = [
     'image/heic' => 'heic',
     'image/heif' => 'heif',
     'image/gif'  => 'gif',
+    'video/mp4'       => 'mp4',
+    'video/quicktime' => 'mov',
+    'video/webm'      => 'webm',
+    'video/x-m4v'     => 'm4v',
+    'video/3gpp'      => '3gp',
 ];
 
 /**
