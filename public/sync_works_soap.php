@@ -77,8 +77,7 @@ if ($run) {
     } else {
         $log[] = 'HTTP 200 OK, размер: ' . strlen((string)$response) . ' байт';
 
-        // Убираем namespace: сначала объявления, потом префиксы у тегов.
-        // Это позволяет читать поля напрямую: $node->TimeRate->Name и т.д.
+        // Убираем namespace — тогда поля читаются напрямую
         $clean = preg_replace('/\s+xmlns(:[A-Za-z0-9_]+)?="[^"]*"/', '', (string)$response);
         $clean = preg_replace('/<(\/)?[A-Za-z0-9_]+:/', '<$1', (string)$clean);
 
@@ -86,40 +85,33 @@ if ($run) {
         $xml = simplexml_load_string($clean);
 
         if (!$xml) {
-            $log[] = 'Не удалось разобрать XML после чистки:';
+            $log[] = 'Не удалось разобрать XML:';
             foreach (libxml_get_errors() as $e) {
                 $log[] = '  ' . trim($e->message);
             }
         } else {
-            // Находим все InstallationWorkloads
-            $iwNodes = $xml->xpath('//InstallationWorkloads');
-            if (!$iwNodes) {
-                $iwNodes = [];
-            }
+            $iwNodes = $xml->xpath('//InstallationWorkloads') ?: [];
             $log[] = 'Найдено InstallationWorkloads: ' . count($iwNodes);
 
-            // --- Шаг 1: собрать уникальные complectations ---
+            // Собираем уникальные complectations
             $comps = [];
             foreach ($iwNodes as $iw) {
-                $deleted = trim((string)($iw->Deleted ?? 'false'));
-                if ($deleted === 'true') continue;
-
+                if (trim((string)($iw->Deleted ?? 'false')) === 'true') continue;
                 $comp = trim((string)($iw->TimeRate->Name ?? ''));
-                if ($comp === '') continue;
-                $comps[$comp] = true;
+                if ($comp !== '') $comps[$comp] = true;
             }
             $comps = array_keys($comps);
             $log[] = 'Уникальных complectations: ' . count($comps) . ' [' . implode(', ', $comps) . ']';
 
-            // --- Шаг 2: удалить старые записи по каждой complectation ---
             $pdo = get_db();
+
+            // Удаляем старые записи
             $del = $pdo->prepare('DELETE FROM work_operations WHERE complectation = :c');
             foreach ($comps as $c) {
                 $del->execute([':c' => $c]);
                 $log[] = "Удалены старые записи по complectation = $c";
             }
 
-            // --- Шаг 3: обойти все узлы и вставить записи ---
             $stmt = $pdo->prepare(
                 'INSERT INTO work_operations
                  (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, deleted, updated_at)
@@ -136,15 +128,38 @@ if ($run) {
                    updated_at     = NOW()'
             );
 
+            // Функция: собрать цепочку родителей ОТ ВЕРХНЕГО К НИЖНЕМУ
+            // Возвращает массив ['Code@comp' => ['name' => ..., 'parent_code' => ...], ...]
+            $collectChain = function (SimpleXMLElement $node, string $comp) use (&$collectChain): array {
+                $chain = [];
+                if (isset($node->Parent)) {
+                    // Сначала рекурсивно поднимаемся выше
+                    $chain = $collectChain($node->Parent, $comp);
+                    $p = $node->Parent;
+                    $pCode = trim((string)($p->Code ?? ''));
+                    if ($pCode !== '') {
+                        $parentAboveCode = count($chain) > 0 ? $chain[count($chain) - 1]['code'] : null;
+                        $chain[] = [
+                            'code'        => $pCode . '@' . $comp,
+                            'parent_code' => $parentAboveCode,
+                            'name'        => trim((string)($p->Name ?? '')),
+                        ];
+                    }
+                }
+                return $chain;
+            };
+
+            // Множество уже вставленных групп (по всем complectations)
+            $seenGroups = [];
+
             $insertedComps = [];
+            $insertErrors  = 0;
 
             foreach ($iwNodes as $iwIdx => $iw) {
-                $deleted = trim((string)($iw->Deleted ?? 'false'));
-                if ($deleted === 'true') {
+                if (trim((string)($iw->Deleted ?? 'false')) === 'true') {
                     $log[] = "Узел #$iwIdx: Deleted=true, пропускаем";
                     continue;
                 }
-
                 $complectation = trim((string)($iw->TimeRate->Name ?? ''));
                 if ($complectation === '') {
                     $log[] = "Узел #$iwIdx: TimeRate/Name пуст, пропускаем";
@@ -159,7 +174,6 @@ if ($run) {
                     $stats['complectations']++;
                 }
 
-                // Обход всех работ в этом узле
                 $wlList = [];
                 if (isset($iw->Workloads) && isset($iw->Workloads->Workload)) {
                     foreach ($iw->Workloads->Workload as $wl) {
@@ -173,7 +187,6 @@ if ($run) {
                     if (!isset($wl->Operation)) continue;
                     $op = $wl->Operation;
 
-                    // Пропуск удалённых
                     if (trim((string)($op->Deleted ?? 'false')) === 'true') continue;
 
                     $opCode  = trim((string)($op->Code ?? ''));
@@ -189,21 +202,44 @@ if ($run) {
                     $normTime = ($wlText === '') ? null : (float)$wlText;
                     if ($normTime !== null && $normTime <= 0) $normTime = null;
 
-                    // Прямой родитель = внешний <Parent>
-                    $parentCode = null;
-                    if (isset($op->Parent)) {
-                        $pCode = trim((string)($op->Parent->Code ?? ''));
-                        if ($pCode !== '') {
-                            $parentCode = $pCode . '@' . $complectation;
+                    // Собрать цепочку родителей (от верхнего к прямому)
+                    $chain = $collectChain($op, $complectation);
+
+                    // Вставить группы (те, которых ещё нет)
+                    foreach ($chain as $g) {
+                        $gCode = $g['code'];
+                        if (isset($seenGroups[$gCode])) continue;
+                        $seenGroups[$gCode] = true;
+                        try {
+                            $stmt->execute([
+                                ':code'           => $gCode,
+                                ':parent_code'    => $g['parent_code'],
+                                ':it_is_group'    => 'true',
+                                ':name'           => $g['name'],
+                                ':operation_code' => null,
+                                ':norm_time'      => null,
+                                ':complectation'  => $complectation,
+                                ':model'          => $modelShort,
+                            ]);
+                            $stats['groups']++;
+                            $stats['total']++;
+                            $insertedComps[$complectation]++;
+                        } catch (Throwable $e) {
+                            $insertErrors++;
+                            if ($insertErrors <= 5) {
+                                $log[] = '  ! INSERT группы ' . $gCode . ': ' . $e->getMessage();
+                            }
                         }
                     }
 
+                    // Прямой родитель — последний в цепочке
+                    $directParentCode = count($chain) > 0 ? $chain[count($chain) - 1]['code'] : null;
                     $code = $opCode . '@' . $complectation;
 
                     try {
                         $stmt->execute([
                             ':code'           => $code,
-                            ':parent_code'    => $parentCode,
+                            ':parent_code'    => $directParentCode,
                             ':it_is_group'    => $itGroup ? 'true' : 'false',
                             ':name'           => $opName,
                             ':operation_code' => $operationCode,
@@ -219,7 +255,10 @@ if ($run) {
                             if ($normTime !== null) $stats['with_norm']++;
                         }
                     } catch (Throwable $e) {
-                        $log[] = '  ! INSERT ошибка для code=' . $opCode . ': ' . $e->getMessage();
+                        $insertErrors++;
+                        if ($insertErrors <= 5) {
+                            $log[] = '  ! INSERT работы ' . $code . ': ' . $e->getMessage();
+                        }
                     }
                 }
             }
@@ -227,6 +266,9 @@ if ($run) {
             $log[] = '';
             foreach ($insertedComps as $c => $n) {
                 $log[] = "Итог по $c: вставлено $n записей";
+            }
+            if ($insertErrors > 5) {
+                $log[] = "Всего ошибок INSERT: $insertErrors (показаны первые 5)";
             }
         }
     }
