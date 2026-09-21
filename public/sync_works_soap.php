@@ -4,6 +4,10 @@
 
 declare(strict_types=1);
 
+ini_set('display_errors', '1');
+error_reporting(E_ALL);
+ini_set('memory_limit', '512M');
+
 require_once __DIR__ . '/db.php';
 
 start_session();
@@ -68,138 +72,119 @@ if ($run) {
         $log[] = "cURL ошибка: $curlErr";
     } elseif ($httpCode !== 200) {
         $log[] = "HTTP $httpCode";
-        $log[] = 'Первые 2000 символов ответа: ' . substr((string)$response, 0, 2000);
+        $log[] = 'Первые 2000 символов: ' . substr((string)$response, 0, 2000);
     } else {
-        $log[] = 'HTTP 200 OK, размер ответа: ' . strlen((string)$response) . ' байт';
+        $log[] = 'HTTP 200 OK, размер: ' . strlen((string)$response) . ' байт';
 
-        libxml_use_internal_errors(true);
-        libxml_clear_errors();
-        $xml = simplexml_load_string((string)$response);
+        // --- Пробуем разные способы разбора, чтобы понять, что ломается ---
 
-        if (!$xml) {
-            $log[] = 'Не удалось разобрать XML:';
-            foreach (libxml_get_errors() as $e) {
-                $log[] = '  ' . trim($e->message);
-            }
+        // Способ 1: через DOMDocument (обычно устойчивее)
+        $dom = new DOMDocument();
+        $domLoaded = @$dom->loadXML((string)$response, LIBXML_NONET | LIBXML_NOCDATA);
+
+        if (!$domLoaded) {
+            $log[] = 'DOMDocument::loadXML вернул FALSE';
+            if ($dom->doctype) $log[] = 'есть doctype';
+            $log[] = 'Первые 200 символов ответа: ' . substr((string)$response, 0, 200);
         } else {
-            $xml->registerXPathNamespace('m', $targetNs);
+            $log[] = 'DOMDocument OK, корень: ' . $dom->documentElement->nodeName;
 
-            // В ответе ровно один узел <m:InstallationWorkloads> (с "s" на конце)
-            $iwNodes = $xml->xpath('//m:InstallationWorkloads');
-
-            if (!$iwNodes || count($iwNodes) === 0) {
-                $log[] = 'Узел InstallationWorkloads не найден.';
+            // Способ 2: simplexml_import_dom из уже загруженного DOM
+            $xml = simplexml_import_dom($dom);
+            if ($xml === false || $xml === null) {
+                $log[] = 'simplexml_import_dom вернул FALSE';
             } else {
-                $iw = $iwNodes[0];
+                $log[] = 'simplexml_import_dom OK, корень: ' . $xml->getName();
+                $xml->registerXPathNamespace('m', $targetNs);
 
-                // Deleted у самой комплектации
-                $iwDeleted = trim((string)($iw->Deleted ?? 'false'));
-                if ($iwDeleted === 'true') {
-                    $log[] = 'Комплектация помечена Deleted=true, пропускаем.';
-                } else {
-                    // Комплектация
-                    $complectation = trim((string)($iw->TimeRate->Name ?? ''));
-                    if ($complectation === '') {
-                        $log[] = 'Пустое поле TimeRate/Name — не знаем комплектацию, стоп.';
-                    } else {
-                        $modelShort = substr($complectation, 0, 5);
-                        $stats['complectations'] = 1;
+                $iwNodes = $xml->xpath('//m:InstallationWorkloads');
+                $log[] = 'XPath //m:InstallationWorkloads → ' . ($iwNodes ? count($iwNodes) : 0);
 
-                        $pdo = get_db();
+                if ($iwNodes && count($iwNodes) > 0) {
+                    $iw = $iwNodes[0];
 
-                        // Удаляем старые записи по этой комплектации
-                        $del = $pdo->prepare('DELETE FROM work_operations WHERE complectation = :c');
-                        $del->execute([':c' => $complectation]);
-                        $log[] = "Удалены старые записи по complectation = $complectation";
+                    $iwDeleted = trim((string)($iw->Deleted ?? 'false'));
+                    $log[] = 'InstallationWorkloads/Deleted = ' . $iwDeleted;
 
-                        // Готовим INSERT
-                        $stmt = $pdo->prepare(
-                            'INSERT INTO work_operations
-                             (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, deleted, updated_at)
-                             VALUES (:code, :parent_code, :it_is_group, :name, :operation_code, :norm_time, :complectation, :model, false, NOW())
-                             ON CONFLICT (code) DO UPDATE SET
-                               parent_code    = EXCLUDED.parent_code,
-                               it_is_group    = EXCLUDED.it_is_group,
-                               name           = EXCLUDED.name,
-                               operation_code = EXCLUDED.operation_code,
-                               norm_time      = EXCLUDED.norm_time,
-                               complectation  = EXCLUDED.complectation,
-                               model          = EXCLUDED.model,
-                               deleted        = EXCLUDED.deleted,
-                               updated_at     = NOW()'
-                        );
+                    if ($iwDeleted !== 'true') {
+                        $complectation = trim((string)($iw->TimeRate->Name ?? ''));
+                        $log[] = 'TimeRate/Name = ' . ($complectation ?: '(пусто)');
 
-                        // Обходим Workloads/Workload
-                        $wlNodes = $iw->xpath('.//m:Workloads/m:Workload');
-                        if (!$wlNodes) {
-                            $wlNodes = [];
-                        }
-                        $log[] = 'Найдено Workload-узлов: ' . count($wlNodes);
+                        if ($complectation !== '') {
+                            $modelShort = substr($complectation, 0, 5);
+                            $stats['complectations'] = 1;
 
-                        foreach ($wlNodes as $wlNode) {
-                            $op = $wlNode->Operation ?? null;
-                            if (!$op) {
-                                continue;
-                            }
+                            $pdo = get_db();
 
-                            $opDeleted = trim((string)($op->Deleted ?? 'false'));
-                            if ($opDeleted === 'true') {
-                                continue;
-                            }
+                            $del = $pdo->prepare('DELETE FROM work_operations WHERE complectation = :c');
+                            $del->execute([':c' => $complectation]);
+                            $log[] = "Удалены старые записи по complectation = $complectation";
 
-                            $opCode  = trim((string)($op->Code ?? ''));
-                            $opName  = trim((string)($op->Name ?? ''));
-                            $itGroup = trim((string)($op->ItIsGroup ?? 'false')) === 'true';
+                            $stmt = $pdo->prepare(
+                                'INSERT INTO work_operations
+                                 (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, deleted, updated_at)
+                                 VALUES (:code, :parent_code, :it_is_group, :name, :operation_code, :norm_time, :complectation, :model, false, NOW())
+                                 ON CONFLICT (code) DO UPDATE SET
+                                   parent_code    = EXCLUDED.parent_code,
+                                   it_is_group    = EXCLUDED.it_is_group,
+                                   name           = EXCLUDED.name,
+                                   operation_code = EXCLUDED.operation_code,
+                                   norm_time      = EXCLUDED.norm_time,
+                                   complectation  = EXCLUDED.complectation,
+                                   model          = EXCLUDED.model,
+                                   deleted        = EXCLUDED.deleted,
+                                   updated_at     = NOW()'
+                            );
 
-                            if ($opCode === '') {
-                                continue;
-                            }
+                            $wlNodes = $iw->xpath('.//m:Workloads/m:Workload');
+                            if (!$wlNodes) $wlNodes = [];
+                            $log[] = 'Workload-узлов: ' . count($wlNodes);
 
-                            $operationCode = trim((string)($op->OperationCode ?? ''));
-                            if ($operationCode === '') {
-                                $operationCode = null;
-                            }
+                            foreach ($wlNodes as $wlNode) {
+                                $op = $wlNode->Operation ?? null;
+                                if (!$op) continue;
 
-                            // Трудоёмкость
-                            $wlText   = trim((string)($wlNode->Workload ?? ''));
-                            $normTime = ($wlText === '') ? null : (float)$wlText;
-                            if ($normTime !== null && $normTime <= 0) {
-                                $normTime = null;
-                            }
+                                if (trim((string)($op->Deleted ?? 'false')) === 'true') continue;
 
-                            // Прямой родитель: самый вложенный <m:Parent>
-                            // В XML структура: <Parent><Parent>верхняя</Parent>прямой</Parent>
-                            // "Прямой" = внешний Parent (первый из xpath).
-                            $parentCode = null;
-                            $parents = $op->xpath('./m:Parent');
-                            if ($parents && count($parents) > 0) {
-                                $directParent = $parents[0];
-                                $pCode = trim((string)($directParent->Code ?? ''));
-                                if ($pCode !== '') {
-                                    $parentCode = $pCode . '@' . $complectation;
+                                $opCode  = trim((string)($op->Code ?? ''));
+                                $opName  = trim((string)($op->Name ?? ''));
+                                $itGroup = trim((string)($op->ItIsGroup ?? 'false')) === 'true';
+                                if ($opCode === '') continue;
+
+                                $operationCode = trim((string)($op->OperationCode ?? ''));
+                                if ($operationCode === '') $operationCode = null;
+
+                                $wlText   = trim((string)($wlNode->Workload ?? ''));
+                                $normTime = ($wlText === '') ? null : (float)$wlText;
+                                if ($normTime !== null && $normTime <= 0) $normTime = null;
+
+                                $parentCode = null;
+                                $parents = $op->xpath('./m:Parent');
+                                if ($parents && count($parents) > 0) {
+                                    $pCode = trim((string)($parents[0]->Code ?? ''));
+                                    if ($pCode !== '') $parentCode = $pCode . '@' . $complectation;
                                 }
-                            }
 
-                            $code = $opCode . '@' . $complectation;
-
-                            $stmt->execute([
-                                ':code'           => $code,
-                                ':parent_code'    => $parentCode,
-                                ':it_is_group'    => $itGroup ? 'true' : 'false',
-                                ':name'           => $opName,
-                                ':operation_code' => $operationCode,
-                                ':norm_time'      => $normTime,
-                                ':complectation'  => $complectation,
-                                ':model'          => $modelShort,
-                            ]);
-
-                            $stats['total']++;
-                            if ($itGroup) {
-                                $stats['groups']++;
-                            } else {
-                                $stats['works']++;
-                                if ($normTime !== null) {
-                                    $stats['with_norm']++;
+                                try {
+                                    $stmt->execute([
+                                        ':code'           => $opCode . '@' . $complectation,
+                                        ':parent_code'    => $parentCode,
+                                        ':it_is_group'    => $itGroup ? 'true' : 'false',
+                                        ':name'           => $opName,
+                                        ':operation_code' => $operationCode,
+                                        ':norm_time'      => $normTime,
+                                        ':complectation'  => $complectation,
+                                        ':model'          => $modelShort,
+                                    ]);
+                                    $stats['total']++;
+                                    if ($itGroup) $stats['groups']++;
+                                    else {
+                                        $stats['works']++;
+                                        if ($normTime !== null) $stats['with_norm']++;
+                                    }
+                                } catch (Throwable $e) {
+                                    $log[] = 'Ошибка INSERT для code=' . $opCode . ': ' . $e->getMessage();
+                                    // не прерываемся, продолжаем
                                 }
                             }
                         }
@@ -209,7 +194,6 @@ if ($run) {
         }
     }
 }
-
 ?><!doctype html>
 <html lang="ru">
 <head>
