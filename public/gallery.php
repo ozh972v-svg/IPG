@@ -898,5 +898,172 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 })();
 <?php endif; ?>
 </script>
+
+<script>
+/* ========== PDF-РЕДАКТОР ========== */
+(function() {
+  if (!window.IPG_PHOTOS) return;
+
+  const modal     = document.getElementById('pdfEditorModal');
+  const grid      = document.getElementById('pdfPagesGrid');
+  const statusEl  = document.getElementById('pdfStatus');
+  const appendInp = document.getElementById('pdfAppendInput');
+  const appendLst = document.getElementById('pdfAppendList');
+
+  let pages        = [];   // { kind:'img'|'pdf', path | file, label }
+  let appendedPdfs = [];   // File[] — подгруженные PDF для склейки
+
+  window.openPdfEditor = function() {
+    // Собираем текущее состояние из IPG_PHOTOS (без видео)
+    pages = window.IPG_PHOTOS
+      .filter(function(p) { return !p.is_video; })
+      .map(function(p) {
+        return { kind: 'img', path: p.path, label: p.type_label, comment: p.comment };
+      });
+    render();
+    statusEl.textContent = '';
+    modal.classList.add('is-open');
+  };
+
+  window.closePdfEditor = function() {
+    modal.classList.remove('is-open');
+  };
+
+  function render() {
+    if (pages.length === 0) {
+      grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:#888; padding:30px;">Нет фото для сборки. Добавьте PDF-файл ниже.</div>';
+    } else {
+      grid.innerHTML = '';
+      pages.forEach(function(p, idx) {
+        const card = document.createElement('div');
+        card.draggable = true;
+        card.dataset.idx = idx;
+        card.style.cssText = 'background:#fff; border:1.5px solid #e5e7eb; border-radius:10px; padding:8px; position:relative; cursor:grab;';
+
+        let previewHtml = '';
+        if (p.kind === 'img') {
+          previewHtml = '<img src="' + p.path + '" style="width:100%; height:120px; object-fit:cover; border-radius:6px; display:block;" loading="lazy">';
+        } else {
+          previewHtml = '<div style="width:100%; height:120px; display:flex; align-items:center; justify-content:center; background:#f1f5f9; border-radius:6px; font-size:36px;">📎</div>';
+        }
+
+        card.innerHTML = previewHtml +
+          '<div style="font-size:11px; color:#555; margin-top:6px; line-height:1.3;">' +
+            '<b>' + (idx + 1) + '.</b> ' + escapeHtml(p.label || '') +
+          '</div>' +
+          '<button type="button" style="position:absolute; top:6px; right:6px; background:#dc2626; color:#fff; border:none; border-radius:50%; width:24px; height:24px; cursor:pointer; font-size:12px; line-height:1;">✕</button>';
+
+        card.querySelector('button').onclick = function(e) {
+          e.stopPropagation();
+          pages.splice(idx, 1);
+          render();
+        };
+
+        // Drag & drop
+        card.addEventListener('dragstart', function(e) {
+          e.dataTransfer.setData('text/plain', idx);
+        });
+        card.addEventListener('dragover', function(e) { e.preventDefault(); });
+        card.addEventListener('drop', function(e) {
+          e.preventDefault();
+          const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+          const to   = idx;
+          if (from === to) return;
+          const moved = pages.splice(from, 1)[0];
+          pages.splice(to, 0, moved);
+          render();
+        });
+
+        grid.appendChild(card);
+      });
+    }
+    // Обновим список подгруженных PDF
+    appendLst.innerHTML = appendedPdfs.map(function(f, i) {
+      return '📎 ' + escapeHtml(f.name) + ' <a href="#" data-i="' + i + '" style="color:#dc2626;">убрать</a>';
+    }).join('<br>');
+    appendLst.querySelectorAll('a[data-i]').forEach(function(a) {
+      a.onclick = function(e) {
+        e.preventDefault();
+        appendedPdfs.splice(parseInt(a.dataset.i, 10), 1);
+        render();
+      };
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
+  appendInp.addEventListener('change', function() {
+    for (let i = 0; i < appendInp.files.length; i++) {
+      const f = appendInp.files[i];
+      if (f.type === 'application/pdf') {
+        appendedPdfs.push(f);
+        pages.push({ kind: 'pdf', file: f, label: 'PDF: ' + f.name });
+      }
+    }
+    appendInp.value = '';
+    render();
+  });
+
+  // === Сборка PDF ===
+  window.buildPdf = async function() {
+    if (pages.length === 0) { statusEl.textContent = '⚠️ Нет страниц'; return; }
+    statusEl.textContent = '⏳ Собираю PDF...';
+
+    try {
+      const { PDFDocument } = PDFLib;
+      const out = await PDFDocument.create();
+
+      for (let i = 0; i < pages.length; i++) {
+        const p = pages[i];
+        statusEl.textContent = '⏳ Страница ' + (i + 1) + ' из ' + pages.length + '...';
+
+        if (p.kind === 'img') {
+          const res  = await fetch(p.path, { credentials: 'same-origin' });
+          const blob = await res.blob();
+          let img;
+          if (blob.type === 'image/png') {
+            img = await out.embedPng(await blob.arrayBuffer());
+          } else {
+            img = await out.embedJpg(await blob.arrayBuffer());
+          }
+          const A4_W = 595.28, A4_H = 841.89;
+          const scale = Math.min(A4_W / img.width, A4_H / img.height);
+          const w = img.width  * scale;
+          const h = img.height * scale;
+          const page = out.addPage([A4_W, A4_H]);
+          page.drawImage(img, { x: (A4_W - w) / 2, y: (A4_H - h) / 2, width: w, height: h });
+
+        } else if (p.kind === 'pdf') {
+          const bytes   = await p.file.arrayBuffer();
+          const srcDoc  = await PDFDocument.load(bytes);
+          const srcPages = await out.copyPages(srcDoc, srcDoc.getPageIndices());
+          srcPages.forEach(function(sp) { out.addPage(sp); });
+        }
+      }
+
+      const pdfBytes = await out.save();
+      const blob     = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url      = URL.createObjectURL(blob);
+      const a        = document.createElement('a');
+      a.href = url;
+      a.download = (window.IPG_KEY_LABEL === 'РА' ? 'RA_' : 'VIN_') + window.IPG_KEY_VALUE + '.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+
+      statusEl.textContent = '✅ Готово!';
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = '❌ Ошибка: ' + err.message;
+    }
+  };
+})();
+</script>
+
 </body>
 </html>
