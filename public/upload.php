@@ -51,18 +51,32 @@ if (empty($_FILES['photo']) || $_FILES['photo']['error'] !== UPLOAD_ERR_OK) {
 }
 
 $file = $_FILES['photo'];
-$maxSize = 20 * 1024 * 1024;
-if ($file['size'] > $maxSize) {
-    redirect_error('Файл больше 20 МБ', $keyType, $keyValue);
-}
 
 $finfo = finfo_open(FILEINFO_MIME_TYPE);
 $mime = finfo_file($finfo, $file['tmp_name']);
 finfo_close($finfo);
 
-$allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
-if (!in_array($mime, $allowedMimes, true)) {
-    redirect_error('Разрешены только изображения (JPG, PNG, WEBP, HEIC)', $keyType, $keyValue);
+$allowedImageMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+$allowedVideoMimes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp'];
+
+$isVideo = (strpos($mime, 'video/') === 0);
+
+if ($isVideo) {
+    if (!in_array($mime, $allowedVideoMimes, true)) {
+        redirect_error('Разрешены только видео MP4, MOV, WEBM', $keyType, $keyValue);
+    }
+    $maxSize = 200 * 1024 * 1024; // 200 МБ для видео
+    if ($file['size'] > $maxSize) {
+        redirect_error('Видео больше 200 МБ', $keyType, $keyValue);
+    }
+} else {
+    if (!in_array($mime, $allowedImageMimes, true)) {
+        redirect_error('Разрешены только изображения (JPG, PNG, WEBP, HEIC)', $keyType, $keyValue);
+    }
+    $maxSize = 20 * 1024 * 1024; // 20 МБ для фото
+    if ($file['size'] > $maxSize) {
+        redirect_error('Файл больше 20 МБ', $keyType, $keyValue);
+    }
 }
 
 // === Токен хранилища ===
