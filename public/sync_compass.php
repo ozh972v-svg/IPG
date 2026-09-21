@@ -20,14 +20,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
     if ($raw === false || $raw === '') {
         $messages[] = '❌ Не удалось прочитать загруженный файл.';
     } else {
-        // Убираем BOM
         $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
 
-        // Определяем разделитель по первой строке
         $firstLine = strtok($raw, "\r\n");
-        $countSemi = substr_count($firstLine, ';');
+        $countSemi  = substr_count($firstLine, ';');
         $countComma = substr_count($firstLine, ',');
-        $countTab = substr_count($firstLine, "\t");
+        $countTab   = substr_count($firstLine, "\t");
 
         if ($countSemi >= $countComma && $countSemi >= $countTab) {
             $delim = ';';
@@ -39,7 +37,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
 
         $messages[] = "Разделитель определён: '" . ($delim === "\t" ? 'TAB' : $delim) . "'";
 
-        // Читаем через временный поток
         $fh = fopen('php://memory', 'r+');
         fwrite($fh, $raw);
         rewind($fh);
@@ -116,17 +113,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
             $db->beginTransaction();
             try {
                 $delStmt = $db->prepare("DELETE FROM work_operations WHERE brand = 'COMPASS' AND complectation = :c");
+
+                // ON CONFLICT (code) DO NOTHING — если такой код уже есть в этой партии/базе, просто пропускаем
                 $insGroup = $db->prepare("
                     INSERT INTO work_operations
                         (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, brand, deleted, updated_at)
                     VALUES
                         (:code, NULL, TRUE, :name, NULL, NULL, :comp, :model, 'COMPASS', FALSE, NOW())
+                    ON CONFLICT (code) DO NOTHING
                 ");
                 $insWork = $db->prepare("
                     INSERT INTO work_operations
                         (code, parent_code, it_is_group, name, operation_code, norm_time, complectation, model, brand, deleted, updated_at)
                     VALUES
                         (:code, :parent, FALSE, :name, :opcode, :norm, :comp, :model, 'COMPASS', FALSE, NOW())
+                    ON CONFLICT (code) DO NOTHING
                 ");
 
                 foreach ($byChassis as $ch => $items) {
