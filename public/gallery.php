@@ -32,7 +32,7 @@ $viewKeyValue = trim($_GET['key_value'] ?? '');
 $viewMode = $viewKeyType && $viewKeyValue;
 
 /* === Если пришли «+ Добавить» — сохраняем === */
-if (!$viewMode
+if (!empty($_GET['save'])
     && $_SERVER['REQUEST_METHOD'] === 'GET'
     && !empty($_GET['key_value'])
     && !empty($_GET['key_type'])
