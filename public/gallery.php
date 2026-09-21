@@ -475,7 +475,8 @@ if ($viewMode) {
 
     <div class="card">
       <h2>+ Добавить новый РА / VIN</h2>
-      <form method="get" action="gallery.php">
+            <form method="get" action="gallery.php">
+        <input type="hidden" name="save" value="1">
         <div class="form-row">
           <label>Тип привязки</label>
           <select name="key_type">
