@@ -701,7 +701,8 @@ if ($viewMode) {
   const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 
   let selectedPhotoType = null;
-  let lastUploadedFile = null;
+  let lastUploadedFile  = null;
+  let lastSource        = null;   // 'camera' | 'gallery'
 
   const photoCamera  = document.getElementById('photoCamera');
   const photoGallery = document.getElementById('photoGallery');
@@ -733,10 +734,11 @@ if ($viewMode) {
 
   window.chooseSource = function(source) {
     sourceModal.classList.remove('is-open');
+    lastSource = source;                 // запоминаем источник
     const isVideo = selectedPhotoType === 'video_defect';
     let input;
-    if (isVideo) input = (source === 'camera') ? videoCamera : videoGallery;
-    else         input = (source === 'camera') ? photoCamera : photoGallery;
+    if (isVideo) input = (source === 'camera') ? videoCamera  : videoGallery;
+    else         input = (source === 'camera') ? photoCamera  : photoGallery;
     input.click();
   };
 
@@ -754,11 +756,12 @@ if ($viewMode) {
   function uploadFile(file) {
     const comment = document.getElementById('commentInput').value.trim();
     const formData = new FormData();
-    formData.append('key_type', KEY_TYPE);
-    formData.append('key_value', KEY_VALUE);
+    formData.append('key_type',   KEY_TYPE);
+    formData.append('key_value',  KEY_VALUE);
     formData.append('photo_type', selectedPhotoType);
-    formData.append('comment', comment);
-    formData.append('photo', file);
+    formData.append('comment',    comment);
+    // Если у файла нет имени (бывает на iPhone с HEIC) — подставляем
+    formData.append('photo', file, file.name || ('upload_' + Date.now() + '.jpg'));
 
     const status = document.createElement('div');
     status.className = 'upload-status';
@@ -766,34 +769,55 @@ if ($viewMode) {
     status.textContent = '📤 Загрузка...';
     document.body.appendChild(status);
 
-    fetch('upload.php', { method: 'POST', body: formData })
+    fetch('upload.php', { method: 'POST', body: formData, credentials: 'same-origin' })
       .then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.text().catch(function() { return ''; });
+        return r.text().then(function(text) {
+          return { ok: r.ok, status: r.status, text: text || '' };
+        });
       })
-      .then(function() {
+      .then(function(res) {
+        // Пытаемся вытащить ошибку из ответа сервера
+        let serverError = null;
+        if (res.text) {
+          try {
+            const j = JSON.parse(res.text);
+            if (j && j.error) serverError = j.error;
+          } catch (e) {
+            if (!res.ok) serverError = 'HTTP ' + res.status + ': ' + res.text.slice(0, 200);
+          }
+        }
+        if (serverError) throw new Error(serverError);
+        if (!res.ok)     throw new Error('HTTP ' + res.status);
+
         status.style.background = '#16a34a';
         status.textContent = '✅ Загружено';
         setTimeout(function() {
           if (document.body.contains(status)) document.body.removeChild(status);
         }, 500);
-        saveModal.classList.add('is-open');
+
+        // «Сохранить в телефон» — ТОЛЬКО если снимали на камеру
+        if (lastSource === 'camera' && navigator.share) {
+          saveModal.classList.add('is-open');
+        } else {
+          finishUpload();
+        }
       })
       .catch(function(err) {
+        // Показываем реальную ошибку 5 секунд
         status.style.background = '#dc2626';
-        status.textContent = '❌ Ошибка: ' + err.message;
+        status.textContent = '❌ ' + (err.message || 'ошибка загрузки');
+        console.error('upload error:', err);
         setTimeout(function() {
           if (document.body.contains(status)) document.body.removeChild(status);
-        }, 3000);
+        }, 5000);
       });
   }
 
-  // === Сохранение в галерею телефона ===
+  // === Сохранение в галерею телефона (только после съёмки) ===
   window.saveToPhone = async function() {
     const file = lastUploadedFile;
     if (!file) { finishUpload(); return; }
 
-    // 1) Пробуем Web Share API (iOS Safari, Android Chrome)
     if (navigator.share && navigator.canShare) {
       try {
         if (navigator.canShare({ files: [file] })) {
@@ -806,11 +830,8 @@ if ($viewMode) {
         }
       } catch (e) {
         if (e && e.name === 'AbortError') { finishUpload(); return; }
-        // иначе — идём в fallback
       }
     }
-
-    // 2) Fallback: скачивание (уйдёт в «Файлы» / «Загрузки»)
     try {
       const url = URL.createObjectURL(file);
       const a = document.createElement('a');
@@ -821,7 +842,6 @@ if ($viewMode) {
       document.body.removeChild(a);
       setTimeout(function() { URL.revokeObjectURL(url); }, 3000);
     } catch (e) {}
-
     finishUpload();
   };
 
