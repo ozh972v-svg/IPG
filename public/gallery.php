@@ -204,13 +204,23 @@ function formatSize($bytes) {
 function isVideoMime(?string $mime): bool {
     return $mime !== null && strpos($mime, 'video/') === 0;
 }
+
+/* Заголовки с описанием через дефис */
+$keyLabel = $viewKeyType === 'ra' ? 'РА' : 'VIN';
+$viewTitle = '';
+if ($viewMode) {
+    $viewTitle = $keyLabel . ': ' . $viewKeyValue;
+    if (!empty($currentKey['description'])) {
+        $viewTitle .= ' — ' . $currentKey['description'];
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></title>
+<title><?= $viewMode ? e($viewTitle) : 'Фото по РА — общая база' ?></title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 16px; color: #1a1a1a; line-height: 1.5; }
@@ -370,6 +380,23 @@ function isVideoMime(?string $mime): bool {
 
   .upload-status { position: fixed; top: 0; left: 0; right: 0; padding: 14px; text-align: center; font-weight: 600; z-index: 9999; color: #fff; }
 
+  /* === Модальные окна === */
+  .modal-backdrop {
+    display: none;
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    z-index: 10000; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-backdrop.is-open { display: flex; }
+  .modal-box {
+    background: #fff; border-radius: 16px; padding: 24px;
+    max-width: 420px; width: 100%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .modal-box h3 { margin: 0 0 8px; font-size: 18px; text-align: center; }
+  .modal-box p { text-align: center; color: #666; margin: 0 0 18px; font-size: 14px; }
+  .modal-box .btn { display: block; width: 100%; margin-bottom: 10px; padding: 16px; font-size: 16px; }
+  .modal-box .btn-cancel { background: #e5e7eb; color: #333; padding: 12px; font-size: 15px; margin-bottom: 0; }
+
   @media (max-width: 700px) {
     .group-thumbs { display: none; }
     .photo-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
@@ -382,7 +409,7 @@ function isVideoMime(?string $mime): bool {
 
   <div class="card">
     <div class="top-bar">
-      <h1>📸 <?= $viewMode ? e(($viewKeyType === 'ra' ? 'РА' : 'VIN') . ': ' . $viewKeyValue) : 'Фото по РА — общая база' ?></h1>
+      <h1>📸 <?= $viewMode ? e($viewTitle) : 'Фото по РА — общая база' ?></h1>
       <div>
         <span class="user-info">👤 <b><?= e($user['name'] ?: $user['email']) ?></b></span>
         <a href="logout.php" class="logout">Выйти</a>
@@ -410,9 +437,9 @@ function isVideoMime(?string $mime): bool {
       <?php if ($viewMode): ?>
         <a href="gallery.php" class="btn btn-secondary btn-small">← Ко всем РА</a>
         <a href="download.php?key_type=<?= e($viewKeyType) ?>&key=<?= urlencode($viewKeyValue) ?>" class="btn btn-small">📥 Скачать ZIP</a>
-        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?></a>
+        <a href="print_pdf.php?key_type=<?= e($viewKeyType) ?>&key_value=<?= urlencode($viewKeyValue) ?>" target="_blank" class="btn btn-small" style="background:#b45309;">📄 PDF по <?= e($keyLabel) ?></a>
         <?php if ($totalPhotos > 0): ?>
-          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($viewKeyType === 'ra' ? 'РА' : 'VIN') ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
+          <a href="#" onclick="if(confirm('Удалить ВСЕ <?= $totalPhotos ?> файлов по этому <?= e($keyLabel) ?>?')){document.getElementById('deleteAllForm').submit();}return false;" class="btn btn-red btn-small">🗑️ Удалить все</a>
           <form id="deleteAllForm" method="post" action="delete_all.php" style="display:none;">
             <input type="hidden" name="key_type" value="<?= e($viewKeyType) ?>">
             <input type="hidden" name="key_value" value="<?= e($viewKeyValue) ?>">
@@ -564,7 +591,7 @@ function isVideoMime(?string $mime): bool {
       <h2>Загрузить фото / видео</h2>
       <div class="step-hint" style="font-size:13px;color:#666;margin-bottom:12px;padding:8px 12px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb;">
         <b>Красные</b> плитки — по этому типу ещё ничего нет. <b>Зелёные</b> — уже загружено.
-        Нажми на плитку, чтобы снять или записать.
+        Нажми на плитку — выберешь: снять на камеру или взять из галереи.
       </div>
       <div class="form-row">
         <label>Тип файла</label>
@@ -576,8 +603,12 @@ function isVideoMime(?string $mime): bool {
             </div>
           <?php endforeach; ?>
         </div>
-        <input type="file" id="hiddenCamera" accept="image/*" capture="environment" style="display:none;">
-        <input type="file" id="hiddenVideo"  accept="video/*" capture="environment" style="display:none;">
+        <!-- Фото: камера и галерея -->
+        <input type="file" id="photoCamera"  accept="image/*" capture="environment" style="display:none;">
+        <input type="file" id="photoGallery" accept="image/*" style="display:none;">
+        <!-- Видео: камера и галерея -->
+        <input type="file" id="videoCamera"  accept="video/*" capture="environment" style="display:none;">
+        <input type="file" id="videoGallery" accept="video/*" style="display:none;">
       </div>
       <div class="form-row">
         <label>Комментарий (необязательно)</label>
@@ -643,29 +674,82 @@ function isVideoMime(?string $mime): bool {
   <?php endif; ?>
 
 </div>
+
+<!-- Модальное окно: выбор источника -->
+<div class="modal-backdrop" id="sourceModal">
+  <div class="modal-box">
+    <h3>Откуда взять файл?</h3>
+    <p id="sourceModalTitle">Выбери источник</p>
+    <button type="button" class="btn btn-green" onclick="chooseSource('camera')">📷 Снять на камеру</button>
+    <button type="button" class="btn btn-secondary" onclick="chooseSource('gallery')">🖼 Из галереи телефона</button>
+    <button type="button" class="btn btn-cancel" onclick="closeSourceModal()">Отмена</button>
+  </div>
+</div>
+
+<!-- Модальное окно: сохранить в галерею телефона -->
+<div class="modal-backdrop" id="saveModal">
+  <div class="modal-box">
+    <h3>✅ Файл загружен</h3>
+    <p>Сохранить копию в галерею телефона?</p>
+    <button type="button" class="btn btn-green" onclick="saveToPhone()">💾 Сохранить в телефон</button>
+    <button type="button" class="btn btn-cancel" onclick="finishUpload()">Пропустить</button>
+  </div>
+</div>
+
 <script>
 <?php if ($viewMode): ?>
 (function() {
-  let selectedPhotoType = null;
-  const cameraInput = document.getElementById('hiddenCamera');
-  const videoInput  = document.getElementById('hiddenVideo');
-  const KEY_TYPE    = <?= json_encode($viewKeyType) ?>;
-  const KEY_VALUE   = <?= json_encode($viewKeyValue) ?>;
+  const KEY_TYPE  = <?= json_encode($viewKeyType) ?>;
+  const KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
 
+  let selectedPhotoType = null;
+  let lastUploadedFile = null;
+
+  const photoCamera  = document.getElementById('photoCamera');
+  const photoGallery = document.getElementById('photoGallery');
+  const videoCamera  = document.getElementById('videoCamera');
+  const videoGallery = document.getElementById('videoGallery');
+
+  const sourceModal = document.getElementById('sourceModal');
+  const saveModal   = document.getElementById('saveModal');
+  const sourceTitle = document.getElementById('sourceModalTitle');
+
+  // === Тап по плитке ===
   document.querySelectorAll('.type-option').forEach(function(el) {
     el.addEventListener('click', function() {
       selectedPhotoType = el.dataset.type;
-
-      // Убираем «selected» у всех и ставим на эту
       document.querySelectorAll('.type-option').forEach(function(x) { x.classList.remove('selected'); });
       el.classList.add('selected');
 
-      // Если тип видео — открываем запись видео, иначе — фото
-      if (selectedPhotoType === 'video_defect') {
-        videoInput.click();
-      } else {
-        cameraInput.click();
-      }
+      const isVideo = selectedPhotoType === 'video_defect';
+      sourceTitle.textContent = isVideo
+        ? 'Записать видео дефекта — как?'
+        : 'Загрузить: «' + el.textContent.trim() + '» — откуда?';
+      sourceModal.classList.add('is-open');
+    });
+  });
+
+  window.closeSourceModal = function() {
+    sourceModal.classList.remove('is-open');
+  };
+
+  window.chooseSource = function(source) {
+    sourceModal.classList.remove('is-open');
+    const isVideo = selectedPhotoType === 'video_defect';
+    let input;
+    if (isVideo) input = (source === 'camera') ? videoCamera : videoGallery;
+    else         input = (source === 'camera') ? photoCamera : photoGallery;
+    input.click();
+  };
+
+  // === Обработка выбранного файла ===
+  [photoCamera, photoGallery, videoCamera, videoGallery].forEach(function(input) {
+    input.addEventListener('change', function() {
+      const file = input.files && input.files[0];
+      if (!file || !selectedPhotoType) return;
+      lastUploadedFile = file;
+      uploadFile(file);
+      input.value = '';
     });
   });
 
@@ -686,32 +770,68 @@ function isVideoMime(?string $mime): bool {
 
     fetch('upload.php', { method: 'POST', body: formData })
       .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text().catch(function() { return ''; });
+      })
+      .then(function() {
         status.style.background = '#16a34a';
         status.textContent = '✅ Загружено';
         setTimeout(function() {
-          window.location.href = 'gallery.php?key_type=' + KEY_TYPE + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
-        }, 800);
+          if (document.body.contains(status)) document.body.removeChild(status);
+        }, 500);
+        saveModal.classList.add('is-open');
       })
       .catch(function(err) {
         status.style.background = '#dc2626';
         status.textContent = '❌ Ошибка: ' + err.message;
-        setTimeout(function() { document.body.removeChild(status); }, 3000);
+        setTimeout(function() {
+          if (document.body.contains(status)) document.body.removeChild(status);
+        }, 3000);
       });
   }
 
-  cameraInput.addEventListener('change', function() {
-    const file = cameraInput.files[0];
-    if (!file || !selectedPhotoType) return;
-    uploadFile(file);
-    cameraInput.value = '';
-  });
+  // === Сохранение в галерею телефона ===
+  window.saveToPhone = async function() {
+    const file = lastUploadedFile;
+    if (!file) { finishUpload(); return; }
 
-  videoInput.addEventListener('change', function() {
-    const file = videoInput.files[0];
-    if (!file || !selectedPhotoType) return;
-    uploadFile(file);
-    videoInput.value = '';
-  });
+    // 1) Пробуем Web Share API (iOS Safari, Android Chrome)
+    if (navigator.share && navigator.canShare) {
+      try {
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: 'Файл по ' + (KEY_TYPE === 'ra' ? 'РА' : 'VIN') + ' ' + KEY_VALUE,
+          });
+          finishUpload();
+          return;
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') { finishUpload(); return; }
+        // иначе — идём в fallback
+      }
+    }
+
+    // 2) Fallback: скачивание (уйдёт в «Файлы» / «Загрузки»)
+    try {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name || ('photo_' + Date.now() + '.jpg');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 3000);
+    } catch (e) {}
+
+    finishUpload();
+  };
+
+  window.finishUpload = function() {
+    saveModal.classList.remove('is-open');
+    window.location.href = 'gallery.php?key_type=' + encodeURIComponent(KEY_TYPE)
+      + '&key_value=' + encodeURIComponent(KEY_VALUE) + '&uploaded=1';
+  };
 })();
 <?php endif; ?>
 </script>
