@@ -57,7 +57,37 @@ if ($vin !== '') {
                 if (!$code) {
                     $vinError = 'В ответе 1С нет поля «Конструкторский код комплектации»';
                 } else {
-                    $complectation = trim($code);
+                    /* ИСПРАВЛЕНИЕ БАГА: 1С иногда отдаёт код комплектации
+                       с висячим дефисом (и/или пробелами) на конце,
+                       например "54901-0070014-CA-", тогда как в БД он
+                       хранится без него ("54901-0070014-CA"). Из-за этого
+                       не находились работы.
+                       Решение: нормализуем значение и сначала пытаемся
+                       найти в БД уже существующий вариант. */
+                    $rawCode = trim($code);
+                    $normalized = rtrim($rawCode, "- \t\n\r\0\x0B");
+                    $candidates = array_values(array_unique(array_filter([
+                        $rawCode,
+                        $normalized,
+                    ])));
+
+                    $complectation = $normalized; // значение по умолчанию
+                    if ($candidates) {
+                        $ph = []; $lp = [];
+                        foreach ($candidates as $i => $v) {
+                            $k = ':cv' . $i; $ph[] = $k; $lp[$k] = $v;
+                        }
+                        $st = $pdo->prepare(
+                            "SELECT complectation FROM work_operations
+                              WHERE complectation IN (" . implode(',', $ph) . ")
+                              LIMIT 1"
+                        );
+                        $st->execute($lp);
+                        $dbVar = $st->fetchColumn();
+                        if ($dbVar !== false && $dbVar !== null && $dbVar !== '') {
+                            $complectation = $dbVar;
+                        }
+                    }
                 }
             }
         }
