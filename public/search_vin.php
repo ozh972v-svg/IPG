@@ -92,12 +92,55 @@ function isActive($d) {
     return $ts >= strtotime(date('Y-m-d'));
 }
 
-/** В прошлом ли дата. */
 function isPast($d) {
     if (!$d) return false;
     $ts = strtotime($d);
     if ($ts === false) return false;
     return $ts < strtotime(date('Y-m-d'));
+}
+
+/**
+ * Классификация ОТМ по разделам, как в 1С:
+ *   'IB' — Информационный бюллетень
+ *   'S'  — Организационно-технические мероприятия «S»
+ *   'R'  — Организационно-технические мероприятия «R»
+ *   'OTHER' — прочее (не попавшее в три основных раздела)
+ */
+function classifyCampaign(array $s): string {
+    $type = strtoupper(trim((string)($s['Type'] ?? '')));
+    $cat  = mb_strtolower((string)($s['Category'] ?? ''));
+
+    // Сначала смотрим Category — она у 1С обычно информативнее
+    if (mb_strpos($cat, 'бюллетен') !== false) {
+        return 'IB';
+    }
+    if (mb_strpos($cat, 'мероприятия «s»') !== false
+        || mb_strpos($cat, 'мероприятия s') !== false
+        || preg_match('/мероприятия\s*[«"]?\s*s\s*[»"]?/ui', $cat)) {
+        return 'S';
+    }
+    if (mb_strpos($cat, 'мероприятия «r»') !== false
+        || mb_strpos($cat, 'мероприятия r') !== false
+        || preg_match('/мероприятия\s*[«"]?\s*r\s*[»"]?/ui', $cat)) {
+        return 'R';
+    }
+
+    // Fallback по Type
+    if ($type === 'IB' || $type === 'I')  return 'IB';
+    if ($type === 'S')                     return 'S';
+    if ($type === 'R')                     return 'R';
+
+    return 'OTHER';
+}
+
+/** Название раздела для отображения. */
+function campaignSectionTitle(string $key): array {
+    switch ($key) {
+        case 'IB': return ['title' => '📢 Информационный бюллетень',                        'color' => '#2563eb'];
+        case 'S':  return ['title' => '🟢 Организационно-технические мероприятия «S»',       'color' => '#16a34a'];
+        case 'R':  return ['title' => '🔴 Организационно-технические мероприятия «R»',       'color' => '#dc2626'];
+        default:   return ['title' => '📋 Прочие мероприятия',                              'color' => '#6b7280'];
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -190,27 +233,80 @@ function isPast($d) {
     margin-top: 6px; font-style: italic;
   }
 
-  .otm-card {
-    padding: 16px; border: 1.5px solid #e5e7eb; border-radius: 12px;
-    margin-bottom: 12px; background: #fff; transition: all 0.15s;
+  /* --- ОТМ: сворачиваемые карточки --- */
+  .otm-section { margin-bottom: 20px; }
+  .otm-section-title {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px; font-weight: 700;
+    padding: 10px 14px; border-radius: 10px;
+    margin: 0 0 8px; color: #fff;
+    gap: 12px; flex-wrap: wrap;
   }
-  .otm-card:hover { border-color: #2563eb; }
+  .otm-section-title .cnt {
+    background: rgba(255,255,255,0.25);
+    padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: 700;
+  }
+  .otm-section-title .cnt-fail {
+    background: rgba(255,255,255,0.9); color: #b91c1c;
+    padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: 700;
+  }
+
+  .otm-item {
+    border: 1.5px solid #e5e7eb; border-radius: 10px;
+    margin-bottom: 8px; background: #fff; overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .otm-item[open] { border-color: #2563eb; }
+  .otm-item.done { background: #fafafa; }
+
+  .otm-item summary {
+    padding: 11px 14px; cursor: pointer;
+    display: flex; align-items: flex-start; gap: 10px;
+    list-style: none; user-select: none;
+  }
+  .otm-item summary::-webkit-details-marker { display: none; }
+  .otm-item summary::before {
+    content: '▶'; font-size: 10px; color: #2563eb;
+    margin-top: 5px; flex-shrink: 0;
+    transition: transform 0.15s;
+  }
+  .otm-item[open] summary::before { transform: rotate(90deg); }
+
+  .otm-mark { flex-shrink: 0; font-size: 16px; line-height: 1.3; }
+  .otm-main { flex: 1; min-width: 0; }
+  .otm-name {
+    font-weight: 600; color: #1a1a1a; font-size: 13px; line-height: 1.35;
+    word-break: normal; overflow-wrap: anywhere;
+  }
+  .otm-item.done .otm-name { color: #6b7280; font-weight: 500; }
+  .otm-meta {
+    font-size: 11px; color: #888; margin-top: 4px;
+    display: flex; gap: 14px; flex-wrap: wrap;
+  }
+  .otm-meta span { white-space: nowrap; }
+
+  .otm-body {
+    padding: 12px 14px 14px 38px;
+    border-top: 1px solid #f0f0f0;
+    background: #fafbff;
+  }
+  .otm-body .field-row { padding: 6px 0; font-size: 13px; }
+  .otm-body .field-label { width: 180px; font-size: 12px; }
 
   .otm-status {
-    padding: 10px 14px; border-radius: 10px;
-    font-weight: 700; font-size: 14px;
-    margin-bottom: 14px; text-align: center;
+    padding: 8px 12px; border-radius: 8px;
+    font-weight: 700; font-size: 12px;
+    margin-bottom: 10px; text-align: center;
   }
   .otm-status.done { background: #f0fdf4; color: #16a34a; border-left: 4px solid #16a34a; }
   .otm-status.not-done { background: #fef2f2; color: #dc2626; border-left: 4px solid #dc2626; }
 
-  .otm-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-  .otm-card-title { font-weight: 700; font-size: 15px; color: #1e3a8a; flex: 1; }
   .badge { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
   .badge-blue { background: #eff6ff; color: #2563eb; }
   .badge-green { background: #f0fdf4; color: #16a34a; }
   .badge-red { background: #fef2f2; color: #dc2626; }
   .badge-yellow { background: #fffbeb; color: #b45309; }
+  .badge-gray { background: #f3f4f6; color: #6b7280; }
 
   table.doc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
   table.doc-table th {
@@ -238,6 +334,11 @@ function isPast($d) {
     overflow: auto; margin-top: 10px; white-space: pre-wrap;
   }
 
+  .empty-section {
+    padding: 14px; text-align: center; color: #888; font-size: 13px;
+    background: #f9fafb; border-radius: 8px;
+  }
+
   @media (max-width: 700px) {
     .field-row { flex-direction: column; gap: 4px; }
     .field-label { width: auto; }
@@ -245,6 +346,7 @@ function isPast($d) {
     .warranty-banner { font-size: 18px; padding: 16px; }
     .warranty-banner .banner-sub .row { flex-direction: column; align-items: flex-start; gap: 2px; }
     .warranty-banner .banner-sub .row .value { text-align: left; }
+    .otm-body { padding-left: 14px; }
   }
 </style>
 </head>
@@ -312,13 +414,7 @@ function isPast($d) {
       $wEndEffective = $wEndReal ?: $wEndCalc;
       $prodActive    = $wEndEffective ? isActive($wEndEffective) : false;
 
-      /* ---------- Тестовая эксплуатация ----------
-         В JSON 1С у акции есть поля "Сompleted" и "Completed" (оба = 1),
-         НО это НЕ означает "завершена". В самой 1С статус "Действует".
-         Реальный критерий окончания — дата EndDateAction:
-           - в прошлом  → завершена
-           - в будущем  → действует
-           - отсутствует → считаем «без срока» */
+      /* ---------- Тестовая эксплуатация ---------- */
       $testAction = null;
       foreach (($car['_other']['Actions'] ?? []) as $a) {
           $nm = (string)($a['Name'] ?? '');
@@ -328,7 +424,7 @@ function isPast($d) {
           }
       }
 
-      $testStatus = 'none'; // none | active | done | unknown
+      $testStatus = 'none';
       $testEnd    = null;
       $testStart  = null;
       if ($testAction) {
@@ -340,9 +436,29 @@ function isPast($d) {
           else                                      $testStatus = 'done';
       }
 
-      /* ---------- Есть ли вообще хоть какой-то «положительный» статус ---------- */
       $testPositive = ($testStatus === 'active' || $testStatus === 'unknown');
       $anyStatus    = $hasProdSign || $testPositive || !empty($activeNodes);
+
+      /* ---------- ОТМ: группировка по разделам ---------- */
+      $campaigns = $car['_other']['ServiceCampaigns'] ?? [];
+      $campaignGroups = ['IB' => [], 'S' => [], 'R' => [], 'OTHER' => []];
+      foreach ($campaigns as $c) {
+          $key = classifyCampaign($c);
+          $campaignGroups[$key][] = $c;
+      }
+      // Внутри каждого раздела: сначала невыполненные (done=0), потом выполненные (done=1)
+      foreach ($campaignGroups as $k => $list) {
+          usort($list, function($a, $b) {
+              $aDone = (int)($a['Сompleted'] ?? $a['Completed'] ?? 0) > 0;
+              $bDone = (int)($b['Сompleted'] ?? $b['Completed'] ?? 0) > 0;
+              if ($aDone !== $bDone) return $aDone <=> $bDone; // 0 (невыполн) — раньше
+              return strcmp((string)($a['StartDateCampaign'] ?? ''), (string)($b['StartDateCampaign'] ?? ''));
+          });
+          $campaignGroups[$k] = $list;
+      }
+
+      // Порядок разделов для отображения: IB → S → R → OTHER
+      $sectionOrder = ['IB', 'S', 'R', 'OTHER'];
 
       $title = 'КАМАЗ ' . ($car['ShassisModel'] ?? '')
              . ' · VIN ш.: ' . ($car['VINShassis'] ?? '')
@@ -581,67 +697,158 @@ function isPast($d) {
 
       <div class="tab-content" id="tab-otm">
 
-        <?php if (!empty($car['_other']['ServiceCampaigns'])): ?>
+        <?php if (empty($campaigns)): ?>
+          <div class="empty-section">Нет ОТМ по этой автотехнике</div>
+        <?php else: ?>
 
-          <div class="section-title">Сервисные кампании (ОТМ)</div>
+          <?php foreach ($sectionOrder as $secKey): ?>
+            <?php $items = $campaignGroups[$secKey] ?? []; ?>
+            <?php if (empty($items)) continue; ?>
 
-          <?php foreach ($car['_other']['ServiceCampaigns'] as $s): ?>
-            <?php $isDone = (int)($s['Сompleted'] ?? 0) > 0; ?>
-            <div class="otm-card">
+            <?php
+              $secInfo   = campaignSectionTitle($secKey);
+              $total     = count($items);
+              $notDone   = 0;
+              foreach ($items as $it) {
+                  if ((int)($it['Сompleted'] ?? $it['Completed'] ?? 0) === 0) $notDone++;
+              }
+            ?>
 
-              <div class="otm-status <?= $isDone ? 'done' : 'not-done' ?>">
-                <?= $isDone ? '✅ Мероприятие выполнено' : '❌ Мероприятие не выполнено' ?>
-              </div>
-
-              <div class="otm-card-header">
-                <div class="otm-card-title"><?= e($s['Name'] ?? '—') ?></div>
-                <span class="badge <?= ($s['Type'] ?? '') === 'R' ? 'badge-red' : 'badge-yellow' ?>">
-                  <?= e($s['Category'] ?? '') ?>
+            <div class="otm-section">
+              <div class="otm-section-title" style="background:<?= e($secInfo['color']) ?>;">
+                <span><?= e($secInfo['title']) ?></span>
+                <span>
+                  <span class="cnt"><?= $total ?></span>
+                  <?php if ($notDone > 0): ?>
+                    <span class="cnt-fail">не вып.: <?= $notDone ?></span>
+                  <?php endif; ?>
                 </span>
               </div>
 
-              <div class="field-grid" style="margin-top:10px;">
-                <div class="field-row">
-                  <div class="field-label">Номер кампании</div>
-                  <div class="field-value"><?= e($s['NumberCampaign'] ?? '—') ?></div>
-                </div>
-                <div class="field-row">
-                  <div class="field-label">Начало</div>
-                  <div class="field-value"><?= e(fmtDate($s['StartDateCampaign'] ?? null)) ?></div>
-                </div>
-                <div class="field-row">
-                  <div class="field-label">Окончание</div>
-                  <div class="field-value"><?= e(fmtDate($s['EndDateCampaign'] ?? null)) ?></div>
-                </div>
-                <div class="field-row">
-                  <div class="field-label">Выполнено</div>
-                  <div class="field-value"><?= (int)($s['Сompleted'] ?? 0) ?></div>
-                </div>
-                <?php if (!empty($s['DefectiveDetail']['Name'])): ?>
-                  <div class="field-row">
-                    <div class="field-label">Деталь-виновник</div>
-                    <div class="field-value"><?= e($s['DefectiveDetail']['Name']) ?></div>
-                  </div>
-                <?php endif; ?>
-              </div>
+              <?php foreach ($items as $s): ?>
+                <?php
+                  $isDone = (int)($s['Сompleted'] ?? $s['Completed'] ?? 0) > 0;
+                  $mark   = $isDone ? '✅' : '❌';
+                  $num    = (string)($s['NumberCampaign'] ?? '');
+                  $sd     = $s['StartDateCampaign'] ?? null;
+                  $ed     = $s['EndDateCampaign']   ?? null;
+                ?>
+                <details class="otm-item <?= $isDone ? 'done' : '' ?>">
+                  <summary>
+                    <span class="otm-mark"><?= $mark ?></span>
+                    <span class="otm-main">
+                      <div class="otm-name"><?= e($s['Name'] ?? '—') ?></div>
+                      <div class="otm-meta">
+                        <?php if ($num !== ''): ?><span>📄 <?= e($num) ?></span><?php endif; ?>
+                        <?php if ($sd): ?><span>🗓 с <?= e(fmtDate($sd)) ?></span><?php endif; ?>
+                        <?php if ($ed): ?><span>до <?= e(fmtDate($ed)) ?></span><?php endif; ?>
+                        <?php if (!$isDone): ?><span style="color:#dc2626;font-weight:700;">● требует выполнения</span><?php endif; ?>
+                      </div>
+                    </span>
+                  </summary>
 
-              <?php if (!empty($s['CauseFault'])): ?>
-                <div class="field-row" style="margin-top:8px;border-top:1px solid #f0f0f0;padding-top:10px;">
-                  <div class="field-label">Причина</div>
-                  <div class="field-value"><?= e($s['CauseFault']) ?></div>
-                </div>
-              <?php endif; ?>
-              <?php if (!empty($s['FaultDescription'])): ?>
-                <div class="field-row">
-                  <div class="field-label">Описание</div>
-                  <div class="field-value"><?= e($s['FaultDescription']) ?></div>
-                </div>
-              <?php endif; ?>
+                  <div class="otm-body">
+                    <div class="otm-status <?= $isDone ? 'done' : 'not-done' ?>">
+                      <?= $isDone ? '✅ Мероприятие выполнено' : '❌ Мероприятие не выполнено' ?>
+                    </div>
+
+                    <div class="field-grid">
+                      <div class="field-row">
+                        <div class="field-label">Категория</div>
+                        <div class="field-value"><?= e($s['Category'] ?? '—') ?></div>
+                      </div>
+                      <div class="field-row">
+                        <div class="field-label">Тип</div>
+                        <div class="field-value"><?= e($s['Type'] ?? '—') ?></div>
+                      </div>
+                      <div class="field-row">
+                        <div class="field-label">Номер кампании</div>
+                        <div class="field-value"><?= e($num !== '' ? $num : '—') ?></div>
+                      </div>
+                      <div class="field-row">
+                        <div class="field-label">Начало</div>
+                        <div class="field-value"><?= e(fmtDate($sd)) ?></div>
+                      </div>
+                      <div class="field-row">
+                        <div class="field-label">Окончание</div>
+                        <div class="field-value"><?= e(fmtDate($ed)) ?></div>
+                      </div>
+                      <div class="field-row">
+                        <div class="field-label">Выполнено</div>
+                        <div class="field-value"><?= (int)($s['Сompleted'] ?? 0) ?></div>
+                      </div>
+                      <?php if (!empty($s['NameInformationMail'])): ?>
+                        <div class="field-row">
+                          <div class="field-label">Информационное письмо</div>
+                          <div class="field-value"><?= e($s['NameInformationMail']) ?></div>
+                        </div>
+                      <?php endif; ?>
+                      <?php if (!empty($s['NumberInformationMail'])): ?>
+                        <div class="field-row">
+                          <div class="field-label">№ информ. письма</div>
+                          <div class="field-value"><?= e($s['NumberInformationMail']) ?></div>
+                        </div>
+                      <?php endif; ?>
+                      <?php if (!empty($s['DefectiveDetail']['Name'])): ?>
+                        <div class="field-row">
+                          <div class="field-label">Деталь-виновник</div>
+                          <div class="field-value"><?= e($s['DefectiveDetail']['Name']) ?></div>
+                        </div>
+                      <?php endif; ?>
+                      <?php if (!empty($s['NameDefect'])): ?>
+                        <div class="field-row">
+                          <div class="field-label">Дефект</div>
+                          <div class="field-value"><?= e($s['NameDefect']) ?></div>
+                        </div>
+                      <?php endif; ?>
+                    </div>
+
+                    <?php if (!empty($s['CauseFault'])): ?>
+                      <div class="field-row" style="margin-top:8px;border-top:1px solid #e5e7eb;padding-top:10px;">
+                        <div class="field-label">Причина</div>
+                        <div class="field-value"><?= e($s['CauseFault']) ?></div>
+                      </div>
+                    <?php endif; ?>
+                    <?php if (!empty($s['FaultDescription'])): ?>
+                      <div class="field-row">
+                        <div class="field-label">Описание</div>
+                        <div class="field-value"><?= e($s['FaultDescription']) ?></div>
+                      </div>
+                    <?php endif; ?>
+                    <?php if (!empty($s['ResultDisassemblingDP'])): ?>
+                      <div class="field-row">
+                        <div class="field-label">Результат / работы</div>
+                        <div class="field-value"><?= e($s['ResultDisassemblingDP']) ?></div>
+                      </div>
+                    <?php endif; ?>
+
+                    <?php if (!empty($s['VUDS']) && is_array($s['VUDS'])): ?>
+                      <div style="margin-top:12px;">
+                        <div style="font-weight:700;color:#1e3a8a;font-size:13px;margin-bottom:6px;">Виды устранения дефектов (VUDS)</div>
+                        <table class="doc-table">
+                          <thead>
+                            <tr>
+                              <th style="width:60px;">Код</th>
+                              <th>Описание</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <?php foreach ($s['VUDS'] as $v): ?>
+                              <tr>
+                                <td><?= e($v['VarUD'] ?? '—') ?></td>
+                                <td><?= e($v['UDDesc'] ?? '—') ?></td>
+                              </tr>
+                            <?php endforeach; ?>
+                          </tbody>
+                        </table>
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                </details>
+              <?php endforeach; ?>
             </div>
           <?php endforeach; ?>
 
-        <?php else: ?>
-          <div style="padding:30px; text-align:center; color:#888;">Нет активных ОТМ по этой автотехнике</div>
         <?php endif; ?>
 
         <?php if (!empty($car['_other']['Actions'])): ?>
@@ -664,7 +871,7 @@ function isPast($d) {
                   $aStart = $a['StartDateAction'] ?? null;
                   $aEnd   = $a['EndDateAction']   ?? null;
                   $aProcessed = (int)($a['Сompleted'] ?? $a['Completed'] ?? 0) > 0;
-                  if ($aEnd && isPast($aEnd))      $aStatus = '⏹ завершена';
+                  if ($aEnd && isPast($aEnd))       $aStatus = '⏹ завершена';
                   elseif ($aEnd && isActive($aEnd)) $aStatus = '✅ действует';
                   else                              $aStatus = 'ℹ️ без срока';
                 ?>
