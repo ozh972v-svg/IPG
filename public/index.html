@@ -49,11 +49,13 @@
   .tile:hover { transform: translateY(-3px); box-shadow: 0 6px 20px rgba(0,0,0,0.1); }
   .tile-primary:hover { border-color: #2563eb; }
   .tile-success:hover { border-color: #16a34a; }
+  .tile-ai:hover { border-color: #9333ea; }
   .tile-icon { font-size: 42px; line-height: 1; }
   .tile-title { font-size: 20px; font-weight: 700; color: #1a1a1a; }
   .tile-desc { font-size: 14px; color: #666; }
   .tile-primary { border-left: 5px solid #2563eb; }
   .tile-success { border-left: 5px solid #16a34a; }
+  .tile-ai { border-left: 5px solid #9333ea; }
   .footer {
     background: #fff; border-radius: 14px; padding: 16px; text-align: center;
     font-size: 13px; color: #888; box-shadow: 0 2px 12px rgba(0,0,0,0.06);
@@ -88,24 +90,28 @@ fetch('check_auth.php', { credentials: 'same-origin' })
         '</div>' +
       '</div>' +
       '<div class="tiles">' +
-  '<a href="search_vin.php" class="tile tile-primary">' +
-    '<div class="tile-icon">🔍</div>' +
-    '<div class="tile-title">Поиск по VIN</div>' +
-    '<div class="tile-desc">Данные по автотехнике из 1С:ГОА — гарантия, узлы, ОТМ, акции</div>' +
-  '</a>' +
-  '<a href="works_brand.php" class="tile tile-primary">' +
-    '<div class="tile-icon">🔧</div>' +
-    '<div class="tile-title">Поиск по работам</div>' +
-    '<div class="tile-desc">Справочник работ и операций из 1С:ГОА</div>' +
-  '</a>' +
-  '</a>' +
-  '<a href="gallery.php" class="tile tile-success">' +
-    '<div class="tile-icon">📸</div>' +
-    '<div class="tile-title">Фото по РА</div>' +
-    '<div class="tile-desc">Прикреплять фото к рекламационным актам</div>' +
-  '</a>' +
-'</div>' +
-      '<div class="footer">Данные сохраняются в облаке · Работает на RelaxDev · Версия 2.0</div>';
+        '<a href="search_vin.php" class="tile tile-primary">' +
+          '<div class="tile-icon">🔍</div>' +
+          '<div class="tile-title">Поиск по VIN</div>' +
+          '<div class="tile-desc">Данные по автотехнике из 1С:ГОА — гарантия, узлы, ОТМ, акции</div>' +
+        '</a>' +
+        '<a href="works_brand.php" class="tile tile-primary">' +
+          '<div class="tile-icon">🔧</div>' +
+          '<div class="tile-title">Поиск по работам</div>' +
+          '<div class="tile-desc">Справочник работ и операций из 1С:ГОА</div>' +
+        '</a>' +
+        '<a href="ai_assistant.php" class="tile tile-ai">' +
+          '<div class="tile-icon">🤖</div>' +
+          '<div class="tile-title">Помощник ИИ</div>' +
+          '<div class="tile-desc">Задать вопрос по справочнику работ обычными словами</div>' +
+        '</a>' +
+        '<a href="gallery.php" class="tile tile-success">' +
+          '<div class="tile-icon">📸</div>' +
+          '<div class="tile-title">Фото по РА</div>' +
+          '<div class="tile-desc">Прикреплять фото к рекламационным актам</div>' +
+        '</a>' +
+      '</div>' +
+      '<div class="footer">Данные сохраняются в облаке · Работает на RelaxDev · Версия 2.1</div>';
   })
   .catch(function() {
     document.getElementById('loading').innerHTML = '❌ Ошибка загрузки. Обновите страницу.';
