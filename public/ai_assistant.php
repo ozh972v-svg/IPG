@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         'какие','какая','какой','каких','работы','работа','работ','по','на','для','и','в','с','о','к','от','до',
         'а','но','же','ли','бы','не','или','либо','то','это','тот','эта','эти','все','всё','весь',
         'мне','нам','вам','дай','покажи','найди','есть','нет','этот','эту','того','чем','что','как','где',
-        'когда','нужно','надо','если','может','можно','авто','автомобиля','автомобиль','тс','список','покажи',
+        'когда','нужно','надо','если','может','можно','авто','автомобиля','автомобиль','тс','список',
     ];
 
     $textLower = mb_strtolower($question);
@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         exit;
     }
 
-    /* ---- 2. Бренд (если упомянут) ---- */
+    /* ---- 2. Бренд ---- */
     $brand = null;
     if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
     if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
@@ -60,7 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
 
     $orParts = [];
     foreach ($keywords as $i => $kw) {
-        // Простейший стемминг: обрезаем до корня
         $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
         $k1 = ":k{$i}_n"; $k2 = ":k{$i}_e"; $k3 = ":k{$i}_o";
         $orParts[] = "(name ILIKE $k1 OR eng_name ILIKE $k2 OR operation_code ILIKE $k3)";
@@ -89,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         exit;
     }
 
-    /* ---- 4. Сборка контекста для LLM ---- */
+    /* ---- 4. Контекст для LLM ---- */
     $lines = [];
     foreach ($works as $w) {
         $op   = $w['operation_code'] ? '[' . $w['operation_code'] . '] ' : '';
@@ -101,22 +100,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     $context = implode("\n", $lines);
 
     /* ---- 5. Запрос к LLM ---- */
-    $apiKey   = getenv('AI_API_KEY');
-    $baseUrl  = rtrim((string)getenv('AI_BASE_URL'), '/');
-    $model    = getenv('AI_MODEL') ?: 'deepseek/deepseek-v4-flash-0731-alt-thinking-fast';
+    $apiKey  = getenv('AI_API_KEY');
+    $baseUrl = rtrim((string)getenv('AI_BASE_URL'), '/');
+    $model   = getenv('AI_MODEL') ?: 'deepseek/deepseek-chat';
 
     if (!$apiKey || !$baseUrl) {
         echo json_encode(['ok' => false, 'error' => 'Не настроены AI_API_KEY / AI_BASE_URL']);
         exit;
     }
 
-    $system = <<<PROMPT
-Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.
-Отвечай ТОЛЬКО на основе списка работ, который тебе дали ниже.
-Если в списке нет ответа на вопрос — честно скажи: «В справочнике таких работ нет».
-Не выдумывай коды и названия. Отвечай кратко и по делу, на русском языке.
-Формат: сначала короткий ответ, потом (если уместно) список подходящих работ с кодами.
-PROMPT;
+    $system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.\n"
+            . "Отвечай ТОЛЬКО на основе списка работ, который тебе дали ниже.\n"
+            . "Если в списке нет ответа на вопрос — честно скажи: «В справочнике таких работ нет».\n"
+            . "Не выдумывай коды и названия. Отвечай кратко и по делу, на русском языке.\n"
+            . "Формат: сначала короткий ответ, потом (если уместно) список подходящих работ с кодами.";
 
     $userMsg = "Вопрос пользователя:\n{$question}\n\nРаботы из справочника (только они — источник правды):\n{$context}";
 
@@ -143,9 +140,9 @@ PROMPT;
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_SSL_VERIFYHOST => false,
     ]);
-    $resp   = curl_exec($ch);
-    $code   = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err    = curl_error($ch);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
     curl_close($ch);
 
     if ($err) {
@@ -167,10 +164,6 @@ PROMPT;
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
-
-/* ============================================================
-   Обычная страница
-   ============================================================ */
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -226,7 +219,6 @@ PROMPT;
     </div>
     <div class="hint">
       Задайте вопрос обычными словами. Помощник найдёт подходящие работы в справочнике КАМАЗ/КОМПАС и ответит на их основе.
-      Ключ и модель настраиваются в переменных окружения хостинга.
     </div>
     <div>
       Примеры вопросов:
