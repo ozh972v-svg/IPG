@@ -91,46 +91,6 @@ function isActive($d) {
     if ($ts === false) return false;
     return $ts >= strtotime(date('Y-m-d'));
 }
-
-/* ============================================================
-   ДИАГНОСТИКА: поиск полей по ключевым словам
-   ============================================================ */
-
-/**
- * Рекурсивно ищет в массиве ключи, содержащие любую из подстрок,
- * и возвращает плоский список [ 'путь.к.ключу' => значение ].
- */
-function scanKeysRecursive(array $arr, array $needles, string $prefix = '', int $depth = 0): array {
-    if ($depth > 6) return [];
-    $out = [];
-    foreach ($arr as $k => $v) {
-        $full = $prefix === '' ? (string)$k : $prefix . '.' . $k;
-        if (is_array($v)) {
-            $out = array_merge($out, scanKeysRecursive($v, $needles, $full, $depth + 1));
-        } else {
-            $lk = mb_strtolower((string)$k);
-            foreach ($needles as $n) {
-                if (mb_strpos($lk, mb_strtolower($n)) !== false) {
-                    $out[$full] = $v;
-                    break;
-                }
-            }
-        }
-    }
-    return $out;
-}
-
-/** Первое непустое значение по списку ключей верхнего уровня. */
-function pickField(array $arr, array $keys) {
-    foreach ($keys as $k) {
-        if (array_key_exists($k, $arr)) {
-            $v = $arr[$k];
-            if ($v !== '' && $v !== null && $v !== '—') return $v;
-        }
-    }
-    return null;
-}
-
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -194,6 +154,7 @@ function pickField(array $arr, array $keys) {
   .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 5px solid #16a34a; }
   .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 5px solid #dc2626; }
   .warranty-banner.test { background: #eff6ff; color: #1d4ed8; border-left: 5px solid #1d4ed8; }
+  .warranty-banner.warn { background: #fffbeb; color: #b45309; border-left: 5px solid #f59e0b; }
 
   .warranty-banner .banner-sub {
     font-size: 15px; font-weight: 500; color: #333;
@@ -214,6 +175,10 @@ function pickField(array $arr, array $keys) {
   .warranty-banner .banner-sub .row .value {
     color: #1a1a1a; font-weight: 700; font-size: 15px;
     text-align: right;
+  }
+  .warranty-banner .calc-note {
+    font-size: 11px; color: #92400e; font-weight: 500;
+    margin-top: 6px; font-style: italic;
   }
 
   .otm-card {
@@ -264,13 +229,6 @@ function pickField(array $arr, array $keys) {
     overflow: auto; margin-top: 10px; white-space: pre-wrap;
   }
 
-  .diag-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .diag-table th { background: #fffbeb; color: #92400e; text-align: left; padding: 8px 10px; border-bottom: 1px solid #fde68a; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
-  .diag-table td { padding: 8px 10px; border-bottom: 1px solid #fef3c7; vertical-align: top; font-family: 'SF Mono', Consolas, monospace; font-size: 12px; }
-  .diag-table td.k { color: #92400e; font-weight: 700; }
-  .diag-table td.v { color: #1a1a1a; word-break: break-all; }
-  .diag-hint { background: #fffbeb; border: 1.5px solid #fde68a; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #92400e; margin-bottom: 12px; }
-
   @media (max-width: 700px) {
     .field-row { flex-direction: column; gap: 4px; }
     .field-label { width: auto; }
@@ -316,9 +274,7 @@ function pickField(array $arr, array $keys) {
 
   <?php if ($car): ?>
     <?php
-      /* ---------- Базовая гарантия (как было) ---------- */
-      $mainActive = isActive($car['WarrantyExpirationDate'] ?? null);
-
+      /* ---------- Гарантия на узлы ---------- */
       $nodeWarranties = $car['_other']['GuaranteesForNodes'] ?? [];
       $activeNodes = [];
       foreach ($nodeWarranties as $g) {
@@ -327,57 +283,48 @@ function pickField(array $arr, array $keys) {
           }
       }
 
-      /* ---------- Производственная / товарная гарантия ----------
-         Пытаемся угадать имя поля. Если не угадали — покажем в диагностике. */
-      $prodWarrantyEnd = pickField($car, [
-          'ProductionWarrantyEnd', 'ProductionWarrantyEndDate',
-          'EndProductionWarranty', 'DateEndProductionWarranty',
-          'ProductionWarrantyExpirationDate', 'WarrantyProductionEndDate',
-          'EndDateProductionWarranty', 'DateOfEndProductionWarranty',
-          'ProductionWarrantyDateEnd', 'DateEndWarrantyProduction',
-          'WarrantyEndProduction',
-      ]);
-      $prodWarrantyStart = pickField($car, [
-          'ProductionWarrantyStart', 'ProductionWarrantyStartDate',
-          'StartProductionWarranty', 'DateStartProductionWarranty',
-          'DateOfStartProductionWarranty', 'ProductionWarrantyDateStart',
-      ]);
-      $prodWarrantySign = pickField($car, [
-          'WarrantySign', 'SignWarranty', 'WarrantyAttribute',
-          'AttributeWarranty', 'WarrantyType',
-      ]);
-      $prodWarrantyActive = isActive($prodWarrantyEnd);
+      /* ---------- Производственная гарантия ----------
+         В API от 1С обычно:
+         - WarrantyIndication = "Производственная" (признак)
+         - WarrantyStartDate / WarrantyExpirationDate = пустые
+         Если дат нет, но есть признак «Производственная» и дата изготовления —
+         ориентировочно считаем окончание как +36 месяцев (стандарт КАМАЗ).
+         Если в будущем подтянут реальные даты — они имеют приоритет. */
+      $prodSign       = trim((string)($car['WarrantyIndication'] ?? ''));
+      $wStartRaw      = trim((string)($car['WarrantyStartDate'] ?? ''));
+      $wEndRaw        = trim((string)($car['WarrantyExpirationDate'] ?? ''));
+      $productionDate = trim((string)($car['ProductionDate'] ?? ''));
+
+      $hasProdSign   = $prodSign !== '' && mb_stripos($prodSign, 'производств') !== false;
+      $wStartReal    = $wStartRaw !== '' ? $wStartRaw : null;
+      $wEndReal      = $wEndRaw   !== '' ? $wEndRaw   : null;
+
+      $wEndCalc = null;
+      if ($hasProdSign && !$wEndReal && $productionDate !== '') {
+          $ts = strtotime($productionDate);
+          if ($ts !== false) {
+              $wEndCalc = date('Y-m-d', strtotime('+36 months', $ts));
+          }
+      }
+      $wEndEffective = $wEndReal ?: $wEndCalc;
+      $prodActive    = $wEndEffective ? isActive($wEndEffective) : false;
 
       /* ---------- Тестовая эксплуатация ----------
-         Обычно приходит как массив "OperationInfo" / "ExploitationInfo"
-         со строками {Type, Start, End}. Пробуем разные варианты. */
-      $testRow = null;
-      foreach (['OperationInfo','ExploitationInfo','OperationTypes','Exploitations','Exploitation'] as $k) {
-          if (empty($car[$k])) continue;
-          $arr = $car[$k];
-          if (!is_array($arr)) continue;
-          // Может быть ассоциативный один объект или список
-          $rows = isset($arr[0]) && is_array($arr[0]) ? $arr : [$arr];
-          foreach ($rows as $row) {
-              if (!is_array($row)) continue;
-              $t = (string)($row['Type'] ?? $row['TypeOperation'] ?? $row['Name'] ?? $row['Kind'] ?? '');
-              if ($t !== '' && mb_stripos($t, 'тест') !== false) { $testRow = $row; break 2; }
+         Лежит в _other.Actions как отдельная акция с "Тестовая эксплуатация" в Name. */
+      $testAction = null;
+      foreach (($car['_other']['Actions'] ?? []) as $a) {
+          $nm = (string)($a['Name'] ?? '');
+          if ($nm !== '' && mb_stripos($nm, 'тестов') !== false) {
+              $testAction = $a;
+              break;
           }
-          // Если не нашли «тест», но массив непустой — запомним первую строку
-          if (!$testRow && is_array($rows[0] ?? null)) $testRow = $rows[0];
       }
-      $testType  = $testRow['Type']       ?? $testRow['TypeOperation'] ?? $testRow['Name']  ?? $testRow['Kind'] ?? null;
-      $testStart = $testRow['Start']      ?? $testRow['StartDate']     ?? $testRow['DateStart'] ?? $testRow['Begin'] ?? null;
-      $testEnd   = $testRow['End']        ?? $testRow['EndDate']       ?? $testRow['DateEnd']   ?? $testRow['Finish'] ?? null;
+      $testDone = $testAction
+          ? ((int)($testAction['Сompleted'] ?? $testAction['Completed'] ?? 0) > 0)
+          : false;
 
-      /* ---------- Диагностика: какие вообще поля похожи на «гарантию/тест/эксплуатацию» ---------- */
-      $diagWarranty = scanKeysRecursive($car, ['warrant', 'гарант']);
-      $diagTest     = scanKeysRecursive($car, ['test', 'trial', 'тестов', 'эксплуат', 'operation', 'operating']);
-      // Исключим служебные, чтобы не было шума
-      $diagTest = array_filter($diagTest, function($v, $k) {
-          return stripos($k, 'EndGuaranteeOperatingTime') === false
-              && stripos($k, 'EndGuaranteeMileage') === false;
-      }, ARRAY_FILTER_USE_BOTH);
+      /* ---------- Есть ли вообще хоть какой-то «положительный» статус ---------- */
+      $anyStatus = $hasProdSign || $testAction !== null || !empty($activeNodes);
 
       $title = 'КАМАЗ ' . ($car['ShassisModel'] ?? '')
              . ' · VIN ш.: ' . ($car['VINShassis'] ?? '')
@@ -437,80 +384,100 @@ function pickField(array $arr, array $keys) {
 
         <div class="section-title">Гарантия и эксплуатация</div>
 
-        <?php
-          $anyStatus = false;
-        ?>
-
-        <?php if ($prodWarrantyActive || $prodWarrantyEnd): ?>
-          <?php $anyStatus = true; ?>
-          <div class="warranty-banner yes">
-            ✅ ПРОИЗВОДСТВЕННАЯ ГАРАНТИЯ<?= $prodWarrantyActive ? '' : ' (закончилась)' ?>
-            <div class="banner-sub">
-              <?php if ($prodWarrantyStart): ?>
-                <div class="row">
-                  <span class="label">Начало</span>
-                  <span class="value"><?= e(fmtDate($prodWarrantyStart)) ?></span>
-                </div>
-              <?php endif; ?>
-              <div class="row">
-                <span class="label">Окончание</span>
-                <span class="value"><?= e(fmtDate($prodWarrantyEnd)) ?></span>
-              </div>
-              <?php if ($prodWarrantySign): ?>
+        <?php if ($hasProdSign): ?>
+          <?php if ($prodActive): ?>
+            <div class="warranty-banner yes">
+              ✅ ПРОИЗВОДСТВЕННАЯ ГАРАНТИЯ
+              <div class="banner-sub">
                 <div class="row">
                   <span class="label">Признак гарантии</span>
-                  <span class="value"><?= e(is_array($prodWarrantySign) ? implode(', ', $prodWarrantySign) : $prodWarrantySign) ?></span>
+                  <span class="value"><?= e($prodSign) ?></span>
                 </div>
-              <?php endif; ?>
+                <?php if ($wStartReal): ?>
+                  <div class="row">
+                    <span class="label">Начало гарантии</span>
+                    <span class="value"><?= e(fmtDate($wStartReal)) ?></span>
+                  </div>
+                <?php endif; ?>
+                <div class="row">
+                  <span class="label">Окончание гарантии</span>
+                  <span class="value">
+                    <?= e(fmtDate($wEndEffective)) ?>
+                    <?php if (!$wEndReal && $wEndCalc): ?><span style="color:#92400e;"> (расчётно)</span><?php endif; ?>
+                  </span>
+                </div>
+                <?php if (!$wEndReal && $wEndCalc): ?>
+                  <div class="calc-note">Расчёт: дата изготовления + 36 месяцев. Точная дата в 1С может отличаться — уточняйте в первоисточнике.</div>
+                <?php endif; ?>
+              </div>
             </div>
-          </div>
+          <?php else: ?>
+            <div class="warranty-banner warn">
+              ⚠️ ПРОИЗВОДСТВЕННАЯ ГАРАНТИЯ (срок истёк)
+              <div class="banner-sub">
+                <div class="row">
+                  <span class="label">Признак гарантии</span>
+                  <span class="value"><?= e($prodSign) ?></span>
+                </div>
+                <?php if ($wStartReal): ?>
+                  <div class="row">
+                    <span class="label">Начало гарантии</span>
+                    <span class="value"><?= e(fmtDate($wStartReal)) ?></span>
+                  </div>
+                <?php endif; ?>
+                <div class="row">
+                  <span class="label">Окончание гарантии</span>
+                  <span class="value">
+                    <?= e(fmtDate($wEndEffective)) ?>
+                    <?php if (!$wEndReal && $wEndCalc): ?><span style="color:#92400e;"> (расчётно)</span><?php endif; ?>
+                  </span>
+                </div>
+              </div>
+            </div>
+          <?php endif; ?>
         <?php endif; ?>
 
-        <?php if ($testType !== null && mb_stripos((string)$testType, 'тест') !== false): ?>
-          <?php $anyStatus = true; ?>
+        <?php if ($testAction): ?>
           <div class="warranty-banner test">
-            🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ
+            🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ<?= $testDone ? ' (завершена)' : '' ?>
             <div class="banner-sub">
               <div class="row">
-                <span class="label">Тип</span>
-                <span class="value"><?= e($testType) ?></span>
+                <span class="label">Название</span>
+                <span class="value"><?= e($testAction['Name'] ?? '—') ?></span>
               </div>
-              <?php if ($testStart): ?>
+              <?php if (!empty($testAction['Number'])): ?>
+                <div class="row">
+                  <span class="label">Номер акции</span>
+                  <span class="value"><?= e($testAction['Number']) ?></span>
+                </div>
+              <?php endif; ?>
+              <?php if (!empty($testAction['StartDateAction'])): ?>
                 <div class="row">
                   <span class="label">Начало</span>
-                  <span class="value"><?= e(fmtDate($testStart)) ?></span>
+                  <span class="value"><?= e(fmtDate($testAction['StartDateAction'])) ?></span>
                 </div>
               <?php endif; ?>
-              <?php if ($testEnd): ?>
+              <?php if (!empty($testAction['EndDateAction'])): ?>
                 <div class="row">
                   <span class="label">Окончание</span>
-                  <span class="value"><?= e(fmtDate($testEnd)) ?></span>
+                  <span class="value"><?= e(fmtDate($testAction['EndDateAction'])) ?></span>
                 </div>
               <?php endif; ?>
-            </div>
-          </div>
-        <?php endif; ?>
-
-        <?php if ($mainActive): ?>
-          <?php $anyStatus = true; ?>
-          <div class="warranty-banner yes">
-            ✅ ГАРАНТИЯ ТС ДЕЙСТВУЕТ
-            <div class="banner-sub">
+              <?php if (!empty($testAction['TypeAction'])): ?>
+                <div class="row">
+                  <span class="label">Тип</span>
+                  <span class="value"><?= e($testAction['TypeAction']) ?></span>
+                </div>
+              <?php endif; ?>
+              <?php if (!empty($testAction['KindAction'])): ?>
+                <div class="row">
+                  <span class="label">Вид</span>
+                  <span class="value"><?= e($testAction['KindAction']) ?></span>
+                </div>
+              <?php endif; ?>
               <div class="row">
-                <span class="label">Начало гарантии</span>
-                <span class="value"><?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?></span>
-              </div>
-              <div class="row">
-                <span class="label">Окончание гарантии</span>
-                <span class="value"><?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?></span>
-              </div>
-              <div class="row">
-                <span class="label">Пробег окончания</span>
-                <span class="value"><?= number_format((int)($car['EndGuaranteeMileage'] ?? 0), 0, '.', ' ') ?> км</span>
-              </div>
-              <div class="row">
-                <span class="label">Наработка окончания</span>
-                <span class="value"><?= (int)($car['EndGuaranteeOperatingTime'] ?? 0) ?> м/ч</span>
+                <span class="label">Статус</span>
+                <span class="value"><?= $testDone ? '✅ выполнено' : '⏳ в работе / не завершено' ?></span>
               </div>
             </div>
           </div>
@@ -521,12 +488,16 @@ function pickField(array $arr, array $keys) {
             ❌ НЕ В ГАРАНТИИ
             <div class="banner-sub">
               <div class="row">
+                <span class="label">Признак гарантии</span>
+                <span class="value"><?= e($prodSign !== '' ? $prodSign : '—') ?></span>
+              </div>
+              <div class="row">
                 <span class="label">Начало гарантии</span>
-                <span class="value"><?= e(fmtDate($car['WarrantyStartDate'] ?? null)) ?></span>
+                <span class="value"><?= e(fmtDate($wStartReal)) ?></span>
               </div>
               <div class="row">
                 <span class="label">Окончание гарантии</span>
-                <span class="value"><?= e(fmtDate($car['WarrantyExpirationDate'] ?? null)) ?></span>
+                <span class="value"><?= e(fmtDate($wEndReal)) ?></span>
               </div>
               <div class="row">
                 <span class="label">Пробег окончания</span>
@@ -645,16 +616,19 @@ function pickField(array $arr, array $keys) {
                 <th>Вид</th>
                 <th>Начало</th>
                 <th>Окончание</th>
+                <th>Выполнено</th>
               </tr>
             </thead>
             <tbody>
               <?php foreach ($car['_other']['Actions'] as $a): ?>
+                <?php $aDone = (int)($a['Сompleted'] ?? $a['Completed'] ?? 0) > 0; ?>
                 <tr>
                   <td><?= e($a['Name'] ?? '—') ?></td>
                   <td><?= e($a['TypeAction'] ?? '—') ?></td>
                   <td><?= e($a['KindAction'] ?? '—') ?></td>
                   <td><?= e(fmtDate($a['StartDateAction'] ?? null)) ?></td>
                   <td><?= e(fmtDate($a['EndDateAction'] ?? null)) ?></td>
+                  <td><?= $aDone ? '✅' : '—' ?></td>
                 </tr>
               <?php endforeach; ?>
             </tbody>
@@ -686,45 +660,6 @@ function pickField(array $arr, array $keys) {
       </div>
 
     </div>
-
-    <?php if (!empty($diagWarranty) || !empty($diagTest)): ?>
-      <div class="card">
-        <div class="section-title" style="margin-top:0;">🔍 Диагностика полей (временно)</div>
-        <div class="diag-hint">
-          Этот блок нужен разработчику, чтобы найти правильные имена полей для «Производственной гарантии» и «Тестовой эксплуатации». Пожалуйста, сделайте скриншот этого блока и отправьте его в чат.
-        </div>
-
-        <?php if (!empty($diagWarranty)): ?>
-          <div style="font-weight:700;color:#1e3a8a;margin:12px 0 6px;">Поля, содержащие «warrant» / «гарант»:</div>
-          <table class="diag-table">
-            <thead><tr><th style="width:45%">Ключ</th><th>Значение</th></tr></thead>
-            <tbody>
-              <?php foreach ($diagWarranty as $k => $v): ?>
-                <tr>
-                  <td class="k"><?= e($k) ?></td>
-                  <td class="v"><?= e(is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE)) ?></td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        <?php endif; ?>
-
-        <?php if (!empty($diagTest)): ?>
-          <div style="font-weight:700;color:#1e3a8a;margin:18px 0 6px;">Поля, содержащие «test» / «trial» / «тестов» / «эксплуат» / «operation»:</div>
-          <table class="diag-table">
-            <thead><tr><th style="width:45%">Ключ</th><th>Значение</th></tr></thead>
-            <tbody>
-              <?php foreach ($diagTest as $k => $v): ?>
-                <tr>
-                  <td class="k"><?= e($k) ?></td>
-                  <td class="v"><?= e(is_scalar($v) ? (string)$v : json_encode($v, JSON_UNESCAPED_UNICODE)) ?></td>
-                </tr>
-              <?php endforeach; ?>
-            </tbody>
-          </table>
-        <?php endif; ?>
-      </div>
-    <?php endif; ?>
 
     <div class="card">
       <div class="btn-row">
