@@ -91,6 +91,14 @@ function isActive($d) {
     if ($ts === false) return false;
     return $ts >= strtotime(date('Y-m-d'));
 }
+
+/** В прошлом ли дата. */
+function isPast($d) {
+    if (!$d) return false;
+    $ts = strtotime($d);
+    if ($ts === false) return false;
+    return $ts < strtotime(date('Y-m-d'));
+}
 ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -154,6 +162,7 @@ function isActive($d) {
   .warranty-banner.yes { background: #f0fdf4; color: #16a34a; border-left: 5px solid #16a34a; }
   .warranty-banner.no { background: #fef2f2; color: #dc2626; border-left: 5px solid #dc2626; }
   .warranty-banner.test { background: #eff6ff; color: #1d4ed8; border-left: 5px solid #1d4ed8; }
+  .warranty-banner.test-done { background: #f3f4f6; color: #4b5563; border-left: 5px solid #9ca3af; }
   .warranty-banner.warn { background: #fffbeb; color: #b45309; border-left: 5px solid #f59e0b; }
 
   .warranty-banner .banner-sub {
@@ -283,13 +292,7 @@ function isActive($d) {
           }
       }
 
-      /* ---------- Производственная гарантия ----------
-         В API от 1С обычно:
-         - WarrantyIndication = "Производственная" (признак)
-         - WarrantyStartDate / WarrantyExpirationDate = пустые
-         Если дат нет, но есть признак «Производственная» и дата изготовления —
-         ориентировочно считаем окончание как +36 месяцев (стандарт КАМАЗ).
-         Если в будущем подтянут реальные даты — они имеют приоритет. */
+      /* ---------- Производственная гарантия ---------- */
       $prodSign       = trim((string)($car['WarrantyIndication'] ?? ''));
       $wStartRaw      = trim((string)($car['WarrantyStartDate'] ?? ''));
       $wEndRaw        = trim((string)($car['WarrantyExpirationDate'] ?? ''));
@@ -310,7 +313,12 @@ function isActive($d) {
       $prodActive    = $wEndEffective ? isActive($wEndEffective) : false;
 
       /* ---------- Тестовая эксплуатация ----------
-         Лежит в _other.Actions как отдельная акция с "Тестовая эксплуатация" в Name. */
+         В JSON 1С у акции есть поля "Сompleted" и "Completed" (оба = 1),
+         НО это НЕ означает "завершена". В самой 1С статус "Действует".
+         Реальный критерий окончания — дата EndDateAction:
+           - в прошлом  → завершена
+           - в будущем  → действует
+           - отсутствует → считаем «без срока» */
       $testAction = null;
       foreach (($car['_other']['Actions'] ?? []) as $a) {
           $nm = (string)($a['Name'] ?? '');
@@ -319,12 +327,22 @@ function isActive($d) {
               break;
           }
       }
-      $testDone = $testAction
-          ? ((int)($testAction['Сompleted'] ?? $testAction['Completed'] ?? 0) > 0)
-          : false;
+
+      $testStatus = 'none'; // none | active | done | unknown
+      $testEnd    = null;
+      $testStart  = null;
+      if ($testAction) {
+          $testStart = $testAction['StartDateAction'] ?? null;
+          $testEnd   = $testAction['EndDateAction']   ?? null;
+          if ($testEnd && isPast($testEnd))         $testStatus = 'done';
+          elseif ($testEnd && isActive($testEnd))   $testStatus = 'active';
+          elseif (!$testEnd)                        $testStatus = 'unknown';
+          else                                      $testStatus = 'done';
+      }
 
       /* ---------- Есть ли вообще хоть какой-то «положительный» статус ---------- */
-      $anyStatus = $hasProdSign || $testAction !== null || !empty($activeNodes);
+      $testPositive = ($testStatus === 'active' || $testStatus === 'unknown');
+      $anyStatus    = $hasProdSign || $testPositive || !empty($activeNodes);
 
       $title = 'КАМАЗ ' . ($car['ShassisModel'] ?? '')
              . ' · VIN ш.: ' . ($car['VINShassis'] ?? '')
@@ -438,8 +456,20 @@ function isActive($d) {
         <?php endif; ?>
 
         <?php if ($testAction): ?>
-          <div class="warranty-banner test">
-            🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ<?= $testDone ? ' (завершена)' : '' ?>
+          <?php
+            if ($testStatus === 'done') {
+                $testClass = 'warranty-banner test-done';
+                $testTitle = '🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ — ЗАВЕРШЕНА';
+            } elseif ($testStatus === 'active') {
+                $testClass = 'warranty-banner test';
+                $testTitle = '🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ — ДЕЙСТВУЕТ';
+            } else {
+                $testClass = 'warranty-banner test';
+                $testTitle = '🧪 ТЕСТОВАЯ ЭКСПЛУАТАЦИЯ';
+            }
+          ?>
+          <div class="<?= $testClass ?>">
+            <?= e($testTitle) ?>
             <div class="banner-sub">
               <div class="row">
                 <span class="label">Название</span>
@@ -451,16 +481,16 @@ function isActive($d) {
                   <span class="value"><?= e($testAction['Number']) ?></span>
                 </div>
               <?php endif; ?>
-              <?php if (!empty($testAction['StartDateAction'])): ?>
+              <?php if ($testStart): ?>
                 <div class="row">
                   <span class="label">Начало</span>
-                  <span class="value"><?= e(fmtDate($testAction['StartDateAction'])) ?></span>
+                  <span class="value"><?= e(fmtDate($testStart)) ?></span>
                 </div>
               <?php endif; ?>
-              <?php if (!empty($testAction['EndDateAction'])): ?>
+              <?php if ($testEnd): ?>
                 <div class="row">
                   <span class="label">Окончание</span>
-                  <span class="value"><?= e(fmtDate($testAction['EndDateAction'])) ?></span>
+                  <span class="value"><?= e(fmtDate($testEnd)) ?></span>
                 </div>
               <?php endif; ?>
               <?php if (!empty($testAction['TypeAction'])): ?>
@@ -477,7 +507,15 @@ function isActive($d) {
               <?php endif; ?>
               <div class="row">
                 <span class="label">Статус</span>
-                <span class="value"><?= $testDone ? '✅ выполнено' : '⏳ в работе / не завершено' ?></span>
+                <span class="value">
+                  <?php if ($testStatus === 'active'): ?>
+                    ✅ действует<?= $testEnd ? ' до ' . e(fmtDate($testEnd)) : '' ?>
+                  <?php elseif ($testStatus === 'done'): ?>
+                    ⏹ завершена <?= $testEnd ? e(fmtDate($testEnd)) : '' ?>
+                  <?php else: ?>
+                    ℹ️ без срока
+                  <?php endif; ?>
+                </span>
               </div>
             </div>
           </div>
@@ -616,19 +654,28 @@ function isActive($d) {
                 <th>Вид</th>
                 <th>Начало</th>
                 <th>Окончание</th>
-                <th>Выполнено</th>
+                <th>Статус</th>
+                <th>Обработано</th>
               </tr>
             </thead>
             <tbody>
               <?php foreach ($car['_other']['Actions'] as $a): ?>
-                <?php $aDone = (int)($a['Сompleted'] ?? $a['Completed'] ?? 0) > 0; ?>
+                <?php
+                  $aStart = $a['StartDateAction'] ?? null;
+                  $aEnd   = $a['EndDateAction']   ?? null;
+                  $aProcessed = (int)($a['Сompleted'] ?? $a['Completed'] ?? 0) > 0;
+                  if ($aEnd && isPast($aEnd))      $aStatus = '⏹ завершена';
+                  elseif ($aEnd && isActive($aEnd)) $aStatus = '✅ действует';
+                  else                              $aStatus = 'ℹ️ без срока';
+                ?>
                 <tr>
                   <td><?= e($a['Name'] ?? '—') ?></td>
                   <td><?= e($a['TypeAction'] ?? '—') ?></td>
                   <td><?= e($a['KindAction'] ?? '—') ?></td>
-                  <td><?= e(fmtDate($a['StartDateAction'] ?? null)) ?></td>
-                  <td><?= e(fmtDate($a['EndDateAction'] ?? null)) ?></td>
-                  <td><?= $aDone ? '✅' : '—' ?></td>
+                  <td><?= e(fmtDate($aStart)) ?></td>
+                  <td><?= e(fmtDate($aEnd)) ?></td>
+                  <td><?= e($aStatus) ?></td>
+                  <td><?= $aProcessed ? '✅' : '—' ?></td>
                 </tr>
               <?php endforeach; ?>
             </tbody>
