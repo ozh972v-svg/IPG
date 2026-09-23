@@ -24,27 +24,18 @@ $family    = $families[$familyKey];
 $db = get_db();
 $search = trim($_GET['q'] ?? '');
 
-/* Все группы ФОТОН — верхние и подгруппы */
-$st = $db->prepare("SELECT code, name, parent_code FROM work_operations
-                    WHERE brand = 'FOTON' AND it_is_group = TRUE
-                    ORDER BY code");
+/* === Верхние группы ФОТОН — parent_code IS NULL и не битые === */
+$st = $db->prepare("
+    SELECT code, name
+      FROM work_operations
+     WHERE brand = 'FOTON' AND it_is_group = TRUE
+       AND (parent_code IS NULL OR parent_code = '')
+       AND name NOT LIKE '%#%'
+       AND name NOT LIKE '%Н/Д%'
+     ORDER BY code
+");
 $st->execute();
-$allGroups = $st->fetchAll(PDO::FETCH_ASSOC);
-
-/* Разделяем:
-   Верхняя группа: code = 'FOTON_11_Название' — после '_' нет пробела
-   Подгруппа:      code = 'FOTON_01_ Название' — после '_' пробел */
-$topGroups = [];
-foreach ($allGroups as $g) {
-    $body = substr($g['code'], 6); /* убираем 'FOTON_' */
-    if (strlen($body) < 3) continue;
-
-    /* Проверяем третий символ (индекс 2) — если '_' и после него пробел, это подгруппа */
-    $isSubgroup = (substr($body, 2, 2) === '_ ');
-    if (!$isSubgroup) {
-        $topGroups[] = $g;
-    }
-}
+$topGroups = $st->fetchAll(PDO::FETCH_ASSOC);
 
 $group = $_GET['group'] ?? ($topGroups[0]['code'] ?? null);
 
@@ -88,7 +79,17 @@ if ($search !== '') {
         $st->execute($params);
         $works = $st->fetchAll(PDO::FETCH_ASSOC);
     } else {
-        $works = [];
+        /* На случай, если у верхней группы работы привязаны напрямую */
+        $st = $db->prepare("SELECT DISTINCT ON (operation_code)
+                                   code, operation_code, name, eng_name, norm_time, complectation
+                              FROM work_operations
+                             WHERE brand = 'FOTON' AND it_is_group = FALSE AND deleted = FALSE
+                               AND complectation LIKE :fam
+                               AND parent_code = :parent
+                             ORDER BY operation_code, complectation
+                             LIMIT 500");
+        $st->execute([':fam' => $familyKey . '%', ':parent' => $group]);
+        $works = $st->fetchAll(PDO::FETCH_ASSOC);
     }
 } else {
     $works = [];
