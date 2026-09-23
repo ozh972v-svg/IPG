@@ -14,7 +14,7 @@ if (!empty($_GET['debug']) && $user['is_admin']) {
     header('Content-Type: application/json; charset=utf-8');
     $code = trim((string)$_GET['debug']);
     $stmt = $pdo->prepare("
-        SELECT operation_code, name, brand, complectation, model, is_group, deleted,
+        SELECT operation_code, name, brand, complectation, model, it_is_group, deleted,
                parent_code, code
           FROM work_operations
          WHERE operation_code ILIKE :c
