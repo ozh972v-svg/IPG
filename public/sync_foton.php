@@ -151,13 +151,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
                 $workCode = $opCode . '@' . $model;
                 if (!isset($worksSeen[$workCode])) {
                     $worksSeen[$workCode] = true;
-                    $insertWork->execute([
-                        ':code'       => $workCode,
-                        ':parent'     => $subgroup !== '' ? 'FOTON_' . $subgroup : null,
-                        ':name'       => $name,
-                        ':eng'        => $engName ?: null,
+                                        $insertWork->execute([
+                        ':code'       => fixLength($workCode),
+                        ':parent'     => $subgroup !== '' ? fixLength('FOTON_' . $subgroup) : null,
+                        ':name'       => fixLength($name),
+                        ':eng'        => $engName ? fixLength($engName) : null,
                         ':norm'       => $norm,
-                        ':model_name' => $model,
+                        ':model_name' => fixLength($model),
                         ':op'         => $opCode,
                         ':ts'         => $now,
                     ]);
