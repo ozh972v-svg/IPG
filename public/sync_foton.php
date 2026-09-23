@@ -10,6 +10,24 @@ if (!$user) { header('Location: login.php'); exit; }
 if (!$user['is_admin']) { die('Только для администратора'); }
 $pdo = get_db();
 
+/**
+ * Нормализует строку: если это Windows-1251 — конвертирует в UTF-8.
+ * Иначе возвращает как есть.
+ */
+function fixEncoding($s) {
+    if ($s === null || $s === '') return $s;
+    if (mb_check_encoding($s, 'UTF-8')) return $s;
+    /* Пробуем CP1251 → UTF-8 */
+    $converted = @mb_convert_encoding($s, 'UTF-8', 'CP1251');
+    if ($converted !== false && mb_check_encoding($converted, 'UTF-8')) {
+        return $converted;
+    }
+    /* Резервный вариант — iconv */
+    $converted = @iconv('CP1251', 'UTF-8//IGNORE', $s);
+    if ($converted !== false) return $converted;
+    return $s;
+}
+
 $result = null;
 $error  = null;
 
@@ -42,7 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
         }
 
         $now = date('Y-m-d H:i:s');
-        $batch = [];
         $total = 0;
         $groupsSeen = [];
         $subgroupsSeen = [];
@@ -74,13 +91,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
         while (($row = fgetcsv($fh, 0, ';')) !== false) {
             if (count($row) < 8) continue;
 
-            $group    = trim((string)($row[0] ?? ''));
-            $subgroup = trim((string)($row[1] ?? ''));
+            /* Каждую ячейку прогоняем через fixEncoding */
+            $group    = trim(fixEncoding((string)($row[0] ?? '')));
+            $subgroup = trim(fixEncoding((string)($row[1] ?? '')));
             $opCode   = trim((string)($row[2] ?? ''));
-            $name     = trim((string)($row[3] ?? ''));
-            $model    = trim((string)($row[5] ?? ''));
+            $name     = trim(fixEncoding((string)($row[3] ?? '')));
+            $model    = trim(fixEncoding((string)($row[5] ?? '')));
             $normRaw  = trim((string)($row[7] ?? ''));
-            $engName  = trim((string)($row[8] ?? ''));
+            $engName  = trim(fixEncoding((string)($row[8] ?? '')));
 
             if ($group === '' && $subgroup === '' && $opCode === '') continue;
             if ($name === '' && $opCode === '') continue;
@@ -358,7 +376,7 @@ try {
     <div class="step-hint" style="font-size:13.5px;color:#475569;padding:12px 16px;background:#f8fafc;border-radius:10px;border-left:3px solid #dc2626;margin-bottom:16px;line-height:1.55;">
       <b>Ожидаемый формат файла:</b><br>
       — Разделитель: <code>;</code> (точка с запятой)<br>
-      — Кодировка: UTF-8 или Windows-1251<br>
+      — Кодировка: UTF-8 или Windows-1251 (определяется автоматически)<br>
       — Первая строка: заголовки (пропускаются)<br>
       — Столбцы: Группа | Система/узел | Код операции | Наименование | Модель двиг. | Модель | Линейка | Нормотив | Repair item
     </div>
