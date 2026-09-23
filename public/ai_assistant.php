@@ -460,23 +460,7 @@ async function askAI(e) {
     }
 
     html += '<div class="answer-box">' + escapeHtml(data.answer) + '</div>';
-
-    if (data.works && data.works.length > 0) {
-      html += '<h2 class="section-head">🔧 Работы в справочнике (' + data.works.length + ')</h2>';
-      html += '<table class="works"><thead><tr><th style="width:120px;">Код</th><th>Наименование</th><th style="width:80px;">Норма</th><th style="width:120px;">Комплектация</th></tr></thead><tbody>';
-      for (const w of data.works) {
-        const norm = w.norm_time !== null ? (parseFloat(w.norm_time).toFixed(3).replace(/\.?0+$/, '') + ' ч') : '—';
-        html += '<tr>'
-             +  '<td>' + (w.operation_code ? '<span class="op-code">' + escapeHtml(w.operation_code) + '</span>' : '—') + '</td>'
-             +  '<td>' + escapeHtml(w.name || '') + (w.eng_name ? '<div style="color:#888;font-size:11px;margin-top:2px;">' + escapeHtml(w.eng_name) + '</div>' : '') + '</td>'
-             +  '<td>' + escapeHtml(norm) + '</td>'
-             +  '<td style="font-size:11px;color:#666;">' + escapeHtml(w.complectation || '—') + '</td>'
-             +  '</tr>';
-      }
-      html += '</tbody></table>';
-    }
-
-    if (data.ra && data.ra.length > 0) {
+   if (data.ra && data.ra.length > 0) {
       html += '<h2 class="section-head">📋 Рекламационные акты и записи (' + data.ra.length + ')</h2>';
       html += '<table class="works"><thead><tr><th style="width:70px;">Тип</th><th style="width:160px;">Номер</th><th>Описание</th><th style="width:120px;">Гос./ЗН</th><th style="width:70px;">Фото</th></tr></thead><tbody>';
       for (const r of data.ra) {
