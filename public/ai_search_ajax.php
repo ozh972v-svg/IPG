@@ -9,32 +9,32 @@ if (!$user) { echo json_encode(['ok'=>false,'error'=>'Не авторизова�
 $pdo = get_db();
 
 /* ============================================================
-   Словарь аббревиатур — для нормализации вопроса и поиска
+   Словарь аббревиатур
    ============================================================ */
 function expandAbbreviations(string $text): string {
     $map = [
-        'ГБЦ'   => 'головка блок цилиндров',
-        'БЦ'    => 'блок цилиндров',
-        'ДВС'   => 'двигатель',
-        'КПП'   => 'коробка передач',
-        'АКПП'  => 'автоматическая коробка передач',
-        'МКПП'  => 'механическая коробка передач',
-        'ТНВД'  => 'топливный насос высокого давления',
-        'ТННД'  => 'топливный насос низкого давления',
-        'ОЖ'    => 'охлаждающая жидкость',
-        'ГУР'   => 'гидроусилитель руля',
-        'ЭБУ'   => 'электронный блок управления',
-        'ЦБУ'   => 'центральный блок управления',
-        'ТНВ'   => 'теплообменник наддувочного воздуха',
-        'ТРК'   => 'турбокомпрессор',
-        'ЭГР'   => 'система рециркуляции выхлопных газов',
-        'EGR'   => 'система рециркуляции выхлопных газов',
-        'ABS'   => 'антиблокировочная система',
-        'АБС'   => 'антиблокировочная система',
-        'ГП'    => 'главная передача',
-        'КП'    => 'коробка передач',
-        'ПГУ'   => 'пневмогидроусилитель',
-        'ОГ'    => 'система выпуска газов',
+        'ГБЦ' => 'головка блок цилиндров',
+        'БЦ'  => 'блок цилиндров',
+        'ДВС' => 'двигатель',
+        'КПП' => 'коробка передач',
+        'АКПП'=> 'автоматическая коробка передач',
+        'МКПП'=> 'механическая коробка передач',
+        'ТНВД'=> 'топливный насос высокого давления',
+        'ТННД'=> 'топливный насос низкого давления',
+        'ОЖ'  => 'охлаждающая жидкость',
+        'ГУР' => 'гидроусилитель руля',
+        'ЭБУ' => 'электронный блок управления',
+        'ЦБУ' => 'центральный блок управления',
+        'ТНВ' => 'теплообменник наддувочного воздуха',
+        'ТРК' => 'турбокомпрессор',
+        'ЭГР' => 'система рециркуляции выхлопных газов',
+        'EGR' => 'система рециркуляции выхлопных газов',
+        'ABS' => 'антиблокировочная система',
+        'АБС' => 'антиблокировочная система',
+        'ГП'  => 'главная передача',
+        'КП'  => 'коробка передач',
+        'ПГУ' => 'пневмогидроусилитель',
+        'ОГ'  => 'система выпуска газов',
     ];
     $result = $text;
     foreach ($map as $abbr => $full) {
@@ -45,20 +45,17 @@ function expandAbbreviations(string $text): string {
 }
 
 /* ============================================================
-   Расшифровка типов работ
+   Расшифровка типов
    ============================================================ */
 function opTypeInfo(?string $code): array {
     $c = strtoupper(trim((string)$code));
     if ($c === '') return ['short' => '—', 'full' => '—'];
-
     if (preg_match('/^9{4,}/', $c)) {
         return ['short' => 'Ненормированная', 'full' => 'Ненормированная трудоёмкость'];
     }
-
     $letter = mb_substr($c, 0, 1);
     $rus = ['А'=>'A','В'=>'B','Т'=>'T','Х'=>'X','Е'=>'E','Р'=>'P','С'=>'C','М'=>'M'];
     if (isset($rus[$letter])) $letter = $rus[$letter];
-
     switch ($letter) {
         case 'A': return ['short' => 'Административные', 'full' => 'Административные'];
         case 'B': return ['short' => 'Предпродажная', 'full' => 'Предпродажная подготовка'];
@@ -73,7 +70,7 @@ function opTypeInfo(?string $code): array {
 }
 
 /* ============================================================
-   GigaChat: access_token с кэшем в файл
+   GigaChat: access_token
    ============================================================ */
 function getGigaChatToken(): ?string {
     $authKey = getenv('GIGACHAT_AUTH_KEY');
@@ -81,13 +78,10 @@ function getGigaChatToken(): ?string {
     if (!$authKey) return null;
 
     $cacheFile = sys_get_temp_dir() . '/gigachat_token_' . md5($authKey) . '.json';
-
     if (is_file($cacheFile)) {
         $cached = json_decode((string)file_get_contents($cacheFile), true);
         if (!empty($cached['access_token']) && !empty($cached['expires_at'])) {
-            if ($cached['expires_at'] - 60 > time()) {
-                return $cached['access_token'];
-            }
+            if ($cached['expires_at'] - 60 > time()) return $cached['access_token'];
         }
     }
 
@@ -120,7 +114,6 @@ function getGigaChatToken(): ?string {
     curl_close($ch);
 
     if ($err || $code !== 200) return null;
-
     $data = json_decode((string)$resp, true);
     if (empty($data['access_token'])) return null;
 
@@ -129,7 +122,6 @@ function getGigaChatToken(): ?string {
         'access_token' => $data['access_token'],
         'expires_at'   => $expiresAt,
     ]));
-
     return $data['access_token'];
 }
 
@@ -172,7 +164,6 @@ function resolveComplectationByVin(string $vin, PDO $pdo): ?string {
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-
         if ($httpCode !== 200 || !$response) continue;
 
         $data = json_decode($response, true);
@@ -189,7 +180,6 @@ function resolveComplectationByVin(string $vin, PDO $pdo): ?string {
                               LIMIT 1");
         $st->execute($lp);
         $found = $st->fetchColumn();
-
         if ($found !== false && $found !== null && $found !== '') {
             $cache[$vin] = (string)$found;
             return $cache[$vin];
@@ -213,7 +203,6 @@ $contextBrand         = trim((string)($_POST['brand'] ?? ''))         ?: null;
 $contextChassis       = trim((string)($_POST['chassis'] ?? ''))       ?: null;
 $contextModel         = trim((string)($_POST['model'] ?? ''))         ?: null;
 
-/* ---- Бренд ---- */
 $brand = $contextBrand;
 if ($brand === null) {
     if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
@@ -221,22 +210,18 @@ if ($brand === null) {
     if (mb_stripos($question, 'фотон')  !== false) $brand = 'FOTON';
 }
 
-/* ---- VIN ---- */
 $vinCandidate = null;
 if (preg_match('/\b([A-HJ-NPR-Z0-9]{17})\b/i', $question, $m)) {
     $vinCandidate = strtoupper($m[1]);
 }
 
-/* ---- Резолв VIN → комплектация ---- */
 $resolvedComplectation = $contextComplectation;
 if ($resolvedComplectation === null && $vinCandidate) {
     $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
 }
 
-/* ---- Нормализация: расшифровка аббревиатур ---- */
 $questionExpanded = expandAbbreviations($question);
 
-/* ---- Ключевые слова ---- */
 $stopWords = [
     'какие','какая','какой','каких','работы','работа','работ','работу','работой','работе','работам','работах',
     'найди','найти','поищи','поиск','покажи','показать','дай','дайте','подбери','подскажи','скажи','объясни',
@@ -248,7 +233,6 @@ $stopWords = [
     'камаз','камаза','компас','компаса','компасе','фотон','фотона','фотоне',
 ];
 
-/* Глаголы-действия — не считаем их «уточняющими» для AND-поиска */
 $actionVerbs = ['замен','снять','установить','проверить','отремонтировать','демонтаж','монтаж','разобрать','собрать','отрегулировать'];
 
 $textLower = mb_strtolower($questionExpanded);
@@ -268,7 +252,6 @@ if (empty($keywords)) {
     exit;
 }
 
-/* Стемминг + синонимы */
 $synonyms = [
     'диагност'    => ['проверк', 'оценк', 'дефектовк'],
     'проверк'     => ['диагност', 'оценк'],
@@ -276,7 +259,7 @@ $synonyms = [
     'амортизатор' => ['подвес', 'рессор'],
     'рессор'      => ['подвес', 'амортизатор'],
     'прокладк'    => ['прокладка', 'уплотнен'],
-    'головк'      => ['гбц', 'головка'],
+    'головк'      => ['гбц'],
     'уплотнен'    => ['прокладк', 'сальник'],
 ];
 
@@ -293,7 +276,6 @@ foreach ($keywords as $kw) {
 }
 $stems = array_values(array_unique($stems));
 
-/* «Уточняющие» слова — НЕ глаголы. Именно их требуем в AND-поиске */
 $specificStems = [];
 foreach ($stems as $s) {
     $isVerb = false;
@@ -309,7 +291,6 @@ if (empty($specificStems)) $specificStems = $stems;
    ============================================================ */
 $baseWhere  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
 $baseParams = [];
-
 $familyFilterActive = false;
 $familyFilterValue  = null;
 
@@ -333,10 +314,9 @@ if ($resolvedComplectation !== null) {
 }
 
 /* ============================================================
-   Функция поиска: AND по specificStems, OR — fallback
+   Функция поиска
    ============================================================ */
 function searchWorks(PDO $pdo, array $baseWhere, array $baseParams, array $stems, array $specificStems, int $limit = 60): array {
-    /* 1. AND-поиск по уточняющим словам */
     $where = $baseWhere;
     $params = $baseParams;
     $ors = [];
@@ -359,7 +339,6 @@ function searchWorks(PDO $pdo, array $baseWhere, array $baseParams, array $stems
         if (!empty($rows)) return $rows;
     }
 
-    /* 2. OR-поиск по всем стемам */
     $where = $baseWhere;
     $params = $baseParams;
     $ors = [];
@@ -380,82 +359,103 @@ function searchWorks(PDO $pdo, array $baseWhere, array $baseParams, array $stems
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/* ============================================================
-   Три поиска: основные (AND), связанные (OR), рекомендации (типы)
-   ============================================================ */
-
-/* --- 1. Основные работы --- */
+/* --- 1. Основные --- */
 $mainWorks = searchWorks($pdo, $baseWhere, $baseParams, $stems, $specificStems, 40);
 
-/* --- 2. Расширенный поиск: если пусто в семействе — расширяем на бренд --- */
+/* --- 2. Расширение если пусто --- */
 $expandedSearch = false;
 if (empty($mainWorks) && $familyFilterActive && $brand === 'FOTON') {
-    $baseWhereNoFamily = [];
+    $bwNoFam = [];
     foreach ($baseWhere as $w) {
-        if (strpos($w, 'complectation') === false) $baseWhereNoFamily[] = $w;
+        if (strpos($w, 'complectation') === false) $bwNoFam[] = $w;
     }
-    $baseWhereNoFamily[] = 'brand = :brand';
-    $baseParamsNoFamily = $baseParams;
-    unset($baseParamsNoFamily[':comp']);
-    $baseParamsNoFamily[':brand'] = 'FOTON';
+    $bwNoFam[] = 'brand = :brand';
+    $bpNoFam = $baseParams;
+    unset($bpNoFam[':comp']);
+    $bpNoFam[':brand'] = 'FOTON';
 
-    $mainWorks = searchWorks($pdo, $baseWhereNoFamily, $baseParamsNoFamily, $stems, $specificStems, 40);
+    $mainWorks = searchWorks($pdo, $bwNoFam, $bpNoFam, $stems, $specificStems, 40);
     if (!empty($mainWorks)) $expandedSearch = true;
-
-    /* Возвращаем family-фильтр обратно (для следующих поисков) */
 }
 
-/* --- 3. Связанные работы: OR-поиск с бОльшим лимитом, минус уже найденные --- */
-$relatedStems = [];
-foreach ($stems as $s) {
-    if (mb_strlen($s) >= 5) $relatedStems[] = $s;
+/* ============================================================
+   Определяем «базовый узел» основной работы
+   Например: «Прокладка головки блока цилиндров, замена»
+   → узел = «прокладк», «головк»
+   ============================================================ */
+$isComplex = false;
+$mainWorkMaxNorm = 0;
+if (!empty($mainWorks)) {
+    foreach ($mainWorks as $mw) {
+        $n = (float)($mw['norm_time'] ?? 0);
+        if ($n > $mainWorkMaxNorm) $mainWorkMaxNorm = $n;
+    }
+    /* Если есть работа с нормой ≥ 5 ч — считаем её комплексной */
+    if ($mainWorkMaxNorm >= 5.0) $isComplex = true;
 }
-if (empty($relatedStems)) $relatedStems = $stems;
 
-$relatedWhere = $baseWhere;
-$relatedParams = $baseParams;
-$rOrs = [];
-foreach ($relatedStems as $i => $s) {
-    $k = ":r{$i}";
-    $relatedParams[$k] = '%' . $s . '%';
-    $rOrs[] = "(name ILIKE $k OR eng_name ILIKE $k)";
-}
-$relatedWhere[] = '(' . implode(' OR ', $rOrs) . ')';
+/* ============================================================
+   Связанные работы — исключаем «Снять X» / «Установить X», 
+   если в основных есть «Заменить X» для того же узла
+   ============================================================ */
+$relatedWorks = [];
+if (!empty($specificStems)) {
+    $relWhere = $baseWhere;
+    $relParams = $baseParams;
+    $rOrs = [];
+    foreach ($specificStems as $i => $s) {
+        $k = ":r{$i}";
+        $relParams[$k] = '%' . $s . '%';
+        $rOrs[] = "(name ILIKE $k OR eng_name ILIKE $k)";
+    }
+    $relWhere[] = '(' . implode(' OR ', $rOrs) . ')';
 
-$relatedSql = "SELECT DISTINCT ON (operation_code)
+    $relSql = "SELECT DISTINCT ON (operation_code)
                       operation_code, name, eng_name, norm_time, complectation, brand
                  FROM work_operations
-                WHERE " . implode(' AND ', $relatedWhere) . "
+                WHERE " . implode(' AND ', $relWhere) . "
                 ORDER BY operation_code, LENGTH(name)
                 LIMIT 200";
-$st = $pdo->prepare($relatedSql);
-$st->execute($relatedParams);
-$relatedRaw = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st = $pdo->prepare($relSql);
+    $st->execute($relParams);
+    $relRaw = $st->fetchAll(PDO::FETCH_ASSOC);
 
-$mainCodes = array_column($mainWorks, 'operation_code');
-$relatedWorks = [];
-foreach ($relatedRaw as $r) {
-    if (in_array($r['operation_code'], $mainCodes, true)) continue;
-    $relatedWorks[] = $r;
-    if (count($relatedWorks) >= 40) break;
+    $mainCodes = array_column($mainWorks, 'operation_code');
+    $hasReplaceInMain = false;
+    foreach ($mainWorks as $mw) {
+        if (preg_match('/замен/iu', $mw['name'])) { $hasReplaceInMain = true; break; }
+    }
+
+    foreach ($relRaw as $r) {
+        if (in_array($r['operation_code'], $mainCodes, true)) continue;
+
+        /* Если в основных есть «Заменить X» — исключаем «Снять X» и «Установить X» */
+        if ($hasReplaceInMain && preg_match('/^\s*(снять|установить)\s/iu', $r['name'])) continue;
+
+        $relatedWorks[] = $r;
+        if (count($relatedWorks) >= 30) break;
+    }
 }
 
-/* --- 4. Рекомендуемые работы: диагностика/дефектовка по тому же узлу --- */
+/* ============================================================
+   Рекомендуемые — ТОЛЬКО диагностика / дефектовка / проверки
+   (без снять-установить)
+   ============================================================ */
 $recommendedWorks = [];
 if (!empty($specificStems)) {
     $recWhere = $baseWhere;
     $recParams = $baseParams;
-    /* Ищем работы, где встречается специфичное слово (узел) и есть диагностический триггер */
     $recOrs = [];
     foreach ($specificStems as $i => $s) {
         $k = ":rc{$i}";
         $recParams[$k] = '%' . $s . '%';
-        $recOrs[] = "name ILIKE $k";
+        $recOrs[] = "(name ILIKE $k OR eng_name ILIKE $k)";
     }
     $recWhere[] = '(' . implode(' OR ', $recOrs) . ')';
+    /* Строго: диагностика, проверка, дефектовка, оценка */
     $recWhere[] = "(operation_code ILIKE 'E%' OR operation_code ILIKE 'Е%'
-                   OR name ILIKE '%проверк%' OR name ILIKE '%диагност%' OR name ILIKE '%дефектов%'
-                   OR name ILIKE '%оценк%' OR name ILIKE 'Снять%' OR name ILIKE 'Установить%')";
+                   OR name ILIKE '%проверк%' OR name ILIKE '%диагност%'
+                   OR name ILIKE '%дефектов%' OR name ILIKE '%оценк%')";
 
     $recSql = "SELECT DISTINCT ON (operation_code)
                       operation_code, name, eng_name, norm_time, complectation, brand
@@ -468,12 +468,12 @@ if (!empty($specificStems)) {
         $st->execute($recParams);
         $recRaw = $st->fetchAll(PDO::FETCH_ASSOC);
 
-        $allFoundCodes = array_merge(
+        $allFound = array_merge(
             array_column($mainWorks, 'operation_code'),
             array_column($relatedWorks, 'operation_code')
         );
         foreach ($recRaw as $r) {
-            if (in_array($r['operation_code'], $allFoundCodes, true)) continue;
+            if (in_array($r['operation_code'], $allFound, true)) continue;
             $recommendedWorks[] = $r;
             if (count($recommendedWorks) >= 12) break;
         }
@@ -481,7 +481,7 @@ if (!empty($specificStems)) {
 }
 
 /* ============================================================
-   Формируем контекст для LLM — три секции
+   Контекст
    ============================================================ */
 $filterInfo = '';
 if ($brand !== null)         $filterInfo .= 'Бренд: ' . $brand . '. ';
@@ -506,7 +506,6 @@ if (!empty($expandedSearch)) {
     $ctx[] = "=== ПРИМЕЧАНИЕ ===\nВ исходном семействе ({$familyFilterValue}) ничего не найдено. Показаны работы со всего бренда FOTON.";
 }
 
-/* Секция 1: основные */
 if (!empty($mainWorks)) {
     $lines = array_map('formatWorkLine', $mainWorks);
     $ctx[] = "=== ОСНОВНЫЕ РАБОТЫ (прямое совпадение с запросом) ===\n" . implode("\n", $lines);
@@ -514,16 +513,14 @@ if (!empty($mainWorks)) {
     $ctx[] = "=== ОСНОВНЫЕ РАБОТЫ ===\nПрямых совпадений не найдено.";
 }
 
-/* Секция 2: связанные */
 if (!empty($relatedWorks)) {
     $lines = array_map('formatWorkLine', $relatedWorks);
-    $ctx[] = "=== СВЯЗАННЫЕ РАБОТЫ (та же деталь/узел, могут быть нужны дополнительно) ===\n" . implode("\n", $lines);
+    $ctx[] = "=== СВЯЗАННЫЕ РАБОТЫ (та же деталь, другая операция — могут быть дополнительными) ===\n" . implode("\n", $lines);
 }
 
-/* Секция 3: рекомендуемые */
 if (!empty($recommendedWorks)) {
     $lines = array_map('formatWorkLine', $recommendedWorks);
-    $ctx[] = "=== РЕКОМЕНДУЕМЫЕ РАБОТЫ (диагностика / дефектовка / снятие-установка по этому узлу) ===\n" . implode("\n", $lines);
+    $ctx[] = "=== РЕКОМЕНДУЕМЫЕ РАБОТЫ (диагностика / дефектовка / проверки) ===\n" . implode("\n", $lines);
 }
 
 $context = implode("\n\n", $ctx);
@@ -533,56 +530,59 @@ $context = implode("\n\n", $ctx);
    ============================================================ */
 $token = getGigaChatToken();
 if (!$token) {
-    echo json_encode(['ok'=>false,'error'=>'Не удалось получить токен GigaChat. Проверьте GIGACHAT_AUTH_KEY в ENV.']);
+    echo json_encode(['ok'=>false,'error'=>'Не удалось получить токен GigaChat.']);
     exit;
 }
 
 $model = getenv('GIGACHAT_MODEL') ?: 'GigaChat';
 
-$system = "Ты — опытный эксперт-помощник мастера-приёмщика сервиса КАМАЗ / КОМПАС / ФОТОН. "
-        . "Твоя задача — не просто найти работу в справочнике, а СОСТАВИТЬ ПОЛНЫЙ ПЛАН РЕМОНТА.\n"
+$isComplexFlag = $isComplex ? "ОСНОВНАЯ РАБОТА ЯВЛЯЕТСЯ КОМПЛЕКСНОЙ (норма ≥ 5 ч) — она уже включает в себя снятие, установку и замену детали. Не разбивай её на подшаги." : "";
+
+$system = "Ты — опытный эксперт-помощник мастера-приёмщика сервиса КАМАЗ / КОМПАС / ФОТОН.\n"
         . "\n"
-        . "Контекст содержит три группы работ:\n"
-        . "  • ОСНОВНЫЕ — прямое совпадение с запросом\n"
-        . "  • СВЯЗАННЫЕ — та же деталь/узел, могут понадобиться дополнительно\n"
-        . "  • РЕКОМЕНДУЕМЫЕ — диагностика, дефектовка, снятие/установка\n"
+        . "{$isComplexFlag}\n"
         . "\n"
-        . "РАСШИФРОВКА ТИПОВ РАБОТ (по первой букве кода):\n"
-        . "  A — Административные\n"
-        . "  B — Предпродажная подготовка\n"
-        . "  T — Техническое обслуживание\n"
-        . "  X — Комплекс работ ТО\n"
-        . "  E — Диагностические работы\n"
-        . "  P — Постовые работы текущего ремонта (снятие/установка с автотехники)\n"
-        . "  C — Цеховые работы (разборка, очистка, сборка снятых изделий)\n"
-        . "  M — Доработка (ОТМ)\n"
+        . "ВАЖНОЕ ПРАВИЛО О КОМПЛЕКСНЫХ РАБОТАХ:\n"
+        . "  • Если основная работа имеет норму ≥ 5 часов — она УЖЕ ВКЛЮЧАЕТ в себя все операции "
+        . "по снятию, установке и замене детали. НЕ расписывай её как последовательность отдельных работ.\n"
+        . "  • Если пользователь спрашивает про замену детали — не предлагай отдельно «снять X» и "
+        . "«установить X», если такие работы уже подразумеваются в основной работе.\n"
+        . "  • В разделе «Дополнительно» предлагай ТОЛЬКО диагностику, дефектовку, проверки, "
+        . "замену сопутствующих расходников (болты, прокладки, уплотнения).\n"
         . "\n"
-        . "ФОРМАТ ОТВЕТА (обязательно соблюдай структуру):\n"
+        . "Контекст содержит три секции:\n"
+        . "  • ОСНОВНЫЕ — прямое совпадение с запросом (самое главное)\n"
+        . "  • СВЯЗАННЫЕ — та же деталь, другая операция\n"
+        . "  • РЕКОМЕНДУЕМЫЕ — диагностика, дефектовка, проверки\n"
         . "\n"
-        . "🔧 **Основная работа:** [код] [название] — [норма] ч\n"
-        . "   _Тип: [постовые/цеховые/диагностические]._\n"
+        . "РАСШИФРОВКА ТИПОВ (первая буква кода):\n"
+        . "  A — Административные | B — Предпродажная | T — ТО | X — Комплекс ТО\n"
+        . "  E — Диагностика | P — Постовые (снятие/установка) | C — Цеховые | M — ОТМ\n"
         . "\n"
-        . "📋 **Что нужно сделать (порядок):**\n"
-        . "1. [код] Снять / демонтировать ... — [норма]\n"
-        . "2. [код] Заменить / установить ... — [норма]\n"
-        . "3. [код] Установить обратно ... — [норма]\n"
-        . "(если для этой работы есть сопутствующие операции — перечисли их из СВЯЗАННЫХ)\n"
+        . "ФОРМАТ ОТВЕТА:\n"
         . "\n"
-        . "🔍 **Дополнительно рекомендуется:**\n"
-        . "- [код] Проверить / продиагностировать [узел] — [норма] ч\n"
-        . "- [код] Дефектовка [детали] — [норма] ч\n"
-        . "(из РЕКОМЕНДУЕМЫХ или из знаний)\n"
+        . "🔧 **Основная работа:**\n"
+        . "   [код] Название — X.X ч\n"
+        . "   _Тип: [постовые/цеховые]. Включает: снятие, замену, установку._  ← если норма ≥ 5 ч\n"
+        . "   _Тип: [постовые]._  ← если норма < 5 ч\n"
         . "\n"
-        . "💡 **Совет мастеру:** 1–2 фразы — на что обратить внимание, какие нюансы.\n"
+        . "📋 **Что дополнительно потребуется:**\n"
+        . "- [код] Название — X.X ч   (сопутствующие детали, расходники — из СВЯЗАННЫХ)\n"
+        . "(если нет — пропусти этот блок)\n"
         . "\n"
-        . "ПРАВИЛА:\n"
-        . "1. Используй ТОЛЬКО коды и нормы из контекста. Не выдумывай.\n"
-        . "2. Если в ОСНОВНЫХ нет точного совпадения, но есть близкое по смыслу в СВЯЗАННЫХ — "
-        . "предложи его и скажи «точного совпадения нет, но есть похожее».\n"
-        . "3. Если ничего нет даже в связных — ответь своими знаниями и начни со строки "
+        . "🔍 **Рекомендуется проверить:**\n"
+        . "- [код] Название — X.X ч   (диагностика, дефектовка — из РЕКОМЕНДУЕМЫХ)\n"
+        . "(если нет — пропусти этот блок)\n"
+        . "\n"
+        . "💡 **Совет мастеру:** 1–2 фразы — нюанс по работе.\n"
+        . "\n"
+        . "ЖЁСТКИЕ ПРАВИЛА:\n"
+        . "1. НЕ расписывай порядок ремонта как «шаг 1, шаг 2, шаг 3», если основная работа комплексная.\n"
+        . "2. Используй ТОЛЬКО коды и нормы из контекста. Не выдумывай.\n"
+        . "3. Если точного совпадения нет — предложи близкое из СВЯЗАННЫХ, сказав «точного нет, но есть похожее».\n"
+        . "4. Если ничего нет — ответь своими знаниями и начни со строки "
         . "«⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
-        . "4. Указание кода и типа работы в квадратных/угловых скобках — обязательно для каждой упомянутой работы.\n"
-        . "5. Отвечай по-русски, кратко, структурированно. Без воды.";
+        . "5. Отвечай по-русски, кратко, структурированно.";
 
 $payload = [
     'model'       => $model,
@@ -590,7 +590,7 @@ $payload = [
         ['role' => 'system', 'content' => $system],
         ['role' => 'user',   'content' => "Вопрос мастера:\n{$question}\n\nКонтекст из базы:\n{$context}"],
     ],
-    'temperature' => 0.3,
+    'temperature' => 0.2,
     'max_tokens'  => 2500,
 ];
 
@@ -635,8 +635,8 @@ echo json_encode([
         'vin'           => $vinCandidate,
         'complectation' => $resolvedComplectation,
         'expanded'      => $expandedSearch,
-        'stems'         => $stems,
-        'specific'      => $specificStems,
+        'is_complex'    => $isComplex,
+        'main_norm_max' => $mainWorkMaxNorm,
         'counts'        => [
             'main'        => count($mainWorks),
             'related'     => count($relatedWorks),
