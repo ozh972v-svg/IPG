@@ -24,39 +24,27 @@ $family    = $families[$familyKey];
 $db = get_db();
 $search = trim($_GET['q'] ?? '');
 
-/* Группы — общие для всей марки, без привязки к модели */
-$st = $db->prepare("SELECT code, name FROM work_operations
+/* Все группы ФОТОН — верхние и подгруппы */
+$st = $db->prepare("SELECT code, name, parent_code FROM work_operations
                     WHERE brand = 'FOTON' AND it_is_group = TRUE
-                      AND code LIKE 'FOTON_%' AND code NOT LIKE '%@%'
                     ORDER BY code");
 $st->execute();
 $allGroups = $st->fetchAll(PDO::FETCH_ASSOC);
 
-/* Разделяем на верхний уровень (FOTON_11_...) и подгруппы (FOTON_01_...) */
+/* Разделяем:
+   Верхняя группа: code = 'FOTON_11_Название' — после '_' нет пробела
+   Подгруппа:      code = 'FOTON_01_ Название' — после '_' пробел */
 $topGroups = [];
-$subgroupsByParent = [];
 foreach ($allGroups as $g) {
-    if (strpos($g['code'], 'FOTON_') === 0) {
-        /* Отделяем верхние от подгрупп: подгруппа начинается с "FOTON_0" или "FOTON_1" и короткая */
-        $body = substr($g['code'], 6);
-        /* Верхний уровень: "11_Двигатель", "12_Система смазки" — начинается с 2 цифр и _ */
-        if (preg_match('/^\d{2}_/', $body)) {
-            /* Это верхний уровень, если после "_" идёт заглавная буква и это НЕ подгруппа,
-               например "01_ Двигатель в сборе" — но у верхнего уровня обычно нет "01_" префикса... */
-            /* Проще: верхние уровни имеют номера 11-91, подгруппы 01-99 без пробела */
-            $prefix = (int)substr($body, 0, 2);
-            if ($prefix >= 11 && $prefix <= 99 && strpos($body, ' ') === false) {
-                $topGroups[] = $g;
-                continue;
-            }
-        }
-    }
-    /* Всё остальное — подгруппы. Их parent_code = FOTON_<topGroup> */
-    $subgroupsByParent[$g['code']] = $g;
-}
+    $body = substr($g['code'], 6); /* убираем 'FOTON_' */
+    if (strlen($body) < 3) continue;
 
-/* Верхние группы — это всё, что попало в $topGroups.
-   Подгруппы — все остальные, они привязаны через parent_code. */
+    /* Проверяем третий символ (индекс 2) — если '_' и после него пробел, это подгруппа */
+    $isSubgroup = (substr($body, 2, 2) === '_ ');
+    if (!$isSubgroup) {
+        $topGroups[] = $g;
+    }
+}
 
 $group = $_GET['group'] ?? ($topGroups[0]['code'] ?? null);
 
@@ -73,14 +61,13 @@ if ($search !== '') {
     $st->execute([':fam' => $familyKey . '%', ':q' => '%' . $search . '%']);
     $works = $st->fetchAll(PDO::FETCH_ASSOC);
 } else if ($group) {
-    /* Находим подгруппы этой верхней группы */
+    /* Ищем подгруппы выбранной верхней группы */
     $st = $db->prepare("SELECT code FROM work_operations
                         WHERE brand = 'FOTON' AND it_is_group = TRUE
                           AND parent_code = :parent");
     $st->execute([':parent' => $group]);
     $subs = $st->fetchAll(PDO::FETCH_COLUMN);
 
-    /* Ищем работы, у которых parent_code в списке подгрупп */
     if (!empty($subs)) {
         $ph = [];
         $params = [':fam' => $familyKey . '%'];
@@ -113,7 +100,7 @@ foreach ($topGroups as $g) {
     if ($g['code'] === $group) { $groupName = $g['name']; break; }
 }
 
-/* Количество работ в каждой верхней группе (для счётчиков) */
+/* Количество работ в каждой верхней группе */
 $groupCounts = [];
 try {
     $st = $db->prepare("
@@ -244,12 +231,12 @@ function fmtNorm($n) {
 
   .layout {
     display: grid;
-    grid-template-columns: 280px 1fr 340px;
+    grid-template-columns: 320px 1fr 340px;
     gap: 14px;
     align-items: start;
   }
   @media (max-width: 1200px) {
-    .layout { grid-template-columns: 260px 1fr; }
+    .layout { grid-template-columns: 280px 1fr; }
     .basket { grid-column: 1 / -1; }
   }
   @media (max-width: 800px) {
@@ -257,7 +244,7 @@ function fmtNorm($n) {
     .basket { grid-column: 1; }
   }
 
-  .sidebar { max-height: 75vh; overflow-y: auto; padding: 8px; }
+  .sidebar { max-height: 78vh; overflow-y: auto; padding: 8px; }
   .sidebar a {
     display: flex;
     justify-content: space-between;
@@ -526,8 +513,7 @@ function fmtNorm($n) {
         <?php foreach ($topGroups as $g): ?>
           <?php
             $cnt = $groupCounts[$g['code']] ?? 0;
-            /* Убираем "FOTON_" из названия для красоты */
-            $niceName = preg_replace('/^FOTON_/', '', $g['name']);
+            $niceName = $g['name'];
           ?>
           <a href="?family=<?= e($familyKey) ?>&group=<?= urlencode($g['code']) ?>"
              class="<?= $g['code'] === $group && $search === '' ? 'active' : '' ?>">
@@ -547,7 +533,7 @@ function fmtNorm($n) {
         <p class="count">Найдено: <?= count($works) ?></p>
       <?php elseif ($group): ?>
         <h2>
-          <?= e(preg_replace('/^FOTON_/', '', $groupName)) ?>
+          <?= e($groupName) ?>
           <span class="family-tag"><?= e($family['label']) ?></span>
         </h2>
         <p class="count">Работ в группе: <?= count($works) ?></p>
