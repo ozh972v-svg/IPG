@@ -90,6 +90,18 @@ function fmtNorm($n) {
         color: #2563eb; text-decoration: none; font-size: 14px;
     }
 
+    .hint {
+        background: #f9fafb;
+        border-left: 3px solid #2563eb;
+        border-radius: 10px;
+        padding: 12px 16px;
+        font-size: 14px;
+        color: #444;
+        line-height: 1.55;
+        margin-bottom: 18px;
+    }
+    .hint b { color: #1e3a8a; }
+
     .model-bar {
         display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
     }
@@ -306,6 +318,13 @@ function fmtNorm($n) {
 <div class="container">
     <a class="back" href="works_brand.php">← К выбору марки</a>
 
+    <div class="hint">
+        <b>Шаг 1.</b> Выберите модель Компаса кнопками ниже (5 / 6 / 9 / 12).<br>
+        <b>Шаг 2.</b> Слева выберите группу работ — работы появятся справа.<br>
+        <b>Шаг 3.</b> Нажмите <b>🤖 Спросить ИИ</b> — вопрос будет искаться в справочнике выбранной модели.
+        Если модель не выбрана, поиск пойдёт по Компасу 5 (по умолчанию).
+    </div>
+
     <!-- Кнопки моделей -->
     <div class="model-bar">
         <?php foreach ($models as $key => $m): ?>
@@ -414,7 +433,6 @@ function fmtNorm($n) {
     </div>
 </div>
 
-<!-- AI-модалка -->
 <div class="ai-modal-overlay" id="aiModal">
   <div class="ai-modal">
     <h3>🤖 Помощник ИИ <button type="button" class="btn btn-secondary" onclick="closeAiModal()" style="margin-left:auto;padding:6px 12px;">✕</button></h3>
@@ -441,7 +459,6 @@ function basketLoad() {
     if (!Array.isArray(basket)) basket = [];
 }
 function basketSave() { localStorage.setItem(BASKET_KEY, JSON.stringify(basket)); }
-
 function escapeHtml(s) {
     const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML;
 }
@@ -453,7 +470,6 @@ function basketRender() {
     const actions = document.getElementById('basketActions');
 
     count.textContent = basket.length;
-
     let sum = 0;
     basket.forEach(b => { if (b.norm) sum += parseFloat(b.norm); });
     total.textContent = sum.toFixed(2).replace('.', ',');
@@ -465,7 +481,6 @@ function basketRender() {
         return;
     }
     actions.style.display = 'flex';
-
     list.innerHTML = basket.map((b, i) => `
         <li class="basket-item">
             <div class="basket-item-content">
@@ -486,10 +501,7 @@ function basketRender() {
 
 function basketAdd(item) {
     if (basket.some(b => b.code === item.code)) return false;
-    basket.push(item);
-    basketSave();
-    basketRender();
-    return true;
+    basket.push(item); basketSave(); basketRender(); return true;
 }
 function basketRemove(i) { basket.splice(i, 1); basketSave(); basketRender(); }
 function basketClear() {
@@ -525,16 +537,14 @@ document.addEventListener('click', function(e) {
     if (!e.target.classList.contains('add-btn')) return;
     const btn = e.target;
     const item = {
-        code: btn.dataset.code,
-        op:   btn.dataset.op,
-        name: btn.dataset.name,
-        norm: btn.dataset.norm || null
+        code: btn.dataset.code, op: btn.dataset.op,
+        name: btn.dataset.name, norm: btn.dataset.norm || null
     };
     if (basket.some(b => b.code === item.code)) { showMsg('Уже в корзине'); return; }
     basketAdd(item);
 });
 
-/* ==== AI-модалка ==== */
+/* ==== AI ==== */
 const AI_CONTEXT = {
     chassis: <?= json_encode($chassis) ?>,
     model:   <?= json_encode($modelName) ?>,
@@ -548,21 +558,15 @@ function openAiModal(initialQ) {
     const a     = document.getElementById('aiAnswer');
     const e     = document.getElementById('aiError');
 
-    const parts = [];
-    if (AI_CONTEXT.model)   parts.push('Модель: ' + AI_CONTEXT.model);
-    if (AI_CONTEXT.chassis) parts.push('Шасси: ' + AI_CONTEXT.chassis);
-    ctx.textContent = parts.length ? 'Контекст: ' + parts.join(' · ') : 'Без контекста';
-
+    ctx.textContent = 'Контекст: ' + AI_CONTEXT.model + ' · Шасси ' + AI_CONTEXT.chassis;
     q.value = initialQ || '';
     a.style.display = 'none'; a.textContent = '';
     e.style.display = 'none'; e.textContent = '';
-
     modal.classList.add('active');
     setTimeout(() => q.focus(), 100);
 }
-function closeAiModal() {
-    document.getElementById('aiModal').classList.remove('active');
-}
+function closeAiModal() { document.getElementById('aiModal').classList.remove('active'); }
+
 async function askAi() {
     const q = document.getElementById('aiQuestion').value.trim();
     if (q.length < 3) return;
@@ -574,8 +578,7 @@ async function askAi() {
 
     btn.disabled = true; btn.textContent = '⏳ Думаю…';
     load.style.display = 'inline';
-    ans.style.display = 'none';
-    err.style.display = 'none';
+    ans.style.display = 'none'; err.style.display = 'none';
 
     try {
         const fd = new FormData();
@@ -586,7 +589,6 @@ async function askAi() {
 
         const resp = await fetch('ai_search_ajax.php', { method: 'POST', body: fd });
         const data = await resp.json();
-
         if (!data.ok) {
             err.textContent = '❌ ' + (data.error || 'Ошибка');
             err.style.display = 'block';
