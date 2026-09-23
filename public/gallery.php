@@ -779,7 +779,7 @@ if ($viewMode) {
         </div>
       <?php else: ?>
 
-        <?php foreach ($groupsByBrand as $brandName => $list): ?>
+                <?php foreach ($groupsByBrand as $brandName => $list): ?>
           <?php
             $brandClass = 'brand-nobrand';
             if ($brandName === 'КАМАЗ')         $brandClass = 'brand-kamaz';
@@ -788,11 +788,11 @@ if ($viewMode) {
             elseif ($brandName === 'СИТРАК')    $brandClass = 'brand-sitrak';
             elseif ($brandName === 'ПРИЦЕПЫ')   $brandClass = 'brand-pritsep';
           ?>
-          <div class="brand-section <?= $brandClass ?>">
-            <div class="brand-title">
+          <details class="brand-section <?= $brandClass ?>" data-brand="<?= e($brandName) ?>">
+            <summary class="brand-title">
               <span><?= e($brandName) ?></span>
               <span class="cnt"><?= count($list) ?></span>
-            </div>
+            </summary>
             <div class="brand-body">
 
               <?php foreach ($list as $g): ?>
