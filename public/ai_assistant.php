@@ -99,84 +99,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         $numberCandidate = $m[1];
     }
 
-    /* ============================================================
+        /* ============================================================
        5. Поиск по справочнику работ
-       ВАЖНО: brand НЕ фильтруем жёстко (там бывает NULL, и работы
-       теряются). Вместо этого используем бренд как приоритет.
+       Сортировка по релевантности В SQL (а не в PHP), чтобы не терять
+       нужные работы из-за LIMIT. Работы Компас 9 находятся по фильтру
+       complectation = 43089.
        ============================================================ */
     $works = [];
     $canSearchWorks = !empty($keywords) || $vinCandidate;
 
-    if ($canSearchWorks) {
+    if ($canSearchWorks && !empty($keywords)) {
         $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
         $params = [];
 
-        if (!empty($keywords)) {
-            $orParts = [];
-            foreach ($keywords as $i => $kw) {
-                $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
-                $k = ":k{$i}";
-                $orParts[] = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
-                $params[$k] = '%' . $stem . '%';
-            }
-            $where[] = '(' . implode(' OR ', $orParts) . ')';
+        /* Жёсткий фильтр по шасси, если распознали модель (Компас 9 → 43089) */
+        if ($chassis !== null) {
+            $where[] = 'complectation = :chassis';
+            $params[':chassis'] = $chassis;
+        } elseif ($brand !== null) {
+            $where[] = 'brand = :brand';
+            $params[':brand'] = $brand;
         }
 
-        $sql = "SELECT DISTINCT ON (operation_code)
-                       operation_code, name, eng_name, norm_time, complectation, brand
+        $orParts   = [];
+        $scoreExpr = [];
+        foreach ($keywords as $i => $kw) {
+            $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
+            $k = ":k{$i}";
+            $params[$k] = '%' . $stem . '%';
+            $orParts[]   = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
+            $scoreExpr[] = "CASE WHEN name ILIKE $k THEN 5 ELSE 0 END";
+            $scoreExpr[] = "CASE WHEN eng_name ILIKE $k THEN 2 ELSE 0 END";
+        }
+        $where[] = '(' . implode(' OR ', $orParts) . ')';
+
+        $scoreSQL = '(' . implode(' + ', $scoreExpr) . ')';
+
+        $sql = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
+                       $scoreSQL AS _score
                   FROM work_operations
                  WHERE " . implode(' AND ', $where) . "
-                 ORDER BY operation_code
-                 LIMIT 500";
+                 ORDER BY _score DESC, LENGTH(name), operation_code
+                 LIMIT 300";
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
-        $works = $stmt->fetchAll();
+        $rows = $stmt->fetchAll();
 
-        /* ---- Ранжирование в PHP ---- */
-        if (!empty($keywords) && !empty($works)) {
-            foreach ($works as &$w) {
-                $nameLow = mb_strtolower((string)($w['name'] ?? ''));
-                $engLow  = mb_strtolower((string)($w['eng_name'] ?? ''));
-                $opLow   = mb_strtolower((string)($w['operation_code'] ?? ''));
-                $score = 0;
-
-                foreach ($keywords as $kw) {
-                    $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
-                    if ($stem !== '' && mb_strpos($nameLow, $stem) !== false) $score += 5;
-                    if ($stem !== '' && mb_strpos($engLow,  $stem) !== false) $score += 2;
-                    if (mb_strpos($opLow, mb_strtolower($kw)) !== false)       $score += 1;
-                }
-
-                /* Приоритет бренду */
-                if ($brand !== null && mb_strtoupper((string)($w['brand'] ?? '')) === $brand) {
-                    $score += 10;
-                }
-                /* Приоритет нужному шасси */
-                if ($chassis !== null && (string)$w['complectation'] === (string)$chassis) {
-                    $score += 5;
-                }
-                $w['_score'] = $score;
-            }
-            unset($w);
-
-            /* Отбрасываем работы с нулевым счётом — они нерелевантны */
-            $works = array_values(array_filter($works, function($w) {
-                return ($w['_score'] ?? 0) > 0;
-            }));
-
-            usort($works, function($a, $b) {
-                if ($a['_score'] !== $b['_score']) return $b['_score'] <=> $a['_score'];
-                return mb_strlen($a['name']) <=> mb_strlen($b['name']);
-            });
-
-            $works = array_slice($works, 0, 50);
-            foreach ($works as &$w) { unset($w['_score']); }
-            unset($w);
-        } else {
-            $works = array_slice($works, 0, 50);
+        /* Дедуп по operation_code — оставляем самое релевантное (оно сверху) */
+        $seen = [];
+        foreach ($rows as $r) {
+            if (isset($seen[$r['operation_code']])) continue;
+            $seen[$r['operation_code']] = true;
+            unset($r['_score']);
+            $works[] = $r;
+            if (count($works) >= 50) break;
         }
     }
-
     /* ============================================================
        6. Поиск по рекламационным актам (keys)
        ============================================================ */
