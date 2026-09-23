@@ -1143,7 +1143,43 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       input.value = '';
     });
   });
+  /* Сжатие фото через Canvas: уменьшает до 1920px по длинной стороне и сжимает в JPEG 85% */
+  async function compressImageForUpload(file) {
+    const MAX_DIM = 1920;
+    const QUALITY = 0.85;
 
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = dataUrl;
+    });
+
+    let w = img.width, h = img.height;
+    if (w > MAX_DIM || h > MAX_DIM) {
+      if (w >= h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
+      else        { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', QUALITY));
+    if (!blob) throw new Error('canvas.toBlob вернул null');
+    return blob;
+  }
     async function uploadFile(file) {
     const comment = document.getElementById('commentInput').value.trim();
 
