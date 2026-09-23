@@ -114,7 +114,7 @@ if ($complectation !== null
 }
 
 /* ============================================================
-   2. Категория op-code (для цвета)
+   2. Категория op-code
    ============================================================ */
 $DIAG_TRIGGERS = [
     'диагностика', 'диагностировать', 'поиск неисправност', 'поиск дефект',
@@ -251,7 +251,6 @@ foreach ($allGroups as $g) {
     }
 }
 
-/* Автовыбор первой группы, если не указана */
 if ($complectation !== null && $groupCode === '' && !empty($topGroups)) {
     $groupCode = $topGroups[0]['code_only'];
 }
@@ -300,7 +299,6 @@ if ($complectation !== null) {
     $pages = max(1, (int)ceil($total / $perPage));
 }
 
-/* Общая статистика */
 $stats = ['groups' => 0, 'works' => 0];
 $lastSync = null;
 if ($complectation !== null) {
@@ -341,143 +339,381 @@ function fmtNorm($n) {
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Справочник работ — 1С:ГОА</title>
+<link rel="stylesheet" href="app.css">
 <style>
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f0f2f5;margin:0;padding:16px;color:#1a1a1a;line-height:1.5}
-  .container{max-width:1700px;margin:0 auto}
-  .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:12px}
-  h1{font-size:22px;margin:0 0 8px} h2{font-size:16px;margin:0 0 12px;color:#1e3a8a}
-  .top-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
-  .user-info{font-size:13px;color:#666} .user-info b{color:#2563eb}
-  .logout{color:#dc2626;text-decoration:none;font-size:13px;margin-left:12px}
-  .btn{display:inline-block;padding:9px 14px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;background:#2563eb;color:#fff;text-decoration:none;text-align:center;font-family:inherit}
-  .btn:hover{opacity:0.9}
-  .btn-secondary{background:#fff;color:#2563eb;border:1.5px solid #2563eb}
-  .btn-green{background:#16a34a}
-  .btn-red{background:#dc2626}
-  .btn-small{padding:7px 12px;font-size:13px}
-  .btn-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .vin-bar{background:#eff6ff;border-left:4px solid #2563eb;padding:12px 14px;border-radius:10px;margin-top:12px}
-  .vin-bar form{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .vin-bar label{font-weight:600;color:#1e3a8a;font-size:14px}
-  .vin-bar input[type=text]{flex:1;min-width:260px;padding:10px 14px;border:1.5px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:14px;background:#fff;color:#1e3a8a}
-  .vin-bar input[type=text]:focus{outline:none;border-color:#2563eb}
-  .vin-info{font-size:13px;color:#1e3a8a;margin-top:8px;padding:6px 10px;background:#dbeafe;border-radius:6px;display:inline-block}
-  .breadcrumbs{font-size:13px;color:#666;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .breadcrumbs a{color:#2563eb;text-decoration:none}
-  .breadcrumbs .sep{color:#cbd5e1}
-  .layout{display:grid;grid-template-columns:320px 1fr 360px;gap:12px;align-items:start}
-  @media (max-width:1200px){.layout{grid-template-columns:280px 1fr;} .basket{grid-column:1/-1}}
-  @media (max-width:800px){.layout{grid-template-columns:1fr} .basket{grid-column:1}}
-  .search-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-  .search-bar input[type=text]{flex:1;min-width:200px;padding:11px 14px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px;font-family:inherit}
-  .search-bar input:focus{outline:none;border-color:#2563eb}
-  .tree{font-size:13px;max-height:75vh;overflow-y:auto}
-  .tree > details > summary{padding:8px 10px;font-weight:700;color:#1e3a8a;cursor:pointer;border-radius:8px;display:flex;align-items:center;gap:8px;list-style:none}
-  .tree > details > summary::-webkit-details-marker{display:none}
-  .tree > details > summary::before{content:'▶';font-size:10px;color:#2563eb;transition:transform 0.15s}
-  .tree > details[open] > summary::before{transform:rotate(90deg)}
-  .tree > details > summary:hover{background:#f8faff}
-  .tree > details > summary.selected{background:#eff6ff}
-  .tree > details > summary a{text-decoration:none;color:inherit;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px}
-  .tree-icon{width:26px;height:26px;flex-shrink:0;object-fit:contain}
-  .tree-icon-fallback{width:26px;height:26px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:#2563eb}
-  .tree-sub{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 24px;color:#333;border-radius:6px;margin-left:6px;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tree-sub:hover{background:#f8faff;color:#2563eb}
-  .tree-sub.selected{background:#eff6ff;color:#1e3a8a;font-weight:600}
-  .tree-sub::before{content:'·';color:#cbd5e1;margin-right:6px}
-  table.works{width:100%;border-collapse:collapse;font-size:13px}
-  table.works th{background:#f9fafb;color:#666;font-weight:600;text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase;letter-spacing:0.4px}
-  table.works td{padding:10px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
-  table.works tr:hover td{background:#fafbff}
-  .op-code{padding:2px 8px;border-radius:5px;font-size:12px;font-weight:700;white-space:nowrap;font-family:'SF Mono',Consolas,monospace;background:#fef3c7;color:#92400e}
-  .cat-a{background:#fee2e2;color:#991b1b}
-  .cat-b{background:#ffedd5;color:#9a3412}
-  .cat-t{background:#fef9c3;color:#854d0e}
-  .cat-x{background:#ecfccb;color:#3f6212}
-  .cat-e{background:#cffafe;color:#155e75}
-  .cat-p{background:#dbeafe;color:#1e40af}
-  .cat-c{background:#ede9fe;color:#5b21b6}
-  .cat-m{background:#fce7f3;color:#9d174d}
-  .work-name{color:#1a1a1a;font-weight:500}
-  .work-eng{color:#888;font-size:11px;margin-top:3px}
-  .norm-time{background:#e0f2fe;color:#075985;padding:3px 10px;border-radius:6px;font-size:13px;font-weight:700;white-space:nowrap}
-  .add-btn{background:#16a34a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
-  .add-btn:hover{background:#15803d}
-  .add-btn.in-basket{background:#9ca3af;cursor:default}
-  .empty{text-align:center;padding:60px 20px;color:#999}
-  .empty .big{font-size:48px;margin-bottom:8px}
-  .pagination{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:16px}
-  .pagination a,.pagination span{padding:7px 12px;border-radius:7px;text-decoration:none;font-size:13px;background:#fff;border:1.5px solid #e5e7eb;color:#2563eb}
-  .pagination .active{background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600}
-  .basket{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto}
-  .basket-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-  .basket-header h2{margin:0;font-size:16px;color:#1e3a8a}
-  .basket-count{background:#2563eb;color:#fff;font-size:12px;font-weight:700;padding:2px 10px;border-radius:12px}
-  .basket-total{background:#eff6ff;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#1e3a8a}
-  .basket-total b{font-size:18px}
-  .basket-list{list-style:none;padding:0;margin:0}
-  .basket-item{border-bottom:1px solid #f0f0f0;padding:10px 0;display:flex;gap:8px;font-size:12px}
-  .basket-item:last-child{border-bottom:none}
-  .basket-item-content{flex:1;min-width:0}
-  .basket-item-op{font-family:'SF Mono',Consolas,monospace;font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;padding:1px 6px;border-radius:4px;display:inline-block;margin-bottom:3px}
-  .basket-item-name{color:#1a1a1a;line-height:1.3;word-wrap:break-word}
-  .basket-item-norm{color:#075985;font-weight:700;margin-top:3px;font-size:11px}
-  .basket-item-del{color:#dc2626;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;user-select:none}
-  .basket-item-del:hover{background:#fef2f2;border-radius:4px}
-  .basket-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
-  .basket-actions .btn{flex:1;min-width:120px;font-size:12px;padding:8px 10px}
-  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
-  .modal-overlay.active{display:flex}
-  .modal{background:#fff;border-radius:14px;max-width:680px;width:100%;max-height:80vh;overflow-y:auto;padding:24px}
-  .modal h3{margin:0 0 12px;font-size:18px;color:#1e3a8a}
-  .modal p{margin:0 0 14px;font-size:14px;color:#333}
-  .modal .prereq-list{list-style:none;padding:0;margin:0 0 18px}
-  .modal .prereq-item{padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:8px;margin-bottom:8px;font-size:13px;display:flex;align-items:center;gap:10px}
-  .modal .prereq-item input[type=checkbox]{width:18px;height:18px;flex-shrink:0}
-  .modal .prereq-item label{flex:1;cursor:pointer}
-  .modal-btns{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
-  .modal .badge-auto{background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
-  .modal .badge-pair{background:#dbeafe;color:#1e40af;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:8px}
-  .prereq-sub{margin-left:24px;font-size:10px;color:#888;padding:4px 0 0;}
-  .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
-  .copy-msg.show{opacity:1}
-  .step-hint{font-size:13px;color:#666;margin-bottom:12px;padding:10px 14px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb;line-height:1.55}
-  .step-hint b{color:#1e3a8a}
+  /* === Специфичное для страницы === */
 
-  /* === AI === */
-  .ai-btn{background:#7c3aed;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
-  .ai-btn:hover:not(:disabled){opacity:.9}
-  .ai-btn:disabled{background:#cbd5e1;color:#94a3b8;cursor:not-allowed}
-  .ai-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:3000;padding:20px}
-  .ai-modal-overlay.active{display:flex}
-  .ai-modal{background:#fff;border-radius:14px;max-width:800px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}
-  .ai-modal h3{margin:0 0 8px;font-size:18px;color:#1e3a8a;display:flex;align-items:center;gap:8px}
-  .ai-modal .ai-context{font-size:12px;color:#666;background:#f9fafb;padding:6px 10px;border-radius:6px;margin-bottom:12px;display:inline-block}
-  .ai-modal textarea{width:100%;padding:12px;border:1.5px solid #93c5fd;border-radius:10px;font-family:inherit;font-size:15px;min-height:70px;resize:vertical;background:#eff6ff}
-  .ai-modal textarea:focus{outline:none;border-color:#2563eb;background:#fff}
-  .ai-modal .ai-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
-  .ai-modal .ai-answer{background:#f0fdf4;border-left:4px solid #16a34a;padding:14px 16px;border-radius:10px;margin-top:16px;white-space:pre-wrap;font-size:14px;line-height:1.6;display:none}
-  .ai-modal .ai-error{background:#fef2f2;border-left:4px solid #dc2626;padding:14px 16px;border-radius:10px;margin-top:16px;font-size:14px;color:#991b1b;display:none}
-  .ai-modal .ai-loading{color:#2563eb;font-size:14px;display:none}
+  body { padding: 24px 18px; }
+  .container { max-width: 1700px; }
+
+  /* VIN-бар */
+  .vin-bar {
+    background: linear-gradient(135deg, #eff6ff, #dbeafe);
+    border-left: 4px solid var(--blue);
+    padding: 16px 20px;
+    border-radius: 14px;
+    margin-top: 14px;
+  }
+  .vin-bar form {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  }
+  .vin-bar label {
+    font-weight: 600; color: #1e3a8a; font-size: 14px;
+  }
+  .vin-bar input[type=text] {
+    flex: 1; min-width: 260px;
+    padding: 11px 16px;
+    border: 1.5px solid #93c5fd;
+    border-radius: 12px;
+    font-family: inherit; font-size: 14px;
+    background: #fff; color: #1e3a8a;
+    transition: all 0.15s;
+  }
+  .vin-bar input[type=text]:focus {
+    outline: none; border-color: var(--blue);
+    box-shadow: 0 0 0 4px rgba(37,99,235,0.1);
+  }
+  .vin-info {
+    font-size: 13px; color: #1e3a8a;
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: #dbeafe;
+    border-radius: 8px;
+    display: inline-block;
+  }
+
+  /* Подсказка */
+  .step-hint {
+    font-size: 13.5px;
+    color: #475569;
+    padding: 12px 16px;
+    background: #f8fafc;
+    border-radius: 10px;
+    border-left: 3px solid var(--blue);
+    line-height: 1.6;
+    margin-bottom: 14px;
+  }
+  .step-hint b { color: #1e3a8a; }
+
+  /* Раскладка */
+  .layout {
+    display: grid;
+    grid-template-columns: 320px 1fr 360px;
+    gap: 14px; align-items: start;
+  }
+  @media (max-width: 1200px) {
+    .layout { grid-template-columns: 280px 1fr; }
+    .basket { grid-column: 1/-1; }
+  }
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+    .basket { grid-column: 1; }
+  }
+
+  /* Поиск */
+  .search-bar {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .search-bar input[type=text] {
+    flex: 1; min-width: 200px;
+    padding: 12px 16px;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+    font-size: 14px; font-family: inherit;
+    transition: all 0.15s;
+  }
+  .search-bar input:focus {
+    outline: none; border-color: var(--blue);
+    box-shadow: 0 0 0 4px rgba(37,99,235,0.08);
+  }
+
+  /* Дерево */
+  .tree { font-size: 13px; max-height: 75vh; overflow-y: auto; }
+  .tree > details > summary {
+    padding: 9px 11px; font-weight: 700; color: #1e3a8a;
+    cursor: pointer; border-radius: 9px;
+    display: flex; align-items: center; gap: 8px;
+    list-style: none; transition: background 0.15s;
+  }
+  .tree > details > summary::-webkit-details-marker { display: none; }
+  .tree > details > summary::before {
+    content: '▶'; font-size: 10px; color: var(--blue);
+    transition: transform 0.18s;
+  }
+  .tree > details[open] > summary::before { transform: rotate(90deg); }
+  .tree > details > summary:hover { background: #f8faff; }
+  .tree > details > summary.selected { background: #eff6ff; }
+  .tree > details > summary a {
+    text-decoration: none; color: inherit; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tree-icon { width: 26px; height: 26px; flex-shrink: 0; object-fit: contain; }
+  .tree-icon-fallback {
+    width: 26px; height: 26px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: var(--blue);
+  }
+  .tree-sub {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 11px 6px 26px;
+    color: #334155; border-radius: 8px;
+    margin-left: 6px; text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .tree-sub:hover { background: #f8faff; color: var(--blue); }
+  .tree-sub.selected {
+    background: #eff6ff; color: #1e3a8a; font-weight: 600;
+  }
+  .tree-sub::before { content: '·'; color: #cbd5e1; margin-right: 6px; }
+
+  /* Таблица работ */
+  table.works { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.works th {
+    background: #f8fafc; color: #64748b; font-weight: 600;
+    text-align: left; padding: 11px 12px;
+    border-bottom: 2px solid rgba(15,23,42,0.08);
+    font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  table.works td {
+    padding: 11px 12px;
+    border-bottom: 1px solid rgba(15,23,42,0.05);
+    vertical-align: top;
+  }
+  table.works tr:hover td { background: #f8fafc; }
+  table.works tr:last-child td { border-bottom: none; }
+
+  .op-code {
+    padding: 3px 9px; border-radius: 6px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+    font-family: 'SF Mono', Consolas, monospace;
+    background: #fef3c7; color: #92400e;
+  }
+  .cat-a { background: #fee2e2; color: #991b1b; }
+  .cat-b { background: #ffedd5; color: #9a3412; }
+  .cat-t { background: #fef9c3; color: #854d0e; }
+  .cat-x { background: #ecfccb; color: #3f6212; }
+  .cat-e { background: #cffafe; color: #155e75; }
+  .cat-p { background: #dbeafe; color: #1e40af; }
+  .cat-c { background: #ede9fe; color: #5b21b6; }
+  .cat-m { background: #fce7f3; color: #9d174d; }
+
+  .work-name { color: var(--ink); font-weight: 500; }
+  .work-eng { color: #94a3b8; font-size: 11px; margin-top: 3px; }
+  .norm-time {
+    background: #e0f2fe; color: #075985;
+    padding: 3px 10px; border-radius: 6px;
+    font-size: 13px; font-weight: 700; white-space: nowrap;
+  }
+
+  .add-btn {
+    background: linear-gradient(135deg, #059669, #10b981);
+    color: #fff; border: none;
+    padding: 6px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 700;
+    cursor: pointer; font-family: inherit;
+    white-space: nowrap;
+    transition: all 0.18s;
+    box-shadow: 0 4px 10px -4px rgba(5,150,105,0.5);
+  }
+  .add-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 16px -6px rgba(5,150,105,0.7); }
+  .add-btn.in-basket {
+    background: #cbd5e1; box-shadow: none; cursor: default;
+    transform: none;
+  }
+
+  .empty {
+    text-align: center; padding: 60px 20px; color: #94a3b8;
+  }
+  .empty .big { font-size: 48px; margin-bottom: 10px; }
+
+  .pagination {
+    display: flex; gap: 6px; justify-content: center;
+    flex-wrap: wrap; margin-top: 18px;
+  }
+  .pagination a, .pagination span {
+    padding: 8px 14px; border-radius: 9px;
+    text-decoration: none; font-size: 13px;
+    background: #fff;
+    border: 1.5px solid rgba(15,23,42,0.1);
+    color: var(--blue);
+    transition: all 0.15s;
+  }
+  .pagination a:hover { border-color: var(--blue); background: #eff6ff; }
+  .pagination .active {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    color: #fff; border-color: transparent;
+    font-weight: 700;
+    box-shadow: 0 6px 14px -6px rgba(37,99,235,0.5);
+  }
+
+  /* Корзина */
+  .basket { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .basket-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px;
+  }
+  .basket-header h2 { margin: 0; font-size: 16px; color: #1e3a8a; }
+  .basket-count {
+    background: linear-gradient(135deg, #2563eb, #4f46e5);
+    color: #fff; font-size: 12px; font-weight: 700;
+    padding: 3px 12px; border-radius: 12px;
+    box-shadow: 0 4px 10px -4px rgba(37,99,235,0.5);
+  }
+  .basket-total {
+    background: #eff6ff; border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 12px;
+    font-size: 13px; color: #1e3a8a;
+  }
+  .basket-total b { font-size: 18px; }
+  .basket-list { list-style: none; padding: 0; margin: 0; }
+  .basket-item {
+    border-bottom: 1px solid rgba(15,23,42,0.06);
+    padding: 11px 0; display: flex; gap: 8px; font-size: 12.5px;
+  }
+  .basket-item:last-child { border-bottom: none; }
+  .basket-item-content { flex: 1; min-width: 0; }
+  .basket-item-op {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; font-weight: 700;
+    color: #92400e; background: #fef3c7;
+    padding: 2px 7px; border-radius: 5px;
+    display: inline-block; margin-bottom: 4px;
+  }
+  .basket-item-name { color: var(--ink); line-height: 1.35; word-wrap: break-word; }
+  .basket-item-norm { color: #075985; font-weight: 700; margin-top: 4px; font-size: 11px; }
+  .basket-item-del {
+    color: #dc2626; font-size: 20px;
+    cursor: pointer; padding: 0 6px;
+    line-height: 1; user-select: none;
+    border-radius: 6px; transition: background 0.15s;
+  }
+  .basket-item-del:hover { background: #fef2f2; }
+  .basket-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .basket-actions .btn { flex: 1; min-width: 100px; font-size: 12.5px; padding: 9px 10px; }
+
+  /* === Модалка предварительных работ === */
+  .prereq-list { list-style: none; padding: 0; margin: 0 0 18px; }
+  .prereq-item {
+    padding: 11px 14px;
+    border: 1.5px solid rgba(15,23,42,0.08);
+    border-radius: 10px; margin-bottom: 8px;
+    font-size: 13px;
+    display: flex; align-items: center; gap: 10px;
+    transition: all 0.15s;
+  }
+  .prereq-item:hover { border-color: rgba(37,99,235,0.3); }
+  .prereq-item input[type=checkbox] {
+    width: 18px; height: 18px; flex-shrink: 0;
+    accent-color: var(--blue);
+  }
+  .prereq-item label { flex: 1; cursor: pointer; }
+  .prereq-sub {
+    margin-left: 24px; font-size: 10.5px;
+    color: #94a3b8; padding: 4px 0 0;
+  }
+  .badge-auto {
+    background: #fef3c7; color: #92400e;
+    font-size: 10px; padding: 2px 7px;
+    border-radius: 5px; font-weight: 600;
+    margin-left: 8px;
+  }
+  .badge-pair {
+    background: #dbeafe; color: #1e40af;
+    font-size: 10px; padding: 2px 7px;
+    border-radius: 5px; font-weight: 600;
+    margin-left: 8px;
+  }
+
+  /* === AI-модалка === */
+  .ai-modal { max-width: 800px; }
+  .ai-modal h3 {
+    margin: 0 0 10px; font-size: 18px; color: #1e3a8a;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .ai-context {
+    font-size: 12px; color: #64748b;
+    background: #f8fafc; padding: 8px 12px;
+    border-radius: 8px; margin-bottom: 14px;
+    display: inline-block;
+  }
+  .ai-modal textarea {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1.5px solid #93c5fd;
+    border-radius: 12px;
+    font-family: inherit; font-size: 15px;
+    min-height: 80px; resize: vertical;
+    background: #eff6ff;
+    transition: all 0.15s;
+  }
+  .ai-modal textarea:focus {
+    outline: none; border-color: var(--blue);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(37,99,235,0.1);
+  }
+  .ai-row {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    margin-top: 12px; align-items: center;
+  }
+  .ai-answer {
+    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+    border-left: 4px solid #10b981;
+    padding: 16px 18px; border-radius: 12px;
+    margin-top: 18px;
+    white-space: pre-wrap; font-size: 14px; line-height: 1.65;
+    display: none;
+  }
+  .ai-error {
+    background: linear-gradient(135deg, #fef2f2, #fee2e2);
+    border-left: 4px solid #ef4444;
+    padding: 16px 18px; border-radius: 12px;
+    margin-top: 18px; font-size: 14px; color: #991b1b;
+    display: none;
+  }
+  .ai-loading { color: var(--blue); font-size: 14px; display: none; }
+
+  /* Сообщение о копировании */
+  .copy-msg {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #059669, #10b981);
+    color: #fff; padding: 14px 26px;
+    border-radius: 12px; font-size: 14px; font-weight: 600;
+    z-index: 2000; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none;
+    box-shadow: 0 12px 30px -8px rgba(5,150,105,0.6);
+  }
+  .copy-msg.show { opacity: 1; }
+
+  @media (max-width: 640px) {
+    body { padding: 14px 12px; }
+    .vin-bar { padding: 12px 14px; }
+    .layout { gap: 10px; }
+    table.works { font-size: 12px; }
+    .op-code { font-size: 11px; padding: 2px 7px; }
+  }
 </style>
 </head>
 <body>
 <div class="container">
 
-  <div class="card">
-    <div class="top-bar">
-      <h1>🔧 Справочник работ — 1С:ГОА</h1>
-      <div>
-        <span class="user-info">👤 <b><?= e($user['name'] ?: $user['email']) ?></b></span>
-        <a href="logout.php" class="logout">Выйти</a>
-      </div>
-    </div>
-    <div class="btn-row" style="margin-bottom:12px;">
+  <?php
+    $pageTitle    = 'Справочник работ';
+    $pageSubtitle = 'КАМАЗ · 1С:ГОА';
+    $backLink     = 'works_brand.php';
+    $backLabel    = 'К выбору марки';
+    include __DIR__ . '/header.php';
+  ?>
+
+  <div class="card mb-2" style="padding: 18px 22px;">
+    <div class="row-flex mb-2">
       <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
       <a href="search_vin.php" class="btn btn-secondary btn-small">🔍 Поиск по VIN — 1С:ГОА</a>
       <?php if ($user['is_admin']): ?>
-        <a href="sync.php" class="btn btn-small">📥 Загрузка справочника</a>
+        <a href="sync.php" class="btn btn-secondary btn-small">📥 Загрузка справочника</a>
       <?php endif; ?>
     </div>
 
@@ -496,16 +732,16 @@ function fmtNorm($n) {
         <label for="vinInput">🔍 Поиск по VIN:</label>
         <input type="text" name="vin" id="vinInput" value="<?= e($vin) ?>"
                placeholder="Введите VIN (17 символов) или последние 7 цифр" autocomplete="off">
-        <button type="submit" class="btn">Найти работы</button>
+        <button type="submit" class="btn btn-primary">Найти работы</button>
         <?php if ($vin !== '' || $complectation !== null): ?>
           <a href="works.php" class="btn btn-secondary btn-small">Сбросить</a>
         <?php endif; ?>
-        <button type="button" class="ai-btn"
+        <button type="button" class="btn btn-ai"
                 <?= $complectation === null ? 'disabled title="Сначала введите VIN и нажмите «Найти работы»"' : '' ?>
                 onclick="openAiModal()">🤖 Спросить ИИ</button>
       </form>
       <?php if ($vinError): ?>
-        <div class="vin-info" style="background:#fef2f2;color:#dc2626;">❌ <?= e($vinError) ?></div>
+        <div class="vin-info" style="background:linear-gradient(135deg,#fef2f2,#fee2e2);color:#991b1b;">❌ <?= e($vinError) ?></div>
       <?php endif; ?>
       <?php if ($complectation !== null): ?>
         <div class="vin-info">
@@ -513,7 +749,7 @@ function fmtNorm($n) {
           <?php if ($lastSync): ?> · обновлено: <b><?= e(fmtTs($lastSync)) ?></b><?php endif; ?>
         </div>
         <?php if ($autoSyncInfo): ?>
-          <div class="vin-info" style="background:#dcfce7;color:#166534;margin-left:8px;">📥 <?= e($autoSyncInfo) ?></div>
+          <div class="vin-info" style="background:linear-gradient(135deg,#dcfce7,#d1fae5);color:#065f46;margin-left:8px;">📥 <?= e($autoSyncInfo) ?></div>
         <?php endif; ?>
       <?php endif; ?>
     </div>
@@ -522,16 +758,14 @@ function fmtNorm($n) {
   <?php if ($complectation === null): ?>
     <div class="card">
       <h2>🔍 Как пользоваться</h2>
-      <div class="step-hint" style="border-left-color:#16a34a;">
+      <div class="step-hint" style="border-left-color:#10b981;">
         <b>1.</b> Введите VIN шасси в поле выше.<br>
         <b>2.</b> Нажмите <b>«Найти работы»</b>. Первый раз по новой комплектации может занять 30–90 секунд — система автоматически подтянет работы из 1С:ГОА.<br>
         <b>3.</b> Выберите группу слева — работы появятся справа.<br>
         <b>4.</b> Нажмите <b>🤖 Спросить ИИ</b>, чтобы задать вопрос по справочнику: «найди работу по замене генератора», «какие работы по тормозам» и т.п.
       </div>
       <?php if (!$vin): ?>
-        <p style="color:#888;font-size:14px;margin:0;">
-          Пример: <code>XTC549010M1234567</code> или <code>1234567</code>
-        </p>
+        <p class="text-soft">Пример: <code style="background:#f1f5f9;padding:2px 8px;border-radius:5px;">XTC549010M1234567</code> или <code style="background:#f1f5f9;padding:2px 8px;border-radius:5px;">1234567</code></p>
       <?php endif; ?>
     </div>
 
@@ -571,21 +805,15 @@ function fmtNorm($n) {
 
       <!-- ЦЕНТР -->
       <div class="card">
-        <div class="breadcrumbs">
-          <?php if ($currentGroup): ?>
-            <span>📁 <?= e($currentGroup['name']) ?></span>
-          <?php endif; ?>
-        </div>
-
         <h2>📋 Работы<?= $currentGroup ? ' — ' . e($currentGroup['name']) : '' ?></h2>
 
-        <form method="get" style="margin-bottom:12px;">
+        <form method="get" style="margin-bottom:14px;">
           <input type="hidden" name="complectation" value="<?= e($complectation) ?>">
           <input type="hidden" name="group" value="<?= e($groupCode) ?>">
           <div class="search-bar">
             <input type="text" name="q" id="worksQ" value="<?= e($q) ?>" placeholder="Поиск по названию или коду…">
-            <button type="submit" class="btn">🔍 Найти</button>
-            <button type="button" class="ai-btn" onclick="openAiModal(document.getElementById('worksQ').value)">🤖 Спросить ИИ</button>
+            <button type="submit" class="btn btn-primary">🔍 Найти</button>
+            <button type="button" class="btn btn-ai" onclick="openAiModal(document.getElementById('worksQ').value)">🤖 Спросить ИИ</button>
             <?php if ($q !== ''): ?>
               <a href="?complectation=<?= urlencode($complectation) ?>&group=<?= urlencode($groupCode) ?>" class="btn btn-secondary">Сбросить</a>
             <?php endif; ?>
@@ -655,7 +883,7 @@ function fmtNorm($n) {
         </div>
         <div class="basket-total">Суммарная норма: <b id="basketTotal">0,00</b> ч</div>
         <ul class="basket-list" id="basketList">
-          <li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>
+          <li style="text-align:center;color:#94a3b8;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>
         </ul>
         <div class="basket-actions" id="basketActions" style="display:none;">
           <button class="btn btn-green btn-small" onclick="basketCopy()">📋 Копировать</button>
@@ -670,23 +898,23 @@ function fmtNorm($n) {
 
 <div class="modal-overlay" id="prereqModal">
   <div class="modal">
-    <h3>⚠️ Для этой работы нужен предварительный доступ</h3>
-    <p id="prereqText">Отметьте, какие работы добавить в заказ-наряд:</p>
+    <h3 style="margin:0 0 12px;font-size:18px;color:#1e3a8a;">⚠️ Для этой работы нужен предварительный доступ</h3>
+    <p id="prereqText" style="margin:0 0 14px;font-size:14px;color:#334155;">Отметьте, какие работы добавить в заказ-наряд:</p>
     <ul class="prereq-list" id="prereqList"></ul>
-    <div class="modal-btns">
+    <div class="row-flex" style="justify-content:flex-end;">
       <button class="btn btn-secondary" onclick="closePrereq()">Отмена</button>
       <button class="btn btn-green" onclick="addPrereqSelected()">Добавить выбранные</button>
     </div>
   </div>
 </div>
 
-<div class="ai-modal-overlay" id="aiModal">
-  <div class="ai-modal">
+<div class="modal-overlay" id="aiModal">
+  <div class="modal ai-modal">
     <h3>🤖 Помощник ИИ <button type="button" class="btn btn-secondary btn-small" onclick="closeAiModal()" style="margin-left:auto;">✕</button></h3>
     <div class="ai-context" id="aiContext">Без контекста</div>
     <textarea id="aiQuestion" placeholder="Например: найди работу по замене генератора"></textarea>
     <div class="ai-row">
-      <button type="button" class="ai-btn" id="aiAskBtn" onclick="askAi()">🤖 Спросить ИИ</button>
+      <button type="button" class="btn btn-ai" id="aiAskBtn" onclick="askAi()">🤖 Спросить ИИ</button>
       <span class="ai-loading" id="aiLoading">⏳ Думаю… 5–20 сек.</span>
     </div>
     <div class="ai-answer" id="aiAnswer"></div>
@@ -722,7 +950,7 @@ function basketRender() {
   total.textContent = sum.toFixed(2).replace('.', ',');
 
   if (basket.length === 0) {
-    list.innerHTML = '<li style="text-align:center;color:#999;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>';
+    list.innerHTML = '<li style="text-align:center;color:#94a3b8;padding:24px 0;font-size:13px;">Пока ничего не выбрано.<br>Нажми ➕ у работы.</li>';
     actions.style.display = 'none';
     document.querySelectorAll('.add-btn').forEach(b => b.classList.remove('in-basket'));
     return;
