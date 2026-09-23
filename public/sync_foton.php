@@ -121,10 +121,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
                 $groupCode = 'FOTON_' . $group;
                 if (!isset($groupsSeen[$groupCode])) {
                     $groupsSeen[$groupCode] = true;
-                    $insertGroup->execute([
-                        ':code'   => $groupCode,
+                                        $insertGroup->execute([
+                        ':code'   => fixLength($groupCode),
                         ':parent' => null,
-                        ':name'   => $group,
+                        ':name'   => fixLength($group),
                         ':ts'     => $now,
                     ]);
                     $total++;
