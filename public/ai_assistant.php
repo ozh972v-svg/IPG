@@ -6,9 +6,14 @@ $user = current_user();
 if (!$user) { header('Location: login.php'); exit; }
 $pdo = get_db();
 
-/* ============================================================
-   AJAX: обработка вопроса
-   ============================================================ */
+/* Маппинг моделей КОМПАС → номер шасси */
+$COMPASS_MODELS = [
+    '5'  => '43085',
+    '6'  => '43086',
+    '9'  => '43089',
+    '12' => '43082',
+];
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -17,14 +22,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         echo json_encode(['ok' => false, 'error' => 'Слишком короткий вопрос']);
         exit;
     }
+    if (mb_strlen($question) > 600) {
+        $question = mb_substr($question, 0, 600);
+    }
 
-    /* ---- 1. Ключевые слова ---- */
+    /* ---- 1. Распознаём модель (Компас N) ---- */
+    $chassis  = null;
+    $modelTxt = null;
+    if (preg_match('/компас\s*(\d+)/ui', $question, $m)) {
+        if (isset($COMPASS_MODELS[$m[1]])) {
+            $chassis  = $COMPASS_MODELS[$m[1]];
+            $modelTxt = 'Компас ' . $m[1];
+        }
+    }
+
+    /* ---- 2. Бренд ---- */
+    $brand = null;
+    if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
+    if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
+
+    /* ---- 3. Ключевые слова (без служебных и без брендов) ---- */
     $stopWords = [
-        'какие','какая','какой','каких','работы','работа','работ','по','на','для','и','в','с','о','к','от','до',
-        'а','но','же','ли','бы','не','или','либо','то','это','тот','эта','эти','все','всё','весь',
-        'мне','нам','вам','дай','покажи','найди','есть','нет','этот','эту','того','чем','что','как','где',
-        'когда','нужно','надо','если','может','можно','авто','автомобиля','автомобиль','тс','список',
-        'сколько','который','которая','которые','почему','зачем','подскажи','скажи','объясни',
+        'какие','какая','какой','каких','работы','работа','работ','работу','работой','работе','работам','работах',
+        'найди','найти','поищи','поиск','покажи','показать','дай','дайте','подбери','подскажи','скажи','объясни',
+        'по','на','для','и','в','с','о','к','от','до','а','но','же','ли','бы','не','или','либо','то','это',
+        'тот','эта','эти','тот','того','все','всё','весь','мне','нам','вам','есть','нет','этот','эту',
+        'чем','что','как','где','когда','нужно','надо','нужен','нужна','если','может','можно',
+        'авто','автомобиля','автомобиль','тс','список','сколько','который','которая','которые','почему',
+        'зачем','требуется','пожалуйста','меня','этом','этой',
+        'камаз','камаза','компас','компаса','компасе',
     ];
 
     $textLower = mb_strtolower($question);
@@ -34,34 +60,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     $keywords = [];
     foreach ($words as $w) {
         $w = trim($w);
-        if (mb_strlen($w) < 3) continue;
+        if (mb_strlen($w) < 4) continue;
         if (in_array($w, $stopWords, true)) continue;
         $keywords[] = $w;
     }
     $keywords = array_values(array_unique($keywords));
 
-    /* ---- 2. Бренд ---- */
-    $brand = null;
-    if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
-    if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
-
-    /* ---- 3. Явные идентификаторы в вопросе ---- */
-    // VIN — 17 символов (буквы+цифры, без I,O,Q)
+    /* ---- 4. Явные идентификаторы ---- */
     $vinCandidate = null;
     if (preg_match('/\b([A-HJ-NPR-Z0-9]{17})\b/i', $question, $m)) {
         $vinCandidate = strtoupper($m[1]);
     }
-    // Номер (4+ цифр подряд) — может быть РА или заказ-наряд
     $numberCandidate = null;
-    if (preg_match('/\b(\d{4,8})\b/', $question, $m)) {
+    if (!$vinCandidate && preg_match('/\b(\d{4,8})\b/', $question, $m)) {
         $numberCandidate = $m[1];
     }
 
     /* ============================================================
-       4. Поиск по справочнику работ
+       5. Поиск по справочнику работ
        ============================================================ */
     $works = [];
-    if (!empty($keywords) || $vinCandidate) {
+    $canSearchWorks = !empty($keywords) || $vinCandidate || $chassis;
+
+    if ($canSearchWorks) {
         $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
         $params = [];
 
@@ -69,22 +90,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             $where[] = 'brand = :brand';
             $params[':brand'] = $brand;
         }
+        /* Фильтр по шасси, если распознали Компас N */
+        if ($chassis !== null) {
+            $where[] = 'complectation = :chassis';
+            $params[':chassis'] = $chassis;
+        }
 
-        if ($vinCandidate) {
-            // Если нашли VIN в вопросе — фильтруем работы по комплектации,
-            // соответствующей этому VIN (через CarData это отдельный шаг, но
-            // на уровне SQL мы хотя бы поищем по operation_code)
-            $where[] = "(operation_code ILIKE :vin OR name ILIKE :vin)";
-            $params[':vin'] = '%' . $vinCandidate . '%';
-        } elseif (!empty($keywords)) {
+        // OR по стемам ключевых слов
+        if (!empty($keywords)) {
             $orParts = [];
             foreach ($keywords as $i => $kw) {
                 $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
-                $k1 = ":k{$i}_n"; $k2 = ":k{$i}_e"; $k3 = ":k{$i}_o";
-                $orParts[] = "(name ILIKE $k1 OR eng_name ILIKE $k2 OR operation_code ILIKE $k3)";
-                $params[$k1] = '%' . $stem . '%';
-                $params[$k2] = '%' . $stem . '%';
-                $params[$k3] = '%' . $kw . '%';
+                $k = ":k{$i}";
+                $orParts[] = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
+                $params[$k] = '%' . $stem . '%';
             }
             $where[] = '(' . implode(' OR ', $orParts) . ')';
         }
@@ -93,22 +112,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
                        operation_code, name, eng_name, norm_time, complectation, brand
                   FROM work_operations
                  WHERE " . implode(' AND ', $where) . "
-                 ORDER BY operation_code, LENGTH(name)
-                 LIMIT 30";
+                 ORDER BY operation_code
+                 LIMIT 200";
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $works = $stmt->fetchAll();
+
+        /* ---- Ранжирование в PHP ---- */
+        // Каждое совпадение корня ключевого слова в name — +5 очков.
+        // Совпадение корня в eng_name — +2 очка.
+        // Совпадение в operation_code — +1 очко.
+        if (!empty($keywords) && !empty($works)) {
+            foreach ($works as &$w) {
+                $nameLow = mb_strtolower((string)($w['name'] ?? ''));
+                $engLow  = mb_strtolower((string)($w['eng_name'] ?? ''));
+                $opLow   = mb_strtolower((string)($w['operation_code'] ?? ''));
+                $score = 0;
+                foreach ($keywords as $kw) {
+                    $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
+                    if ($stem !== '' && mb_strpos($nameLow, $stem) !== false) $score += 5;
+                    if ($stem !== '' && mb_strpos($engLow,  $stem) !== false) $score += 2;
+                    if (mb_strpos($opLow, mb_strtolower($kw)) !== false)       $score += 1;
+                }
+                $w['_score'] = $score;
+            }
+            unset($w);
+
+            usort($works, function($a, $b) {
+                if ($a['_score'] !== $b['_score']) return $b['_score'] <=> $a['_score'];
+                return mb_strlen($a['name']) <=> mb_strlen($b['name']);
+            });
+
+            $works = array_slice($works, 0, 30);
+            foreach ($works as &$w) { unset($w['_score']); }
+            unset($w);
+        }
     }
 
     /* ============================================================
-       5. Поиск по рекламационным актам (keys)
+       6. Поиск по рекламационным актам (keys)
        ============================================================ */
     $raList = [];
     try {
         $raWhere  = [];
         $raParams = [];
 
-        // Явные совпадения — по VIN или номеру
         if ($vinCandidate) {
             $raWhere[] = "key_value ILIKE :vin";
             $raParams[':vin'] = '%' . $vinCandidate . '%';
@@ -117,8 +165,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             $raWhere[] = "(key_value ILIKE :num OR COALESCE(order_number,'') ILIKE :num)";
             $raParams[':num'] = '%' . $numberCandidate . '%';
         }
-
-        // Поиск по ключевым словам
         if (!empty($keywords)) {
             $raOr = [];
             foreach ($keywords as $i => $kw) {
@@ -145,21 +191,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             $raList = $stmt->fetchAll();
         }
 
-        // Для найденных РА — посчитаем количество фото
         foreach ($raList as &$ra) {
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM photos WHERE key_type = :kt AND key_value = :kv");
             $stmt->execute([':kt' => $ra['key_type'], ':kv' => $ra['key_value']]);
             $ra['photo_count'] = (int)$stmt->fetchColumn();
         }
         unset($ra);
-    } catch (Throwable $e) {
-        // не падаем, если таблица keys недоступна
-    }
+    } catch (Throwable $e) {}
 
     /* ============================================================
-       6. Контекст для LLM
+       7. Контекст для LLM
        ============================================================ */
     $ctxParts = [];
+
+    $filterInfo = '';
+    if ($brand !== null)   $filterInfo .= 'Бренд: ' . $brand . '. ';
+    if ($modelTxt)         $filterInfo .= 'Модель: ' . $modelTxt . ' (шасси ' . $chassis . '). ';
+    if ($vinCandidate)     $filterInfo .= 'VIN: ' . $vinCandidate . '. ';
+    if ($filterInfo) $ctxParts[] = "=== ФИЛЬТРЫ, ПРИМЕНЁННЫЕ К ПОИСКУ ===\n" . trim($filterInfo);
 
     if (!empty($works)) {
         $lines = [];
@@ -170,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             $br   = $w['brand'] ? ' | ' . $w['brand'] : '';
             $lines[] = $op . $w['name'] . $n . $comp . $br;
         }
-        $ctxParts[] = "=== СПРАВОЧНИК РАБОТ ===\n" . implode("\n", $lines);
+        $ctxParts[] = "=== СПРАВОЧНИК РАБОТ (отсортирован по релевантности) ===\n" . implode("\n", $lines);
     } else {
         $ctxParts[] = "=== СПРАВОЧНИК РАБОТ ===\nНичего не найдено по запросу.";
     }
@@ -192,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     $context = implode("\n\n", $ctxParts);
 
     /* ============================================================
-       7. Запрос к LLM
+       8. Запрос к LLM
        ============================================================ */
     $apiKey  = getenv('AI_API_KEY');
     $baseUrl = rtrim((string)getenv('AI_BASE_URL'), '/');
@@ -204,16 +253,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     }
 
     $system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.\n"
-            . "Тебе дают контекст: справочник работ и записи рекламационных актов (РА/VIN), найденные по ключевым словам.\n"
+            . "Тебе дают контекст: фильтры поиска, справочник работ и записи рекламационных актов (РА/VIN).\n"
+            . "Работы в справочнике уже отсортированы по релевантности к вопросу — самые похожие сверху.\n"
             . "\n"
             . "ПРАВИЛА ОТВЕТА:\n"
-            . "1. Если ответ есть в предоставленном контексте — отвечай СТРОГО на его основе. "
-            . "Не выдумывай коды операций, номера РА или VIN, которых нет в контексте.\n"
-            . "2. Если в контексте ничего подходящего нет, но ты знаешь ответ по своим знаниям — можешь ответить, "
-            . "НО начни ответ со строки: «⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
-            . "3. Если не знаешь ответа и по своим знаниям — скажи: «Не могу ответить на этот вопрос».\n"
-            . "4. Отвечай кратко, по-русски, структурированно. Ссылайся на конкретные коды и номера из контекста.\n"
-            . "5. Если в вопросе спрашивают про фото — используй данные из строк «фото: N» у записей РА.";
+            . "1. Сначала ищи ответ в предоставленном контексте. Если есть подходящие работы — перечисли их с кодами и названиями.\n"
+            . "2. Если в контексте нет точного совпадения, но есть близкое по смыслу — предложи его и объясни, почему.\n"
+            . "3. Если в контексте совсем ничего нет, но ты знаешь ответ — ответь и начни со строки «⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
+            . "4. Не выдумывай коды операций, номера РА или VIN, которых нет в контексте.\n"
+            . "5. Отвечай кратко, по-русски. Если упоминаешь модель/шасси — используй данные из блока ФИЛЬТРЫ.\n"
+            . "6. Если в вопросе спрашивают про фото — используй данные «фото: N» у записей РА.";
 
     $userMsg = "Вопрос пользователя:\n{$question}\n\n"
              . "Контекст из базы (только это — источник правды):\n{$context}";
@@ -224,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             ['role' => 'system', 'content' => $system],
             ['role' => 'user',   'content' => $userMsg],
         ],
-        'temperature' => 0.3,
+        'temperature' => 0.2,
         'max_tokens'  => 1500,
     ];
 
@@ -259,10 +308,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     $answer = $data['choices'][0]['message']['content'] ?? 'Пустой ответ от ИИ';
 
     echo json_encode([
-        'ok'     => true,
-        'answer' => $answer,
-        'works'  => $works,
-        'ra'     => $raList,
+        'ok'      => true,
+        'answer'  => $answer,
+        'works'   => $works,
+        'ra'      => $raList,
+        'filters' => [
+            'brand'   => $brand,
+            'model'   => $modelTxt,
+            'chassis' => $chassis,
+            'vin'     => $vinCandidate,
+        ],
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -297,6 +352,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
   .hint{font-size:13px;color:#666;background:#f9fafb;border-left:3px solid #2563eb;padding:8px 12px;border-radius:8px;margin-bottom:12px}
   .example{display:inline-block;background:#eff6ff;color:#1e3a8a;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin:3px 4px 3px 0;border:1px solid #bfdbfe}
   .example:hover{background:#dbeafe}
+  .filters{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .filter-badge{background:#e0e7ff;color:#3730a3;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}
   table.works{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
   table.works th{background:#f9fafb;color:#666;font-weight:600;text-align:left;padding:9px 12px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase}
   table.works td{padding:9px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
@@ -324,22 +381,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     </div>
     <div class="hint">
       Спросите что угодно: по справочнику работ, по рекламационным актам, по VIN и фото.
-      Если в базе ничего нет — помощник ответит своими знаниями и пометит это.
+      Можно указывать модель: «найди замену генератора на Компас 9».
     </div>
     <div>
       Примеры вопросов:
+      <span class="example" onclick="fillQ(this)">найди работу по замене генератора на Компас 9</span>
       <span class="example" onclick="fillQ(this)">Что значит код C10-0236?</span>
       <span class="example" onclick="fillQ(this)">Какие РА есть по VIN XTC549015S2628195?</span>
-      <span class="example" onclick="fillQ(this)">Сколько фото по РА с течью гидроцилиндра?</span>
       <span class="example" onclick="fillQ(this)">Как работает система охлаждения КАМАЗ?</span>
-      <span class="example" onclick="fillQ(this)">Какие бывают виды ТО?</span>
     </div>
   </div>
 
   <div class="card">
     <h2>Ваш вопрос</h2>
     <form class="ask-form" onsubmit="askAI(event)">
-      <textarea id="q" placeholder="Например: Какие работы по замене масла в двигателе КАМАЗ?" autofocus></textarea>
+      <textarea id="q" placeholder="Например: найди работу по замене генератора на Компас 9" autofocus></textarea>
       <button type="submit" class="btn" id="askBtn" style="min-width:120px;">🤖 Спросить ИИ</button>
     </form>
     <div class="loading" id="loading">⏳ Ищу в базе и спрашиваю ИИ… Это занимает 5–20 секунд.</div>
@@ -384,10 +440,23 @@ async function askAI(e) {
       return;
     }
 
-    let html = '<div class="answer-box">' + escapeHtml(data.answer) + '</div>';
+    let html = '';
+
+    // Бейджи фильтров
+    const f = data.filters || {};
+    const badges = [];
+    if (f.brand)   badges.push('Бренд: ' + f.brand);
+    if (f.model)   badges.push('Модель: ' + f.model);
+    if (f.chassis) badges.push('Шасси: ' + f.chassis);
+    if (f.vin)     badges.push('VIN: ' + f.vin);
+    if (badges.length) {
+      html += '<div class="filters">' + badges.map(b => '<span class="filter-badge">' + escapeHtml(b) + '</span>').join('') + '</div>';
+    }
+
+    html += '<div class="answer-box">' + escapeHtml(data.answer) + '</div>';
 
     if (data.works && data.works.length > 0) {
-      html += '<h2 class="section-head">🔧 Работы, найденные в справочнике (' + data.works.length + ')</h2>';
+      html += '<h2 class="section-head">🔧 Работы в справочнике (' + data.works.length + ')</h2>';
       html += '<table class="works"><thead><tr><th style="width:120px;">Код</th><th>Наименование</th><th style="width:80px;">Норма</th><th style="width:120px;">Комплектация</th></tr></thead><tbody>';
       for (const w of data.works) {
         const norm = w.norm_time !== null ? (parseFloat(w.norm_time).toFixed(3).replace(/\.?0+$/, '') + ' ч') : '—';
