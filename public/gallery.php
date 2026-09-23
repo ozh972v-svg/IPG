@@ -21,6 +21,22 @@ $PHOTO_TYPES = [
     'video_defect'     => 'Видео дефекта',
 ];
 
+$BRANDS = ['КАМАЗ', 'КОМПАС', 'ФОТОН', 'СИТРАК', 'ПРИЦЕПЫ'];
+
+$KEY_TYPES = [
+    'ra'    => 'РА (номер рекламационного акта)',
+    'order' => 'Заказ-наряд',
+    'vin'   => 'VIN / Номер шасси',
+    'gos'   => 'Гос. номер',
+];
+
+$KEY_LABELS = [
+    'ra'    => 'РА',
+    'order' => 'Заказ-наряд',
+    'vin'   => 'VIN',
+    'gos'   => 'Гос.номер',
+];
+
 $pdo = get_db();
 
 $searchQuery = trim($_GET['q'] ?? '');
@@ -34,20 +50,23 @@ if (!empty($_GET['save'])
     && $_SERVER['REQUEST_METHOD'] === 'GET'
     && !empty($_GET['key_value'])
     && !empty($_GET['key_type'])
-    && in_array($_GET['key_type'], ['ra', 'vin'], true)
+    && array_key_exists($_GET['key_type'], $KEY_TYPES)
 ) {
     $newKeyValue = trim($_GET['key_value']);
     $newGos      = trim($_GET['gos_number'] ?? '');
     $newOrder    = trim($_GET['order_number'] ?? '');
     $newDescr    = trim($_GET['description'] ?? '');
+    $newBrand    = trim($_GET['brand'] ?? '');
+    if ($newBrand !== '' && !in_array($newBrand, $BRANDS, true)) $newBrand = '';
 
     if ($newKeyValue !== '') {
         try {
             $stmt = $pdo->prepare("
-                INSERT INTO keys (key_type, key_value, gos_number, order_number, description, user_id, created_at, updated_by, updated_at)
-                VALUES (:kt, :kv, :gos, :ord, :descr, :uid, NOW(), :uid2, NOW())
+                INSERT INTO keys (key_type, key_value, brand, gos_number, order_number, description, user_id, created_at, updated_by, updated_at)
+                VALUES (:kt, :kv, :brand, :gos, :ord, :descr, :uid, NOW(), :uid2, NOW())
                 ON CONFLICT (key_type, key_value) DO UPDATE
-                    SET gos_number   = COALESCE(NULLIF(EXCLUDED.gos_number, ''),   keys.gos_number),
+                    SET brand        = COALESCE(NULLIF(EXCLUDED.brand, ''),        keys.brand),
+                        gos_number   = COALESCE(NULLIF(EXCLUDED.gos_number, ''),   keys.gos_number),
                         order_number = COALESCE(NULLIF(EXCLUDED.order_number, ''), keys.order_number),
                         description  = COALESCE(NULLIF(EXCLUDED.description, ''),  keys.description),
                         updated_by   = EXCLUDED.updated_by,
@@ -56,6 +75,7 @@ if (!empty($_GET['save'])
             $stmt->execute([
                 ':kt'    => $_GET['key_type'],
                 ':kv'    => $newKeyValue,
+                ':brand' => $newBrand ?: null,
                 ':gos'   => $newGos ?: null,
                 ':ord'   => $newOrder ?: null,
                 ':descr' => $newDescr ?: null,
@@ -71,13 +91,15 @@ if (!empty($_GET['save'])
 
 /* === Данные для главного экрана === */
 $groups = [];
+$groupsByBrand = [];
 if (!$viewMode) {
     if ($searchQuery !== '') {
         $stmt = $pdo->prepare("
-            SELECT k.key_type, k.key_value, k.gos_number, k.order_number, k.description,
+            SELECT k.key_type, k.key_value, k.brand, k.gos_number, k.order_number, k.description,
                    k.user_id, k.created_at, k.updated_by, k.updated_at
               FROM keys k
              WHERE k.key_value ILIKE :q
+                OR COALESCE(k.brand, '')        ILIKE :q
                 OR COALESCE(k.gos_number, '')   ILIKE :q
                 OR COALESCE(k.order_number, '') ILIKE :q
                 OR COALESCE(k.description, '')  ILIKE :q
@@ -86,7 +108,7 @@ if (!$viewMode) {
         $stmt->execute([':q' => '%' . $searchQuery . '%']);
     } else {
         $stmt = $pdo->query("
-            SELECT k.key_type, k.key_value, k.gos_number, k.order_number, k.description,
+            SELECT k.key_type, k.key_value, k.brand, k.gos_number, k.order_number, k.description,
                    k.user_id, k.created_at, k.updated_by, k.updated_at
               FROM keys k
              ORDER BY k.key_value DESC
@@ -127,9 +149,13 @@ if (!$viewMode) {
     foreach ($allKeys as $k) {
         $key = $k['key_type'] . '::' . $k['key_value'];
         $row = $photoCounts[$key] ?? null;
+        $brand = $k['brand'] ?? null;
+        if ($brand === null || $brand === '') $brand = 'Без бренда';
+
         $groups[] = [
             'key_type'     => $k['key_type'],
             'key_value'    => $k['key_value'],
+            'brand'        => $brand,
             'gos_number'   => $k['gos_number']   ?? null,
             'order_number' => $k['order_number'] ?? null,
             'description'  => $k['description']  ?? null,
@@ -155,6 +181,17 @@ if (!$viewMode) {
             : null;
     }
     unset($g);
+
+    /* Группировка по бренду, с фиксированным порядком */
+    $order = array_merge($BRANDS, ['Без бренда']);
+    foreach ($order as $b) $groupsByBrand[$b] = [];
+    foreach ($groups as $g) {
+        $b = $g['brand'] ?: 'Без бренда';
+        if (!isset($groupsByBrand[$b])) $groupsByBrand[$b] = [];
+        $groupsByBrand[$b][] = $g;
+    }
+    /* Убираем пустые разделы */
+    $groupsByBrand = array_filter($groupsByBrand, function($list) { return !empty($list); });
 }
 
 /* === Данные для экрана внутри РА === */
@@ -203,7 +240,7 @@ function isVideoMime(?string $mime): bool {
     return $mime !== null && strpos($mime, 'video/') === 0;
 }
 
-$keyLabel  = $viewKeyType === 'ra' ? 'РА' : 'VIN';
+$keyLabel  = $KEY_LABELS[$viewKeyType] ?? 'Документ';
 $viewTitle = '';
 if ($viewMode) {
     $viewTitle = $keyLabel . ': ' . $viewKeyValue;
@@ -225,7 +262,6 @@ if ($viewMode) {
   body { padding: 24px 18px; }
   .container { max-width: 1200px; }
 
-  /* Плашка с описанием */
   .key-description {
     font-size: 15px;
     color: var(--ink);
@@ -243,11 +279,53 @@ if ($viewMode) {
     margin: 0 0 14px;
   }
 
-  /* Форма добавления */
   .form-row { margin-bottom: 14px; }
   .form-row .form-label { margin-bottom: 6px; }
 
-  /* === Список групп (карточки РА) === */
+  /* === Брендовая секция === */
+  .brand-section { margin-bottom: 22px; }
+  .brand-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 14px 14px 0 0;
+    margin-bottom: 0;
+    box-shadow: 0 4px 12px -4px rgba(15,23,42,0.2);
+  }
+  .brand-title .cnt {
+    background: rgba(255,255,255,0.28);
+    padding: 3px 12px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+
+  .brand-body {
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding: 14px;
+    border-radius: 0 0 14px 14px;
+    border: 1px solid rgba(255,255,255,0.7);
+    border-top: none;
+  }
+
+  /* Цвета брендовых секций */
+  .brand-kamaz    .brand-title { background: linear-gradient(135deg, #2563eb, #06b6d4); }
+  .brand-compass  .brand-title { background: linear-gradient(135deg, #7c3aed, #c026d3); }
+  .brand-foton    .brand-title { background: linear-gradient(135deg, #dc2626, #f97316); }
+  .brand-sitrak   .brand-title { background: linear-gradient(135deg, #059669, #14b8a6); }
+  .brand-pritsep  .brand-title { background: linear-gradient(135deg, #d97706, #eab308); }
+  .brand-nobrand  .brand-title { background: linear-gradient(135deg, #64748b, #94a3b8); }
+
+  /* === Карточка записи === */
   .group-item {
     display: flex; align-items: center; gap: 14px;
     padding: 16px 18px;
@@ -257,8 +335,9 @@ if ($viewMode) {
     background: #fff;
     transition: all 0.18s;
   }
+  .group-item:last-child { margin-bottom: 0; }
   .group-item:hover {
-    border-color: #86efac;
+    border-color: #6ee7b7;
     background: #f0fdf4;
     transform: translateY(-1px);
     box-shadow: 0 8px 20px -10px rgba(5,150,105,0.3);
@@ -425,14 +504,12 @@ if ($viewMode) {
   .action-dl   { background: #d1fae5; color: #065f46; }
   .action-pdf  { background: #fef3c7; color: #b45309; }
 
-  /* === Пустые состояния === */
   .empty-state {
     text-align: center; padding: 50px 20px;
     color: #94a3b8; font-size: 14px;
   }
   .empty-state .big { font-size: 52px; margin-bottom: 14px; }
 
-  /* === Заголовок карточки === */
   .card-head {
     display: flex; justify-content: space-between;
     align-items: center; flex-wrap: wrap;
@@ -440,13 +517,11 @@ if ($viewMode) {
   }
   .card-head h2 { margin: 0; }
 
-  /* === Верхняя панель действий в просмотре фото === */
   .photos-toolbar {
     display: flex; gap: 8px; flex-wrap: wrap;
     align-items: center;
   }
 
-  /* === Статус загрузки (оверлей сверху) === */
   .upload-status {
     position: fixed; top: 0; left: 0; right: 0;
     padding: 16px; text-align: center;
@@ -455,7 +530,6 @@ if ($viewMode) {
     box-shadow: 0 6px 20px rgba(15,23,42,0.2);
   }
 
-  /* === Модалка выбора источника (компактная) === */
   .modal-small { max-width: 440px; padding: 28px; }
   .modal-small h3 {
     margin: 0 0 10px; font-size: 19px;
@@ -480,7 +554,6 @@ if ($viewMode) {
   }
   .btn-cancel:hover { background: #e2e8f0; }
 
-  /* === PDF-редактор === */
   .pdf-editor-shell {
     background: #fff; width: 100%; height: 100%;
     display: flex; flex-direction: column; overflow: hidden;
@@ -516,7 +589,6 @@ if ($viewMode) {
   }
   #pdfStatus { font-size: 14px; color: #64748b; font-weight: 600; }
 
-  /* === Просмотрщик фото (тёмный) === */
   .viewer-shell {
     background: #0f172a; width: 100%; height: 100%;
     display: flex; flex-direction: column;
@@ -549,7 +621,6 @@ if ($viewMode) {
   .viewer-btn.red { background: #dc2626; color: #fff; }
   .viewer-btn.red:hover { background: #b91c1c; }
 
-  /* === Мобильные === */
   @media (max-width: 700px) {
     body { padding: 14px 12px; }
     .group-thumbs { display: none; }
@@ -559,6 +630,7 @@ if ($viewMode) {
     .photo-card img, .photo-card video { height: 130px; }
     .type-selector { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
     .type-option { padding: 11px 12px; font-size: 12px; min-height: 46px; }
+    .brand-title { font-size: 13px; padding: 10px 14px; }
     .pdf-editor-head h3 { font-size: 15px; }
     .pdf-editor-head, .pdf-editor-toolbar, .pdf-editor-body, .pdf-editor-foot { padding-left: 14px; padding-right: 14px; }
   }
@@ -577,6 +649,11 @@ if ($viewMode) {
 
   <div class="card">
     <?php if ($viewMode && $currentKey): ?>
+      <?php if (!empty($currentKey['brand'])): ?>
+        <div style="margin-bottom:10px;">
+          <span class="badge badge-blue" style="font-size:13px;padding:5px 14px;"><?= e($currentKey['brand']) ?></span>
+        </div>
+      <?php endif; ?>
       <?php if (!empty($currentKey['description'])): ?>
         <div class="key-description">📝 <?= e($currentKey['description']) ?></div>
       <?php endif; ?>
@@ -623,32 +700,49 @@ if ($viewMode) {
     <!-- ЭКРАН 1: Список РА -->
 
     <div class="card">
-      <h2>+ Добавить новый РА / VIN</h2>
+      <h2>+ Добавить новую запись</h2>
       <form method="get" action="gallery.php">
         <input type="hidden" name="save" value="1">
+
+        <div class="form-row">
+          <label class="form-label">Бренд автомобиля</label>
+          <select name="brand" class="form-select" required>
+            <option value="">— Выберите бренд —</option>
+            <?php foreach ($BRANDS as $b): ?>
+              <option value="<?= e($b) ?>"><?= e($b) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
         <div class="form-row">
           <label class="form-label">Тип привязки</label>
           <select name="key_type" class="form-select">
-            <option value="ra">РА (номер рекламационного акта)</option>
-            <option value="vin">VIN / Номер шасси</option>
+            <?php foreach ($KEY_TYPES as $k => $label): ?>
+              <option value="<?= e($k) ?>" <?= $k === 'ra' ? 'selected' : '' ?>><?= e($label) ?></option>
+            <?php endforeach; ?>
           </select>
         </div>
+
         <div class="form-row">
           <label class="form-label">Номер</label>
           <input type="text" name="key_value" class="form-input" required placeholder="Например: 12345">
         </div>
+
         <div class="form-row">
-          <label class="form-label">Краткое описание (обязательно)</label>
+          <label class="form-label">Описание дефекта (обязательно)</label>
           <input type="text" name="description" class="form-input" required placeholder="Например: течь гидроцилиндра подъёма кабины" maxlength="250">
         </div>
+
         <div class="form-row">
           <label class="form-label">Гос. номер (необязательно)</label>
           <input type="text" name="gos_number" class="form-input" placeholder="Например: А123БВ 116">
         </div>
+
         <div class="form-row">
           <label class="form-label">Номер заказ-наряда (необязательно)</label>
           <input type="text" name="order_number" class="form-input" placeholder="Например: ЗН-00456">
         </div>
+
         <button type="submit" class="btn btn-green">+ Добавить</button>
       </form>
     </div>
@@ -656,7 +750,7 @@ if ($viewMode) {
     <div class="card">
       <h2>🔍 Поиск</h2>
       <form method="get" class="row-flex" style="flex-wrap:nowrap;">
-        <input type="text" name="q" class="form-input" style="flex:1;min-width:0;" placeholder="Поиск по РА, VIN, гос. номеру, заказ-наряду, описанию" value="<?= e($searchQuery) ?>">
+        <input type="text" name="q" class="form-input" style="flex:1;min-width:0;" placeholder="Поиск по номеру, бренду, гос.номеру, заказ-наряду, описанию" value="<?= e($searchQuery) ?>">
         <button type="submit" class="btn btn-primary">Найти</button>
         <?php if ($searchQuery): ?>
           <a href="gallery.php" class="btn btn-secondary">Сбросить</a>
@@ -666,71 +760,94 @@ if ($viewMode) {
 
     <div class="card">
       <h2>Все записи (<?= count($groups) ?>)</h2>
+
       <?php if (empty($groups)): ?>
         <div class="empty-state">
           <div class="big">📷</div>
-          <div>Пока нет ни одного РА или VIN</div>
+          <div>Пока нет ни одной записи</div>
         </div>
       <?php else: ?>
-        <?php foreach ($groups as $g): ?>
-          <?php $delId = 'delAll-' . md5($g['key_type'] . $g['key_value']); ?>
-          <div class="group-item">
-            <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
-              <div class="group-main">
-                <div class="group-item-title">
-                  <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?>
-                  <?php if (!empty($g['description'])): ?><span> — <?= e($g['description']) ?></span><?php endif; ?>
-                </div>
-                <?php if ($g['gos_number'] || $g['order_number']): ?>
-                  <div class="group-item-sub">
-                    <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
-                    <?php if ($g['gos_number'] && $g['order_number']): ?> · <?php endif; ?>
-                    <?php if ($g['order_number']): ?>📋 ЗН: <?= e($g['order_number']) ?><?php endif; ?>
-                  </div>
-                <?php endif; ?>
-                <?php if ($g['creator_name'] || $g['created_at']): ?>
-                  <div class="group-item-meta">
-                    ✏️ Создал:
-                    <?= $g['creator_name'] ? e($g['creator_name']) : '—' ?>
-                    <?php if ($g['created_at']): ?>, <?= e(date('d.m.Y H:i', strtotime($g['created_at']))) ?><?php endif; ?>
-                  </div>
-                <?php endif; ?>
-                <?php if ($g['last_date']): ?>
-                  <div class="group-item-meta">🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
-                <?php endif; ?>
-              </div>
 
-              <div class="group-thumbs">
-                <div>
-                  <?php if ($g['thumb_general']): ?>
-                    <img class="group-thumb" src="<?= e($g['thumb_general']) ?>" alt="Общий вид" loading="lazy">
-                  <?php else: ?>
-                    <div class="group-thumb-empty">📷</div>
-                  <?php endif; ?>
-                  <span class="group-thumb-label">Общий вид</span>
+        <?php foreach ($groupsByBrand as $brandName => $list): ?>
+          <?php
+            $brandClass = 'brand-nobrand';
+            if ($brandName === 'КАМАЗ')         $brandClass = 'brand-kamaz';
+            elseif ($brandName === 'КОМПАС')    $brandClass = 'brand-compass';
+            elseif ($brandName === 'ФОТОН')     $brandClass = 'brand-foton';
+            elseif ($brandName === 'СИТРАК')    $brandClass = 'brand-sitrak';
+            elseif ($brandName === 'ПРИЦЕПЫ')   $brandClass = 'brand-pritsep';
+          ?>
+          <div class="brand-section <?= $brandClass ?>">
+            <div class="brand-title">
+              <span><?= e($brandName) ?></span>
+              <span class="cnt"><?= count($list) ?></span>
+            </div>
+            <div class="brand-body">
+
+              <?php foreach ($list as $g): ?>
+                <?php $delId = 'delAll-' . md5($g['key_type'] . $g['key_value']); ?>
+                <div class="group-item">
+                  <a href="gallery.php?key_type=<?= e($g['key_type']) ?>&key_value=<?= urlencode($g['key_value']) ?>" class="group-link">
+                    <div class="group-main">
+                      <div class="group-item-title">
+                        <?= e($KEY_LABELS[$g['key_type']] ?? 'Документ') ?>: <?= e($g['key_value']) ?>
+                        <?php if (!empty($g['description'])): ?><span> — <?= e($g['description']) ?></span><?php endif; ?>
+                      </div>
+                      <?php if ($g['gos_number'] || $g['order_number']): ?>
+                        <div class="group-item-sub">
+                          <?php if ($g['gos_number']): ?>🚗 <?= e($g['gos_number']) ?><?php endif; ?>
+                          <?php if ($g['gos_number'] && $g['order_number']): ?> · <?php endif; ?>
+                          <?php if ($g['order_number']): ?>📋 ЗН: <?= e($g['order_number']) ?><?php endif; ?>
+                        </div>
+                      <?php endif; ?>
+                      <?php if ($g['creator_name'] || $g['created_at']): ?>
+                        <div class="group-item-meta">
+                          ✏️ Создал:
+                          <?= $g['creator_name'] ? e($g['creator_name']) : '—' ?>
+                          <?php if ($g['created_at']): ?>, <?= e(date('d.m.Y H:i', strtotime($g['created_at']))) ?><?php endif; ?>
+                        </div>
+                      <?php endif; ?>
+                      <?php if ($g['last_date']): ?>
+                        <div class="group-item-meta">🕐 Обновлено: <?= e(date('d.m.Y H:i', strtotime($g['last_date']))) ?></div>
+                      <?php endif; ?>
+                    </div>
+
+                    <div class="group-thumbs">
+                      <div>
+                        <?php if ($g['thumb_general']): ?>
+                          <img class="group-thumb" src="<?= e($g['thumb_general']) ?>" alt="Общий вид" loading="lazy">
+                        <?php else: ?>
+                          <div class="group-thumb-empty">📷</div>
+                        <?php endif; ?>
+                        <span class="group-thumb-label">Общий вид</span>
+                      </div>
+                      <div>
+                        <?php if ($g['thumb_defect']): ?>
+                          <img class="group-thumb" src="<?= e($g['thumb_defect']) ?>" alt="Дефект" loading="lazy">
+                        <?php else: ?>
+                          <div class="group-thumb-empty">🔍</div>
+                        <?php endif; ?>
+                        <span class="group-thumb-label">Дефект</span>
+                      </div>
+                    </div>
+                  </a>
+                  <div class="group-actions">
+                    <div class="group-item-count"><?= (int)$g['count'] ?> 📁</div>
+                    <a href="#" class="group-del-btn" title="Удалить всю запись и все файлы"
+                       onclick="if(confirm('Удалить <?= e($KEY_LABELS[$g['key_type']] ?? 'запись') ?>: <?= e($g['key_value']) ?> и ВСЕ её файлы?')){document.getElementById('<?= $delId ?>').submit();}return false;">🗑️</a>
+                    <form id="<?= $delId ?>" method="post" action="delete_all.php" style="display:none;">
+                      <input type="hidden" name="key_type" value="<?= e($g['key_type']) ?>">
+                      <input type="hidden" name="key_value" value="<?= e($g['key_value']) ?>">
+                      <input type="hidden" name="remove_key" value="1">
+                    </form>
+                  </div>
                 </div>
-                <div>
-                  <?php if ($g['thumb_defect']): ?>
-                    <img class="group-thumb" src="<?= e($g['thumb_defect']) ?>" alt="Дефект" loading="lazy">
-                  <?php else: ?>
-                    <div class="group-thumb-empty">🔍</div>
-                  <?php endif; ?>
-                  <span class="group-thumb-label">Дефект</span>
-                </div>
-              </div>
-            </a>
-            <div class="group-actions">
-              <div class="group-item-count"><?= (int)$g['count'] ?> 📁</div>
-              <a href="#" class="group-del-btn" title="Удалить весь РА и все файлы"
-                 onclick="if(confirm('Удалить <?= e($g['key_type'] === 'ra' ? 'РА' : 'VIN') ?>: <?= e($g['key_value']) ?> и ВСЕ его файлы?')){document.getElementById('<?= $delId ?>').submit();}return false;">🗑️</a>
-              <form id="<?= $delId ?>" method="post" action="delete_all.php" style="display:none;">
-                <input type="hidden" name="key_type" value="<?= e($g['key_type']) ?>">
-                <input type="hidden" name="key_value" value="<?= e($g['key_value']) ?>">
-                <input type="hidden" name="remove_key" value="1">
-              </form>
+              <?php endforeach; ?>
+
             </div>
           </div>
         <?php endforeach; ?>
+
       <?php endif; ?>
     </div>
 
@@ -1059,7 +1176,7 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
         if (navigator.canShare({ files: [file] })) {
           await navigator.share({
             files: [file],
-            title: 'Файл по ' + (KEY_TYPE === 'ra' ? 'РА' : 'VIN') + ' ' + KEY_VALUE,
+            title: 'Файл по ' + KEY_VALUE,
           });
           finishUpload();
           return;
@@ -1223,7 +1340,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     render();
   });
 
-  /* === Просмотрщик фото === */
   const viewer      = document.getElementById('photoViewer');
   const viewerImg   = document.getElementById('photoViewerImg');
   const viewerTitle = document.getElementById('photoViewerTitle');
@@ -1263,7 +1379,6 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     render();
   };
 
-  /* === Сборка PDF === */
   const QUALITY = {
     original: { maxW: null, q: null },
     good:     { maxW: 1600, q: 0.85 },
@@ -1374,7 +1489,7 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
       const url      = URL.createObjectURL(blob);
       const a        = document.createElement('a');
       a.href = url;
-      a.download = (window.IPG_KEY_LABEL === 'РА' ? 'RA_' : 'VIN_') + window.IPG_KEY_VALUE + '.pdf';
+      a.download = window.IPG_KEY_VALUE + '.pdf';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
