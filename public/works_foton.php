@@ -24,23 +24,50 @@ $family    = $families[$familyKey];
 $db = get_db();
 $search = trim($_GET['q'] ?? '');
 
-/* === Верхние группы ФОТОН — parent_code IS NULL и не битые === */
+/* === Загружаем все группы ФОТОН — верхние и подгруппы === */
 $st = $db->prepare("
-    SELECT code, name
+    SELECT code, name, parent_code
       FROM work_operations
      WHERE brand = 'FOTON' AND it_is_group = TRUE
-       AND (parent_code IS NULL OR parent_code = '')
        AND name NOT LIKE '%#%'
        AND name NOT LIKE '%Н/Д%'
      ORDER BY code
 ");
 $st->execute();
-$topGroups = $st->fetchAll(PDO::FETCH_ASSOC);
+$allGroups = $st->fetchAll(PDO::FETCH_ASSOC);
 
-$group = $_GET['group'] ?? ($topGroups[0]['code'] ?? null);
+$topGroups = [];
+$subgroupsByParent = [];
+foreach ($allGroups as $g) {
+    if (empty($g['parent_code'])) {
+        $topGroups[] = $g;
+    } else {
+        $subgroupsByParent[$g['parent_code']][] = $g;
+    }
+}
+
+/* === Текущие параметры === */
+$groupCode    = trim($_GET['group'] ?? '');
+$subgroupCode = trim($_GET['subgroup'] ?? '');
+
+/* Если group не указан — берём первую верхнюю группу */
+if ($groupCode === '' && !empty($topGroups)) {
+    $groupCode = $topGroups[0]['code'];
+}
+
+/* Если указана подгруппа, но не указана группа — находим родителя */
+if ($subgroupCode !== '' && $groupCode === '') {
+    foreach ($allGroups as $g) {
+        if ($g['code'] === $subgroupCode && !empty($g['parent_code'])) {
+            $groupCode = $g['parent_code'];
+            break;
+        }
+    }
+}
 
 /* === Работы === */
 if ($search !== '') {
+    /* Поиск по всей семье */
     $st = $db->prepare("SELECT DISTINCT ON (operation_code)
                               code, operation_code, name, eng_name, norm_time, complectation
                           FROM work_operations
@@ -51,13 +78,21 @@ if ($search !== '') {
                          LIMIT 500");
     $st->execute([':fam' => $familyKey . '%', ':q' => '%' . $search . '%']);
     $works = $st->fetchAll(PDO::FETCH_ASSOC);
-} else if ($group) {
-    /* Ищем подгруппы выбранной верхней группы */
-    $st = $db->prepare("SELECT code FROM work_operations
-                        WHERE brand = 'FOTON' AND it_is_group = TRUE
-                          AND parent_code = :parent");
-    $st->execute([':parent' => $group]);
-    $subs = $st->fetchAll(PDO::FETCH_COLUMN);
+} else if ($subgroupCode !== '') {
+    /* Только работы одной подгруппы */
+    $st = $db->prepare("SELECT DISTINCT ON (operation_code)
+                              code, operation_code, name, eng_name, norm_time, complectation
+                          FROM work_operations
+                         WHERE brand = 'FOTON' AND it_is_group = FALSE AND deleted = FALSE
+                           AND complectation LIKE :fam
+                           AND parent_code = :parent
+                         ORDER BY operation_code, complectation
+                         LIMIT 500");
+    $st->execute([':fam' => $familyKey . '%', ':parent' => $subgroupCode]);
+    $works = $st->fetchAll(PDO::FETCH_ASSOC);
+} else if ($groupCode !== '') {
+    /* Все работы верхней группы: по всем её подгруппам */
+    $subs = array_column($subgroupsByParent[$groupCode] ?? [], 'code');
 
     if (!empty($subs)) {
         $ph = [];
@@ -79,7 +114,7 @@ if ($search !== '') {
         $st->execute($params);
         $works = $st->fetchAll(PDO::FETCH_ASSOC);
     } else {
-        /* На случай, если у верхней группы работы привязаны напрямую */
+        /* Нет подгрупп — работы напрямую у верхней группы */
         $st = $db->prepare("SELECT DISTINCT ON (operation_code)
                                    code, operation_code, name, eng_name, norm_time, complectation
                               FROM work_operations
@@ -88,39 +123,47 @@ if ($search !== '') {
                                AND parent_code = :parent
                              ORDER BY operation_code, complectation
                              LIMIT 500");
-        $st->execute([':fam' => $familyKey . '%', ':parent' => $group]);
+        $st->execute([':fam' => $familyKey . '%', ':parent' => $groupCode]);
         $works = $st->fetchAll(PDO::FETCH_ASSOC);
     }
 } else {
     $works = [];
 }
 
-/* Имя текущей группы */
-$groupName = '';
-foreach ($topGroups as $g) {
-    if ($g['code'] === $group) { $groupName = $g['name']; break; }
+/* === Заголовок группы / подгруппы === */
+$groupName    = '';
+$subgroupName = '';
+foreach ($allGroups as $g) {
+    if ($g['code'] === $groupCode)    $groupName    = $g['name'];
+    if ($g['code'] === $subgroupCode) $subgroupName = $g['name'];
 }
 
-/* Количество работ в каждой верхней группе */
-$groupCounts = [];
+/* === Счётчики работ: по подгруппам === */
+$subgroupCounts = [];
 try {
     $st = $db->prepare("
-        SELECT g.code AS group_code, COUNT(DISTINCT w.operation_code) AS cnt
-          FROM work_operations g
-          JOIN work_operations w ON w.parent_code IN (
-              SELECT code FROM work_operations
-               WHERE parent_code = g.code AND it_is_group = TRUE
-          )
-         WHERE g.brand = 'FOTON' AND g.it_is_group = TRUE
-           AND w.brand = 'FOTON' AND w.it_is_group = FALSE AND w.deleted = FALSE
-           AND w.complectation LIKE :fam
-         GROUP BY g.code
+        SELECT parent_code, COUNT(DISTINCT operation_code) AS cnt
+          FROM work_operations
+         WHERE brand = 'FOTON' AND it_is_group = FALSE AND deleted = FALSE
+           AND complectation LIKE :fam
+           AND parent_code IS NOT NULL
+         GROUP BY parent_code
     ");
     $st->execute([':fam' => $familyKey . '%']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $groupCounts[$r['group_code']] = (int)$r['cnt'];
+        $subgroupCounts[$r['parent_code']] = (int)$r['cnt'];
     }
 } catch (Throwable $e) {}
+
+/* Счётчики верхних групп = сумма по подгруппам */
+$groupCounts = [];
+foreach ($subgroupsByParent as $topCode => $subs) {
+    $sum = 0;
+    foreach ($subs as $s) {
+        $sum += $subgroupCounts[$s['code']] ?? 0;
+    }
+    $groupCounts[$topCode] = $sum;
+}
 
 function fmtNorm($n) {
     if ($n === null) return null;
@@ -193,17 +236,8 @@ function fmtNorm($n) {
       0 1px 0 rgba(255,255,255,0.35) inset,
       0 14px 30px -10px rgba(220, 38, 38, 0.7);
   }
-  .family-btn .fam-label {
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-  }
-  .family-btn .fam-desc {
-    font-size: 10.5px;
-    font-weight: 500;
-    opacity: 0.7;
-    letter-spacing: 0.01em;
-  }
+  .family-btn .fam-label { font-size: 14px; font-weight: 700; }
+  .family-btn .fam-desc  { font-size: 10.5px; font-weight: 500; opacity: 0.7; }
   .family-btn.active .fam-desc { opacity: 0.95; }
 
   .search-row {
@@ -232,12 +266,12 @@ function fmtNorm($n) {
 
   .layout {
     display: grid;
-    grid-template-columns: 320px 1fr 340px;
+    grid-template-columns: 340px 1fr 340px;
     gap: 14px;
     align-items: start;
   }
   @media (max-width: 1200px) {
-    .layout { grid-template-columns: 280px 1fr; }
+    .layout { grid-template-columns: 300px 1fr; }
     .basket { grid-column: 1 / -1; }
   }
   @media (max-width: 800px) {
@@ -245,37 +279,97 @@ function fmtNorm($n) {
     .basket { grid-column: 1; }
   }
 
-  .sidebar { max-height: 78vh; overflow-y: auto; padding: 8px; }
-  .sidebar a {
+  /* === Дерево групп и подгрупп === */
+  .tree {
+    font-size: 13.5px;
+    max-height: 78vh;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .tree > details > summary {
     display: flex;
-    justify-content: space-between;
     align-items: center;
     gap: 8px;
-    padding: 10px 14px;
-    border-radius: 9px;
-    text-decoration: none;
-    color: #334155;
-    font-size: 13.5px;
-    line-height: 1.35;
-    transition: all 0.15s;
-  }
-  .sidebar a:hover { background: #fef2f2; color: #b91c1c; }
-  .sidebar a.active {
-    background: linear-gradient(135deg, #fee2e2, #fecaca);
-    color: #991b1b;
+    padding: 9px 11px;
     font-weight: 700;
+    color: #991b1b;
+    cursor: pointer;
+    border-radius: 9px;
+    list-style: none;
+    transition: background 0.15s;
+    user-select: none;
   }
-  .sidebar .cnt {
-    background: #f1f5f9;
-    color: #475569;
+  .tree > details > summary::-webkit-details-marker { display: none; }
+  .tree > details > summary::before {
+    content: '▶';
+    font-size: 9px;
+    color: #dc2626;
+    transition: transform 0.18s;
+    flex-shrink: 0;
+  }
+  .tree > details[open] > summary::before { transform: rotate(90deg); }
+  .tree > details > summary:hover { background: #fef2f2; }
+  .tree > details > summary.selected { background: #fee2e2; }
+
+  .tree > details > summary .label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none;
+    color: inherit;
+  }
+  .tree > details > summary .cnt {
+    background: #fecaca;
+    color: #991b1b;
     font-size: 11px;
     font-weight: 700;
     padding: 2px 8px;
     border-radius: 8px;
     flex-shrink: 0;
   }
-  .sidebar a.active .cnt { background: #dc2626; color: #fff; }
 
+  .tree-sub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px 7px 30px;
+    color: #475569;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    line-height: 1.35;
+    overflow: hidden;
+    transition: all 0.15s;
+    margin-left: 6px;
+  }
+  .tree-sub:hover { background: #fef2f2; color: #b91c1c; }
+  .tree-sub.selected {
+    background: linear-gradient(135deg, #fee2e2, #fecaca);
+    color: #991b1b;
+    font-weight: 700;
+  }
+  .tree-sub .label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tree-sub .cnt {
+    background: #f1f5f9;
+    color: #475569;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 7px;
+    flex-shrink: 0;
+  }
+  .tree-sub.selected .cnt {
+    background: #dc2626;
+    color: #fff;
+  }
+
+  /* === Контент === */
   .content { padding: 22px 26px; min-height: 300px; }
   .content h2 {
     margin: 0 0 6px;
@@ -296,7 +390,6 @@ function fmtNorm($n) {
     border-radius: 20px;
     margin-left: 8px;
     vertical-align: middle;
-    letter-spacing: 0.02em;
   }
   .content .count {
     color: var(--ink-soft);
@@ -481,7 +574,7 @@ function fmtNorm($n) {
 
   <div class="hint">
     <b>Шаг 1.</b> Выберите семейство моделей ФОТОН (AUMAN, AUMARK, TOANO, ...).<br>
-    <b>Шаг 2.</b> Слева выберите группу работ — работы появятся справа.<br>
+    <b>Шаг 2.</b> Слева раскройте группу и выберите подгруппу, чтобы сузить поиск.<br>
     <b>Шаг 3.</b> Нажмите <b>🤖 Спросить ИИ</b> — вопрос будет искаться в справочнике выбранного семейства.
   </div>
 
@@ -507,24 +600,44 @@ function fmtNorm($n) {
 
   <div class="layout">
 
-    <aside class="card sidebar" style="padding:8px;">
+    <!-- ДЕРЕВО -->
+    <aside class="card tree" style="padding:8px;">
       <?php if (!$topGroups): ?>
         <div style="padding: 20px; color:#94a3b8;">Групп не найдено.</div>
       <?php else: ?>
         <?php foreach ($topGroups as $g): ?>
           <?php
             $cnt = $groupCounts[$g['code']] ?? 0;
-            $niceName = $g['name'];
+            $subs = $subgroupsByParent[$g['code']] ?? [];
+            $isOpen = ($g['code'] === $groupCode);
+            $isTopSelected = ($g['code'] === $groupCode && $subgroupCode === '');
           ?>
-          <a href="?family=<?= e($familyKey) ?>&group=<?= urlencode($g['code']) ?>"
-             class="<?= $g['code'] === $group && $search === '' ? 'active' : '' ?>">
-            <span><?= e($niceName) ?></span>
-            <?php if ($cnt > 0): ?><span class="cnt"><?= $cnt ?></span><?php endif; ?>
-          </a>
+          <details <?= $isOpen ? 'open' : '' ?>>
+            <summary class="<?= $isTopSelected ? 'selected' : '' ?>">
+              <a class="label"
+                 href="?family=<?= e($familyKey) ?>&group=<?= urlencode($g['code']) ?>">
+                <?= e($g['name']) ?>
+              </a>
+              <?php if ($cnt > 0): ?><span class="cnt"><?= $cnt ?></span><?php endif; ?>
+            </summary>
+
+            <?php foreach ($subs as $sub): ?>
+              <?php
+                $subCnt = $subgroupCounts[$sub['code']] ?? 0;
+                $subSelected = ($sub['code'] === $subgroupCode);
+              ?>
+              <a class="tree-sub <?= $subSelected ? 'selected' : '' ?>"
+                 href="?family=<?= e($familyKey) ?>&group=<?= urlencode($g['code']) ?>&subgroup=<?= urlencode($sub['code']) ?>">
+                <span class="label"><?= e($sub['name']) ?></span>
+                <?php if ($subCnt > 0): ?><span class="cnt"><?= $subCnt ?></span><?php endif; ?>
+              </a>
+            <?php endforeach; ?>
+          </details>
         <?php endforeach; ?>
       <?php endif; ?>
     </aside>
 
+    <!-- КОНТЕНТ -->
     <section class="card content">
       <?php if ($search !== ''): ?>
         <h2>
@@ -532,7 +645,13 @@ function fmtNorm($n) {
           <span class="family-tag"><?= e($family['label']) ?></span>
         </h2>
         <p class="count">Найдено: <?= count($works) ?></p>
-      <?php elseif ($group): ?>
+      <?php elseif ($subgroupCode !== ''): ?>
+        <h2>
+          <?= e($subgroupName) ?>
+          <span class="family-tag"><?= e($family['label']) ?></span>
+        </h2>
+        <p class="count">Работ в подгруппе: <?= count($works) ?></p>
+      <?php elseif ($groupCode !== ''): ?>
         <h2>
           <?= e($groupName) ?>
           <span class="family-tag"><?= e($family['label']) ?></span>
@@ -582,6 +701,7 @@ function fmtNorm($n) {
       <?php endif; ?>
     </section>
 
+    <!-- КОРЗИНА -->
     <div class="card basket">
       <div class="basket-header">
         <h2>📋 Выбранные работы</h2>
