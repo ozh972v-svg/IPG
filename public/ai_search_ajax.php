@@ -9,6 +9,67 @@ if (!$user) { echo json_encode(['ok'=>false,'error'=>'Не авторизова�
 $pdo = get_db();
 
 /* ============================================================
+   GigaChat: получение access_token с кэшем в файл
+   ============================================================ */
+function getGigaChatToken(): ?string {
+    $authKey = getenv('GIGACHAT_AUTH_KEY');
+    $scope   = getenv('GIGACHAT_SCOPE') ?: 'GIGACHAT_API_PERS';
+    if (!$authKey) return null;
+
+    $cacheFile = sys_get_temp_dir() . '/gigachat_token_' . md5($authKey) . '.json';
+
+    if (is_file($cacheFile)) {
+        $cached = json_decode((string)file_get_contents($cacheFile), true);
+        if (!empty($cached['access_token']) && !empty($cached['expires_at'])) {
+            if ($cached['expires_at'] - 60 > time()) {
+                return $cached['access_token'];
+            }
+        }
+    }
+
+    $rquid = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+        mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0x0fff) | 0x4000,
+        mt_rand(0, 0x3fff) | 0x8000,
+        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+    );
+
+    $ch = curl_init('https://ngw.devices.sberbank.ru:9443/api/v2/oauth');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => 'scope=' . urlencode($scope),
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/x-www-form-urlencoded',
+            'Accept: application/json',
+            'RqUID: ' . $rquid,
+            'Authorization: Basic ' . $authKey,
+        ],
+        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($err || $code !== 200) return null;
+
+    $data = json_decode((string)$resp, true);
+    if (empty($data['access_token'])) return null;
+
+    $expiresAt = $data['expires_at'] ?? (time() + 1800);
+    file_put_contents($cacheFile, json_encode([
+        'access_token' => $data['access_token'],
+        'expires_at'   => $expiresAt,
+    ]));
+
+    return $data['access_token'];
+}
+
+/* ============================================================
    Резолвер VIN → комплектация через 1С:ГОА
    ============================================================ */
 function resolveComplectationByVin(string $vin, PDO $pdo): ?string {
@@ -88,20 +149,17 @@ $contextBrand         = trim((string)($_POST['brand'] ?? ''))         ?: null;
 $contextChassis       = trim((string)($_POST['chassis'] ?? ''))       ?: null;
 $contextModel         = trim((string)($_POST['model'] ?? ''))         ?: null;
 
-/* ---- Бренд (учитываем контекст) ---- */
 $brand = $contextBrand;
 if ($brand === null) {
     if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
     if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
 }
 
-/* ---- VIN из вопроса ---- */
 $vinCandidate = null;
 if (preg_match('/\b([A-HJ-NPR-Z0-9]{17})\b/i', $question, $m)) {
     $vinCandidate = strtoupper($m[1]);
 }
 
-/* ---- Резолв VIN → комплектация (если VIN указан, но контекста нет) ---- */
 $resolvedComplectation = $contextComplectation;
 if ($resolvedComplectation === null && $vinCandidate) {
     $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
@@ -137,7 +195,6 @@ if (empty($keywords)) {
 
 /* ============================================================
    Поиск работ
-   Приоритет фильтра: complectation (контекст или 1С) → chassis → brand
    ============================================================ */
 $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
 $params = [];
@@ -216,16 +273,15 @@ if (!empty($works)) {
 $context = implode("\n\n", $ctx);
 
 /* ============================================================
-   Запрос к LLM
+   Запрос к GigaChat
    ============================================================ */
-$apiKey  = getenv('AI_API_KEY');
-$baseUrl = rtrim((string)getenv('AI_BASE_URL'), '/');
-$model   = getenv('AI_MODEL') ?: 'deepseek/deepseek-chat';
-
-if (!$apiKey || !$baseUrl) {
-    echo json_encode(['ok'=>false,'error'=>'Не настроены AI_API_KEY / AI_BASE_URL']);
+$token = getGigaChatToken();
+if (!$token) {
+    echo json_encode(['ok'=>false,'error'=>'Не удалось получить токен GigaChat. Проверьте GIGACHAT_AUTH_KEY в ENV.']);
     exit;
 }
+
+$model = getenv('GIGACHAT_MODEL') ?: 'GigaChat';
 
 $system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.\n"
         . "Тебе дают контекст: фильтры и справочник работ (отсортирован по релевантности).\n"
@@ -245,12 +301,16 @@ $payload = [
     'max_tokens'  => 1500,
 ];
 
-$ch = curl_init($baseUrl . '/chat/completions');
+$ch = curl_init('https://gigachat.devices.sberbank.ru/api/v1/chat/completions');
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_POST           => true,
     CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-    CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Authorization: Bearer ' . $apiKey],
+    CURLOPT_HTTPHEADER     => [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'Authorization: Bearer ' . $token,
+    ],
     CURLOPT_TIMEOUT        => 120,
     CURLOPT_SSL_VERIFYPEER => false,
     CURLOPT_SSL_VERIFYHOST => false,
@@ -261,11 +321,11 @@ $err  = curl_error($ch);
 curl_close($ch);
 
 if ($err) {
-    echo json_encode(['ok'=>false,'error'=>'Ошибка соединения с ИИ: ' . $err]);
+    echo json_encode(['ok'=>false,'error'=>'Ошибка соединения с GigaChat: ' . $err]);
     exit;
 }
 if ($code !== 200) {
-    echo json_encode(['ok'=>false,'error'=>"ИИ вернул код $code: " . mb_substr((string)$resp, 0, 400)]);
+    echo json_encode(['ok'=>false,'error'=>"GigaChat вернул код $code: " . mb_substr((string)$resp, 0, 400)]);
     exit;
 }
 
