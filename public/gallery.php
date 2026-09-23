@@ -1043,7 +1043,29 @@ if ($viewMode) {
     </div>
   </div>
 </div>
+<script>
+/* === Запоминаем открытые/закрытые брендовые секции === */
+(function() {
+  const STORAGE_KEY = 'gallery_open_brands_v1';
+  let open;
+  try { open = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  catch(e) { open = []; }
+  if (!Array.isArray(open)) open = [];
 
+  document.querySelectorAll('details.brand-section').forEach(function(d) {
+    const brand = d.dataset.brand || '';
+    if (open.includes(brand)) d.open = true;
+
+    d.addEventListener('toggle', function() {
+      const current = [];
+      document.querySelectorAll('details.brand-section[open]').forEach(function(x) {
+        current.push(x.dataset.brand || '');
+      });
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(current)); } catch(e) {}
+    });
+  });
+})();
+</script>
 <!-- pdf-lib для сборки PDF -->
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
