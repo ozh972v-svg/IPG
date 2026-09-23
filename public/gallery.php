@@ -856,7 +856,7 @@ if ($viewMode) {
               <?php endforeach; ?>
 
             </div>
-          </div>
+          </details>
         <?php endforeach; ?>
 
       <?php endif; ?>
