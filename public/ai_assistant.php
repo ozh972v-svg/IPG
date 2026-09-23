@@ -6,10 +6,89 @@ $user = current_user();
 if (!$user) { header('Location: login.php'); exit; }
 $pdo = get_db();
 
+/* Маппинг моделей КОМПАС → номер шасси */
+$COMPASS_MODELS = [
+    '5'  => '43085',
+    '6'  => '43086',
+    '9'  => '43089',
+    '12' => '43082',
+];
+
+/**
+ * Резолвит VIN в номер комплектации через 1С:ГОА.
+ * Пробует: VINShassis → VINTS → NumberChassis (последние 7 цифр).
+ */
+function resolveComplectationByVin(string $vin, PDO $pdo): ?string {
+    static $cache = [];
+    if (isset($cache[$vin])) return $cache[$vin];
+
+    $login    = getenv('ONEC_LOGIN');
+    $password = getenv('ONEC_PASSWORD');
+    if (!$login || !$password) { $cache[$vin] = null; return null; }
+
+    $attempts = [];
+    if (mb_strlen($vin) >= 10) {
+        $attempts[] = ['method' => 'VINShassis', 'value' => $vin];
+        $attempts[] = ['method' => 'VINTS',      'value' => $vin];
+    }
+    if (preg_match('/(\d{7})$/', $vin, $m)) {
+        $attempts[] = ['method' => 'NumberChassis', 'value' => $m[1]];
+    }
+    if (mb_strlen($vin) < 10) {
+        $attempts[] = ['method' => 'NumberChassis', 'value' => $vin];
+    }
+
+    foreach ($attempts as $a) {
+        $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $a['method']
+             . '?Number=' . urlencode($a['value']);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
+            CURLOPT_USERPWD        => $login . ':' . $password,
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode !== 200 || !$response) continue;
+
+        $data = json_decode($response, true);
+        $raw  = trim((string)($data['Car']['TheDesignCodeOfTheConfiguration'] ?? ''));
+        if ($raw === '') continue;
+
+        $normalized = rtrim($raw, "- \t\n\r\0\x0B");
+        $candidates = array_values(array_unique(array_filter([$raw, $normalized])));
+
+        $ph = []; $lp = [];
+        foreach ($candidates as $i => $v) { $k = ':cv'.$i; $ph[] = $k; $lp[$k] = $v; }
+        $st = $pdo->prepare("SELECT complectation FROM work_operations
+                              WHERE complectation IN (" . implode(',', $ph) . ")
+                              LIMIT 1");
+        $st->execute($lp);
+        $found = $st->fetchColumn();
+
+        if ($found !== false && $found !== null && $found !== '') {
+            $cache[$vin] = (string)$found;
+            return $cache[$vin];
+        }
+        $cache[$vin] = $normalized;
+        return $cache[$vin];
+    }
+
+    $cache[$vin] = null;
+    return null;
+}
+
 /* ============================================================
-   ДИАГНОСТИКА: ai_assistant.php?debug=LT3700110
-   Показывает сырые строки из БД по этому operation_code
+   ДИАГНОСТИКА
    ============================================================ */
+
+/* ?debug=LT3700110 — сырые строки из work_operations */
 if (!empty($_GET['debug']) && $user['is_admin']) {
     header('Content-Type: application/json; charset=utf-8');
     $code = trim((string)$_GET['debug']);
@@ -29,14 +108,68 @@ if (!empty($_GET['debug']) && $user['is_admin']) {
     exit;
 }
 
-/* Маппинг моделей КОМПАС → номер шасси */
-$COMPASS_MODELS = [
-    '5'  => '43085',
-    '6'  => '43086',
-    '9'  => '43089',
-    '12' => '43082',
-];
+/* ?debug_vin=XTC... — что 1С отдаёт по этому VIN */
+if (!empty($_GET['debug_vin']) && $user['is_admin']) {
+    header('Content-Type: application/json; charset=utf-8');
+    $vin = strtoupper(trim((string)$_GET['debug_vin']));
 
+    $login    = getenv('ONEC_LOGIN');
+    $password = getenv('ONEC_PASSWORD');
+    $results  = [];
+
+    $attempts = [];
+    if (mb_strlen($vin) >= 10) {
+        $attempts[] = ['method' => 'VINShassis', 'value' => $vin];
+        $attempts[] = ['method' => 'VINTS',      'value' => $vin];
+    }
+    if (preg_match('/(\d{7})$/', $vin, $m)) {
+        $attempts[] = ['method' => 'NumberChassis', 'value' => $m[1]];
+    }
+    if (mb_strlen($vin) < 10) {
+        $attempts[] = ['method' => 'NumberChassis', 'value' => $vin];
+    }
+
+    foreach ($attempts as $a) {
+        $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $a['method']
+             . '?Number=' . urlencode($a['value']);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPAUTH       => CURLAUTH_BASIC,
+            CURLOPT_USERPWD        => $login . ':' . $password,
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+        ]);
+        $resp = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $design = null;
+        $carName = null;
+        if ($code === 200 && $resp) {
+            $j = json_decode($resp, true);
+            $design  = $j['Car']['TheDesignCodeOfTheConfiguration'] ?? null;
+            $carName = $j['Car']['Name'] ?? null;
+        }
+        $results[] = [
+            'method'        => $a['method'],
+            'value'         => $a['value'],
+            'http_code'     => $code,
+            'complectation' => $design,
+            'car_name'      => $carName,
+            'raw_first_500' => mb_substr((string)$resp, 0, 500),
+        ];
+    }
+
+    echo json_encode(['vin' => $vin, 'attempts' => $results], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    exit;
+}
+
+/* ============================================================
+   AJAX: обработка вопроса
+   ============================================================ */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -45,11 +178,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         echo json_encode(['ok' => false, 'error' => 'Слишком короткий вопрос']);
         exit;
     }
-    if (mb_strlen($question) > 600) {
-        $question = mb_substr($question, 0, 600);
-    }
+    if (mb_strlen($question) > 600) $question = mb_substr($question, 0, 600);
 
-    /* ---- 1. Распознаём модель (Компас N) ---- */
+    /* ---- Модель (Компас N) ---- */
     $chassis  = null;
     $modelTxt = null;
     if (preg_match('/компас\s*(\d+)/ui', $question, $m)) {
@@ -59,12 +190,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         }
     }
 
-    /* ---- 2. Бренд ---- */
+    /* ---- Бренд ---- */
     $brand = null;
     if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
     if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
 
-    /* ---- 3. Ключевые слова ---- */
+    /* ---- Ключевые слова ---- */
     $stopWords = [
         'какие','какая','какой','каких','работы','работа','работ','работу','работой','работе','работам','работах',
         'найди','найти','поищи','поиск','покажи','показать','дай','дайте','подбери','подскажи','скажи','объясни',
@@ -89,7 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     }
     $keywords = array_values(array_unique($keywords));
 
-    /* ---- 4. Явные идентификаторы ---- */
+    /* ---- Явные идентификаторы ---- */
     $vinCandidate = null;
     if (preg_match('/\b([A-HJ-NPR-Z0-9]{17})\b/i', $question, $m)) {
         $vinCandidate = strtoupper($m[1]);
@@ -99,11 +230,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         $numberCandidate = $m[1];
     }
 
-        /* ============================================================
-       5. Поиск по справочнику работ
-       Сортировка по релевантности В SQL (а не в PHP), чтобы не терять
-       нужные работы из-за LIMIT. Работы Компас 9 находятся по фильтру
-       complectation = 43089.
+    /* ---- Резолв VIN → комплектация через 1С ---- */
+    $resolvedComplectation = null;
+    $resolveError = null;
+    if ($vinCandidate) {
+        $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
+        if ($resolvedComplectation === null) {
+            $resolveError = 'Не удалось получить комплектацию по VIN из 1С.';
+        }
+    }
+
+    /* ============================================================
+       Поиск по справочнику работ
        ============================================================ */
     $works = [];
     $canSearchWorks = !empty($keywords) || $vinCandidate;
@@ -112,8 +250,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
         $params = [];
 
-        /* Жёсткий фильтр по шасси, если распознали модель (Компас 9 → 43089) */
-        if ($chassis !== null) {
+        if ($resolvedComplectation !== null) {
+            $where[] = 'complectation = :comp';
+            $params[':comp'] = $resolvedComplectation;
+        } elseif ($chassis !== null) {
             $where[] = 'complectation = :chassis';
             $params[':chassis'] = $chassis;
         } elseif ($brand !== null) {
@@ -145,7 +285,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         $stmt->execute($params);
         $rows = $stmt->fetchAll();
 
-        /* Дедуп по operation_code — оставляем самое релевантное (оно сверху) */
         $seen = [];
         foreach ($rows as $r) {
             if (isset($seen[$r['operation_code']])) continue;
@@ -155,8 +294,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             if (count($works) >= 50) break;
         }
     }
+
     /* ============================================================
-       6. Поиск по рекламационным актам (keys)
+       Поиск по рекламационным актам (keys)
        ============================================================ */
     $raList = [];
     try {
@@ -206,14 +346,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     } catch (Throwable $e) {}
 
     /* ============================================================
-       7. Контекст для LLM
+       Контекст для LLM
        ============================================================ */
     $ctxParts = [];
 
     $filterInfo = '';
-    if ($brand !== null)   $filterInfo .= 'Бренд: ' . $brand . '. ';
-    if ($modelTxt)         $filterInfo .= 'Модель: ' . $modelTxt . ' (шасси ' . $chassis . '). ';
-    if ($vinCandidate)     $filterInfo .= 'VIN: ' . $vinCandidate . '. ';
+    if ($brand !== null)         $filterInfo .= 'Бренд: ' . $brand . '. ';
+    if ($modelTxt)               $filterInfo .= 'Модель: ' . $modelTxt . ' (шасси ' . $chassis . '). ';
+    if ($vinCandidate)           $filterInfo .= 'VIN: ' . $vinCandidate . '. ';
+    if ($resolvedComplectation)  $filterInfo .= 'Комплектация: ' . $resolvedComplectation . '. ';
+    if ($resolveError)           $filterInfo .= 'ОШИБКА РЕЗОЛВА: ' . $resolveError . ' ';
     if ($filterInfo) $ctxParts[] = "=== ФИЛЬТРЫ, ПРИМЕНЁННЫЕ К ПОИСКУ ===\n" . trim($filterInfo);
 
     if (!empty($works)) {
@@ -225,9 +367,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
             $br   = $w['brand'] ? ' | ' . $w['brand'] : '';
             $lines[] = $op . $w['name'] . $n . $comp . $br;
         }
-        $ctxParts[] = "=== СПРАВОЧНИК РАБОТ (отсортирован по релевантности, сверху самые похожие) ===\n" . implode("\n", $lines);
+        $ctxParts[] = "=== СПРАВОЧНИК РАБОТ (отсортирован по релевантности) ===\n" . implode("\n", $lines);
     } else {
-        $ctxParts[] = "=== СПРАВОЧНИК РАБОТ ===\nНичего не найдено по запросу.";
+        if ($resolvedComplectation) {
+            $ctxParts[] = "=== СПРАВОЧНИК РАБОТ ===\n"
+                . "Для комплектации $resolvedComplectation работ по запросу не найдено. "
+                . "Возможно, они ещё не загружены — откройте works.php и введите этот VIN.";
+        } else {
+            $ctxParts[] = "=== СПРАВОЧНИК РАБОТ ===\nНичего не найдено по запросу.";
+        }
     }
 
     if (!empty($raList)) {
@@ -247,7 +395,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
     $context = implode("\n\n", $ctxParts);
 
     /* ============================================================
-       8. Запрос к LLM
+       Запрос к LLM
        ============================================================ */
     $apiKey  = getenv('AI_API_KEY');
     $baseUrl = rtrim((string)getenv('AI_BASE_URL'), '/');
@@ -260,15 +408,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
 
     $system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.\n"
             . "Тебе дают контекст: фильтры поиска, справочник работ и записи рекламационных актов (РА/VIN).\n"
-            . "Работы в справочнике уже отсортированы по релевантности — самые похожие сверху.\n"
-            . "ВАЖНО: не говори «точного совпадения нет», если в списке есть работа с совпадающим ключевым словом.\n"
-            . "Например, на запрос «замена генератора» — работа «Замена генератора» в списке ЕСТЬ, просто перечисли её.\n"
+            . "Работы уже отфильтрованы по комплектации (если был VIN) или по шасси/бренду.\n"
+            . "Работы отсортированы по релевантности — самые похожие сверху.\n"
             . "\n"
             . "ПРАВИЛА:\n"
-            . "1. Сначала ищи ответ в контексте. Если есть подходящие работы — перечисли их с кодами и названиями.\n"
-            . "2. Если совсем нет — ответь своими знаниями и начни с «⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
-            . "3. Не выдумывай коды и номера, которых нет в контексте.\n"
-            . "4. Отвечай кратко, по-русски.";
+            . "1. Перечисли работы из контекста, которые подходят под вопрос. Не добавляй ничего от себя.\n"
+            . "2. Если работ по комплектации нет — честно скажи и предложи загрузить их через works.php.\n"
+            . "3. Если в контексте совсем пусто и нет специфического запроса — можешь ответить своими знаниями, "
+            . "начав со строки «⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
+            . "4. Не выдумывай коды и номера, которых нет в контексте.\n"
+            . "5. Отвечай кратко, по-русски.";
 
     $userMsg = "Вопрос пользователя:\n{$question}\n\n"
              . "Контекст из базы (только это — источник правды):\n{$context}";
@@ -319,10 +468,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         'works'   => $works,
         'ra'      => $raList,
         'filters' => [
-            'brand'   => $brand,
-            'model'   => $modelTxt,
-            'chassis' => $chassis,
-            'vin'     => $vinCandidate,
+            'brand'         => $brand,
+            'model'         => $modelTxt,
+            'chassis'       => $chassis,
+            'vin'           => $vinCandidate,
+            'complectation' => $resolvedComplectation,
+            'resolveError'  => $resolveError,
         ],
     ], JSON_UNESCAPED_UNICODE);
     exit;
@@ -360,13 +511,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
   .example:hover{background:#dbeafe}
   .filters{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
   .filter-badge{background:#e0e7ff;color:#3730a3;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}
-  table.works{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
-  table.works th{background:#f9fafb;color:#666;font-weight:600;text-align:left;padding:9px 12px;border-bottom:2px solid #e5e7eb;font-size:11px;text-transform:uppercase}
-  table.works td{padding:9px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
-  table.works tr:hover td{background:#fafbff}
-  .op-code{padding:2px 8px;border-radius:5px;font-size:12px;font-weight:700;white-space:nowrap;font-family:'SF Mono',Consolas,monospace;background:#fef3c7;color:#92400e}
-  .ra-code{padding:2px 8px;border-radius:5px;font-size:12px;font-weight:700;white-space:nowrap;font-family:'SF Mono',Consolas,monospace;background:#e0e7ff;color:#3730a3}
-  .section-head{font-size:15px;color:#1e3a8a;font-weight:700;margin:22px 0 0;}
+  .filter-badge.error{background:#fef2f2;color:#991b1b;}
 </style>
 </head>
 <body>
@@ -415,7 +560,6 @@ function fillQ(el) {
   document.getElementById('q').value = el.textContent.trim();
   document.getElementById('q').focus();
 }
-
 function escapeHtml(s) {
   const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML;
 }
@@ -447,21 +591,23 @@ async function askAI(e) {
     }
 
     let html = '';
-
-    // Бейджи фильтров
     const f = data.filters || {};
     const badges = [];
-    if (f.brand)   badges.push('Бренд: ' + f.brand);
-    if (f.model)   badges.push('Модель: ' + f.model);
-    if (f.chassis) badges.push('Шасси: ' + f.chassis);
-    if (f.vin)     badges.push('VIN: ' + f.vin);
+    if (f.brand)         badges.push('Бренд: ' + f.brand);
+    if (f.model)         badges.push('Модель: ' + f.model);
+    if (f.chassis)       badges.push('Шасси: ' + f.chassis);
+    if (f.vin)           badges.push('VIN: ' + f.vin);
+    if (f.complectation) badges.push('Комплектация: ' + f.complectation);
     if (badges.length) {
       html += '<div class="filters">' + badges.map(b => '<span class="filter-badge">' + escapeHtml(b) + '</span>').join('') + '</div>';
     }
+    if (f.resolveError) {
+      html += '<div class="filters"><span class="filter-badge error">⚠️ ' + escapeHtml(f.resolveError) + '</span></div>';
+    }
 
     html += '<div class="answer-box">' + escapeHtml(data.answer) + '</div>';
-    result.innerHTML = html;
 
+    result.innerHTML = html;
   } catch (err) {
     result.innerHTML = '<div class="error-box">❌ Ошибка запроса: ' + escapeHtml(err.message) + '</div>';
   } finally {
