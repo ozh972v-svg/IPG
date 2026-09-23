@@ -230,10 +230,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['q'])) {
         $numberCandidate = $m[1];
     }
 
-    /* ---- Резолв VIN → комплектация через 1С ---- */
+       /* ---- Комплектация из POST (со страницы works.php / works_compass.php) ---- */
+    $postComplectation = trim((string)($_POST['complectation'] ?? ''));
     $resolvedComplectation = null;
     $resolveError = null;
-    if ($vinCandidate) {
+
+    if ($postComplectation !== '') {
+        $resolvedComplectation = $postComplectation;
+    } elseif ($vinCandidate) {
         $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
         if ($resolvedComplectation === null) {
             $resolveError = 'Не удалось получить комплектацию по VIN из 1С.';
