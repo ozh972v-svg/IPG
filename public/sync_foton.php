@@ -27,7 +27,14 @@ function fixEncoding($s) {
     if ($converted !== false) return $converted;
     return $s;
 }
-
+/**
+ * Обрезает строку до N символов. Если длиннее — обрезает и логирует.
+ */
+function fixLength($s, $max = 490) {
+    if ($s === null) return null;
+    if (mb_strlen($s) <= $max) return $s;
+    return mb_substr($s, 0, $max);
+}
 $result = null;
 $error  = null;
 
