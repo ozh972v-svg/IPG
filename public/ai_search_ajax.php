@@ -248,8 +248,16 @@ $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL
 $params = [];
 
 if ($resolvedComplectation !== null) {
-    $where[] = 'complectation = :comp';
-    $params[':comp'] = $resolvedComplectation;
+    /* Проверяем: если это семейство FOTON (AUMAN, AUMARK, TOANO, ...),
+       используем LIKE, чтобы захватить все модели. Иначе — точное совпадение. */
+    $fotonFamilies = ['AUMAN','AUMARK','TOANO','SAUVANA','GRATOUR','TUNLAND','VIEW','SUP','Miler','LOXA','TM'];
+    if ($brand === 'FOTON' && in_array($resolvedComplectation, $fotonFamilies, true)) {
+        $where[] = 'complectation LIKE :comp';
+        $params[':comp'] = $resolvedComplectation . '%';
+    } else {
+        $where[] = 'complectation = :comp';
+        $params[':comp'] = $resolvedComplectation;
+    }
 } elseif ($contextChassis !== null) {
     $where[] = 'complectation = :chassis';
     $params[':chassis'] = $contextChassis;
