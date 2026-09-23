@@ -733,16 +733,6 @@ if ($viewMode) {
           <input type="text" name="description" class="form-input" required placeholder="Например: течь гидроцилиндра подъёма кабины" maxlength="250">
         </div>
 
-        <div class="form-row">
-          <label class="form-label">Гос. номер (необязательно)</label>
-          <input type="text" name="gos_number" class="form-input" placeholder="Например: А123БВ 116">
-        </div>
-
-        <div class="form-row">
-          <label class="form-label">Номер заказ-наряда (необязательно)</label>
-          <input type="text" name="order_number" class="form-input" placeholder="Например: ЗН-00456">
-        </div>
-
         <button type="submit" class="btn btn-green">+ Добавить</button>
       </form>
     </div>
