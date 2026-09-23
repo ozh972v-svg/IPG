@@ -131,15 +131,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['csv']['tmp_name']))
                 }
             }
 
-            /* Подгруппа (второй уровень) */
+                        /* Подгруппа (второй уровень) */
             if ($subgroup !== '') {
                 $subCode = 'FOTON_' . $subgroup;
                 if (!isset($subgroupsSeen[$subCode])) {
                     $subgroupsSeen[$subCode] = true;
                     $insertGroup->execute([
-                        ':code'   => $subCode,
-                        ':parent' => $group !== '' ? 'FOTON_' . $group : null,
-                        ':name'   => $subgroup,
+                        ':code'   => fixLength($subCode),
+                        ':parent' => $group !== '' ? fixLength('FOTON_' . $group) : null,
+                        ':name'   => fixLength($subgroup),
                         ':ts'     => $now,
                     ]);
                     $total++;
