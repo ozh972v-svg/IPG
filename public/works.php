@@ -9,7 +9,7 @@ if (!$user) { header('Location: login.php'); exit; }
 $pdo = get_db();
 
 /* ============================================================
-   1. ПОИСК ПО VIN — заменяет старый выбор модели
+   1. ПОИСК ПО VIN
    ============================================================ */
 $vin = trim($_GET['vin'] ?? '');
 $vinError = null;
@@ -57,11 +57,7 @@ if ($vin !== '') {
                 } else {
                     $rawCode = trim($code);
                     $normalized = rtrim($rawCode, "- \t\n\r\0\x0B");
-                    $candidates = array_values(array_unique(array_filter([
-                        $rawCode,
-                        $normalized,
-                    ])));
-
+                    $candidates = array_values(array_unique(array_filter([$rawCode, $normalized])));
                     $complectation = $normalized;
                     if ($candidates) {
                         $ph = []; $lp = [];
@@ -91,10 +87,9 @@ if ($complectation === null && $vin === '') {
 }
 
 /* ============================================================
-   1.5 АВТОЗАГРУЗКА РАБОТ ИЗ 1С, ЕСЛИ ИХ НЕТ В БАЗЕ
+   1.5 АВТОЗАГРУЗКА
    ============================================================ */
 $autoSyncInfo = null;
-
 if ($complectation !== null
     && empty($_GET['find_prereq'])
     && empty($_GET['find_pair'])) {
@@ -102,9 +97,7 @@ if ($complectation !== null
     $cntStmt = $pdo->prepare("SELECT COUNT(*) FROM work_operations
                                WHERE complectation = :c AND deleted = FALSE");
     $cntStmt->execute([':c' => $complectation]);
-    $existingCount = (int)$cntStmt->fetchColumn();
-
-    if ($existingCount === 0) {
+    if ((int)$cntStmt->fetchColumn() === 0) {
         require_once __DIR__ . '/sync_works_lib.php';
         $res = sync_works_for_complectation($complectation, '2021-01-01', date('Y-m-d'));
         if (!empty($res['ok'])) {
@@ -121,16 +114,8 @@ if ($complectation !== null
 }
 
 /* ============================================================
-   2. КАТЕГОРИИ — 5 групп
+   2. Категория op-code (для цвета)
    ============================================================ */
-$CATEGORIES = [
-    'pre_sale'    => ['label' => 'Предпродажная подготовка',              'desc' => 'Подготовка автотехники к продаже/передаче',                        'letters' => ['B'],            'icon' => 'B', 'color' => '#ea580c'],
-    'warranty'    => ['label' => 'Работы по гарантии',                    'desc' => 'Гарантийные работы',                                             'letters' => ['A','P','C','E'],'icon' => 'A', 'color' => '#16a34a'],
-    'maintenance' => ['label' => 'Техническое обслуживание',              'desc' => 'Регламентные и комплексные работы ТО',                            'letters' => ['T','X'],        'icon' => 'T', 'color' => '#ca8a04'],
-    'commercial'  => ['label' => 'Коммерческий ремонт',                   'desc' => 'Постовые и цеховые работы текущего ремонта',                      'letters' => ['P','C','E'],    'icon' => 'P', 'color' => '#2563eb'],
-    'otm'         => ['label' => 'Работы по организационно-техническим мероприятиям', 'desc' => 'Работы по доработке, выполняемые по решению ОТМ',   'letters' => ['M'],            'icon' => 'M', 'color' => '#9333ea'],
-];
-
 $DIAG_TRIGGERS = [
     'диагностика', 'диагностировать', 'поиск неисправност', 'поиск дефект',
     'определить неисправност', 'выявление неисправност',
@@ -139,7 +124,6 @@ $DIAG_TRIGGERS = [
     'проверить и при необходимости', 'дефектовка',
     'оценка состояния', 'оценить состояние', 'оценка качества',
 ];
-
 function opCategoryKey(?string $op, ?string $name = null): string {
     global $DIAG_TRIGGERS;
     if ($name !== null) {
@@ -153,20 +137,6 @@ function opCategoryKey(?string $op, ?string $name = null): string {
     $map = ['А'=>'A','A'=>'A','В'=>'B','B'=>'B','Т'=>'T','T'=>'T','Х'=>'X','X'=>'X',
             'Е'=>'E','E'=>'E','Р'=>'P','P'=>'P','С'=>'C','C'=>'C','М'=>'M','M'=>'M'];
     return $map[$first] ?? '';
-}
-
-function categoryGroupKeys(string $letter): array {
-    static $map = null;
-    if ($map === null) {
-        global $CATEGORIES;
-        $map = [];
-        foreach ($CATEGORIES as $grp => $cat) {
-            foreach ($cat['letters'] as $L) {
-                $map[$L][] = $grp;
-            }
-        }
-    }
-    return $map[$letter] ?? [];
 }
 
 /* ============================================================
@@ -254,23 +224,10 @@ if (!empty($_GET['find_pair'])) {
 }
 
 /* ============================================================
-   5. СПИСОК КОМПЛЕКТАЦИЙ
-   ============================================================ */
-$complectations = $pdo->query("
-    SELECT complectation,
-           COUNT(DISTINCT operation_code) FILTER (WHERE it_is_group = FALSE AND deleted = FALSE) AS works_cnt
-      FROM work_operations
-     WHERE complectation IS NOT NULL AND complectation <> '' AND complectation <> '—'
-     GROUP BY complectation
-     ORDER BY complectation
-")->fetchAll();
-
-/* ============================================================
    6. ДЕРЕВО ГРУПП
    ============================================================ */
 $q         = trim($_GET['q'] ?? '');
 $groupCode = trim($_GET['group'] ?? '');
-$category  = trim($_GET['cat'] ?? '');
 $page      = max(1, (int)($_GET['page'] ?? 1));
 $perPage   = 100;
 
@@ -292,6 +249,11 @@ foreach ($allGroups as $g) {
     } elseif (strlen($codeOnly) === 4) {
         $subgroups[$parentOnly][] = $g + ['code_only' => $codeOnly];
     }
+}
+
+/* Автовыбор первой группы, если не указана */
+if ($complectation !== null && $groupCode === '' && !empty($topGroups)) {
+    $groupCode = $topGroups[0]['code_only'];
 }
 
 /* ============================================================
@@ -317,23 +279,10 @@ if ($groupCode !== '' && $complectation !== null) {
     }
     $params[':g'] = $gFull;
 }
-if ($category !== '' && isset($CATEGORIES[$category])) {
-    $letters = $CATEGORIES[$category]['letters'];
-    $rus = ['A'=>'А','B'=>'В','C'=>'С','E'=>'Е','M'=>'М','P'=>'Р','T'=>'Т','X'=>'Х'];
-    $ors = [];
-    foreach ($letters as $i => $L) {
-        $k1 = ':cL'.$i.'_en'; $k2 = ':cL'.$i.'_ru';
-        $ors[] = "w.operation_code LIKE $k1";
-        $ors[] = "w.operation_code LIKE $k2";
-        $params[$k1] = $L . '%';
-        $params[$k2] = ($rus[$L] ?? $L) . '%';
-    }
-    $where[] = '(' . implode(' OR ', $ors) . ')';
-}
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
 $total = 0; $rows = []; $pages = 1;
-if ($complectation !== null && ($category !== '' || $q !== '')) {
+if ($complectation !== null) {
     $stmt = $pdo->prepare("SELECT COUNT(DISTINCT w.operation_code) FROM work_operations w $whereSql");
     $stmt->execute($params);
     $total = (int)$stmt->fetchColumn();
@@ -349,40 +298,6 @@ if ($complectation !== null && ($category !== '' || $q !== '')) {
     $stmt->execute($params);
     $rows = $stmt->fetchAll();
     $pages = max(1, (int)ceil($total / $perPage));
-}
-
-/* Счётчики категорий */
-$catCountsInGroup = array_fill_keys(array_keys($CATEGORIES), 0);
-$catCountsAll     = array_fill_keys(array_keys($CATEGORIES), 0);
-
-if ($complectation !== null) {
-    $stmt = $pdo->prepare("SELECT DISTINCT operation_code, name FROM work_operations
-                            WHERE it_is_group = FALSE AND deleted = FALSE AND complectation = :c");
-    $stmt->execute([':c' => $complectation]);
-    foreach ($stmt->fetchAll() as $r) {
-        $letter = opCategoryKey($r['operation_code'], $r['name']);
-        foreach (categoryGroupKeys($letter) as $grp) {
-            $catCountsAll[$grp]++;
-        }
-    }
-
-    if ($groupCode !== '') {
-        $gFull = $groupCode . '@' . $complectation;
-        $stmt = $pdo->prepare("SELECT DISTINCT w.operation_code, w.name
-                                 FROM work_operations w
-                                WHERE w.it_is_group = FALSE AND w.deleted = FALSE AND w.complectation = :c
-                                  AND (w.parent_code = :g OR w.parent_code IN (
-                                        SELECT code FROM work_operations
-                                        WHERE parent_code = :g AND it_is_group = TRUE AND complectation = :c2
-                                      ))");
-        $stmt->execute([':c' => $complectation, ':c2' => $complectation, ':g' => $gFull]);
-        foreach ($stmt->fetchAll() as $r) {
-            $letter = opCategoryKey($r['operation_code'], $r['name']);
-            foreach (categoryGroupKeys($letter) as $grp) {
-                $catCountsInGroup[$grp]++;
-            }
-        }
-    }
 }
 
 /* Общая статистика */
@@ -432,7 +347,6 @@ function fmtNorm($n) {
   .container{max-width:1700px;margin:0 auto}
   .card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:12px}
   h1{font-size:22px;margin:0 0 8px} h2{font-size:16px;margin:0 0 12px;color:#1e3a8a}
-  h3{font-size:14px;margin:0 0 10px;color:#1e3a8a}
   .top-bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
   .user-info{font-size:13px;color:#666} .user-info b{color:#2563eb}
   .logout{color:#dc2626;text-decoration:none;font-size:13px;margin-left:12px}
@@ -449,20 +363,8 @@ function fmtNorm($n) {
   .vin-bar input[type=text]{flex:1;min-width:260px;padding:10px 14px;border:1.5px solid #93c5fd;border-radius:8px;font-family:inherit;font-size:14px;background:#fff;color:#1e3a8a}
   .vin-bar input[type=text]:focus{outline:none;border-color:#2563eb}
   .vin-info{font-size:13px;color:#1e3a8a;margin-top:8px;padding:6px 10px;background:#dbeafe;border-radius:6px;display:inline-block}
-  .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-  .cat-card{border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all 0.15s;text-decoration:none;color:inherit;display:block;background:#fff;position:relative}
-  .cat-card:hover{border-color:#2563eb;background:#f8faff;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,0.08)}
-  .cat-card.active{background:#eff6ff;border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
-  .cat-card.empty{opacity:0.4;cursor:not-allowed;pointer-events:none}
-  .cat-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-  .cat-letter{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#fff;flex-shrink:0}
-  .cat-title{font-weight:700;font-size:13px;color:#1a1a1a;line-height:1.3}
-  .cat-count{margin-left:auto;background:#f3f4f6;color:#666;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;flex-shrink:0}
-  .cat-card.active .cat-count{background:#2563eb;color:#fff}
-  .cat-desc{font-size:11px;color:#666;line-height:1.4;margin-left:42px}
   .breadcrumbs{font-size:13px;color:#666;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .breadcrumbs a{color:#2563eb;text-decoration:none}
-  .breadcrumbs a:hover{text-decoration:underline}
   .breadcrumbs .sep{color:#cbd5e1}
   .layout{display:grid;grid-template-columns:320px 1fr 360px;gap:12px;align-items:start}
   @media (max-width:1200px){.layout{grid-template-columns:280px 1fr;} .basket{grid-column:1/-1}}
@@ -540,11 +442,13 @@ function fmtNorm($n) {
   .prereq-sub{margin-left:24px;font-size:10px;color:#888;padding:4px 0 0;}
   .copy-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#16a34a;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;pointer-events:none}
   .copy-msg.show{opacity:1}
-  .step-hint{font-size:13px;color:#666;margin-bottom:12px;padding:8px 12px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb}
+  .step-hint{font-size:13px;color:#666;margin-bottom:12px;padding:10px 14px;background:#f9fafb;border-radius:8px;border-left:3px solid #2563eb;line-height:1.55}
+  .step-hint b{color:#1e3a8a}
 
-  /* === AI-модалка === */
+  /* === AI === */
   .ai-btn{background:#7c3aed;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
-  .ai-btn:hover{opacity:.9}
+  .ai-btn:hover:not(:disabled){opacity:.9}
+  .ai-btn:disabled{background:#cbd5e1;color:#94a3b8;cursor:not-allowed}
   .ai-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:3000;padding:20px}
   .ai-modal-overlay.active{display:flex}
   .ai-modal{background:#fff;border-radius:14px;max-width:800px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}
@@ -569,11 +473,21 @@ function fmtNorm($n) {
         <a href="logout.php" class="logout">Выйти</a>
       </div>
     </div>
-    <div class="btn-row">
+    <div class="btn-row" style="margin-bottom:12px;">
       <a href="index.html" class="btn btn-secondary btn-small">← На рабочее место</a>
       <a href="search_vin.php" class="btn btn-secondary btn-small">🔍 Поиск по VIN — 1С:ГОА</a>
       <?php if ($user['is_admin']): ?>
         <a href="sync.php" class="btn btn-small">📥 Загрузка справочника</a>
+      <?php endif; ?>
+    </div>
+
+    <div class="step-hint">
+      <?php if ($complectation === null): ?>
+        <b>Шаг 1.</b> Введите VIN шасси (17 символов или последние 7 цифр) в поле ниже и нажмите <b>«Найти работы»</b>.<br>
+        <b>Шаг 2.</b> После появления списка работ станет доступна кнопка <b>🤖 Спросить ИИ</b> — задавайте вопросы по этой комплектации.
+      <?php else: ?>
+        <b>Комплектация:</b> <?= e($complectation) ?><?php if ($lastSync): ?> · обновлено <?= e(fmtTs($lastSync)) ?><?php endif; ?>.
+        Слева выберите группу — работы появятся справа. Кнопка <b>🤖 Спросить ИИ</b> активна — задавайте вопросы по этой комплектации.
       <?php endif; ?>
     </div>
 
@@ -586,7 +500,9 @@ function fmtNorm($n) {
         <?php if ($vin !== '' || $complectation !== null): ?>
           <a href="works.php" class="btn btn-secondary btn-small">Сбросить</a>
         <?php endif; ?>
-        <button type="button" class="ai-btn" onclick="openAiModal()">🤖 Спросить ИИ</button>
+        <button type="button" class="ai-btn"
+                <?= $complectation === null ? 'disabled title="Сначала введите VIN и нажмите «Найти работы»"' : '' ?>
+                onclick="openAiModal()">🤖 Спросить ИИ</button>
       </form>
       <?php if ($vinError): ?>
         <div class="vin-info" style="background:#fef2f2;color:#dc2626;">❌ <?= e($vinError) ?></div>
@@ -605,13 +521,12 @@ function fmtNorm($n) {
 
   <?php if ($complectation === null): ?>
     <div class="card">
-      <h2>🔍 Введите VIN</h2>
-      <div class="step-hint">
-        Введите VIN шасси в поле выше, чтобы система нашла комплектацию через 1С:ГОА и показала работы.
-        Можно вводить как полный VIN (17 символов), так и последние 7 цифр номера шасси.
-        <br><br>
-        <b>Первый раз по новой комплектации</b> может занять 30–90 секунд: система автоматически
-        подтянет работы из 1С:ГОА.
+      <h2>🔍 Как пользоваться</h2>
+      <div class="step-hint" style="border-left-color:#16a34a;">
+        <b>1.</b> Введите VIN шасси в поле выше.<br>
+        <b>2.</b> Нажмите <b>«Найти работы»</b>. Первый раз по новой комплектации может занять 30–90 секунд — система автоматически подтянет работы из 1С:ГОА.<br>
+        <b>3.</b> Выберите группу слева — работы появятся справа.<br>
+        <b>4.</b> Нажмите <b>🤖 Спросить ИИ</b>, чтобы задать вопрос по справочнику: «найди работу по замене генератора», «какие работы по тормозам» и т.п.
       </div>
       <?php if (!$vin): ?>
         <p style="color:#888;font-size:14px;margin:0;">
@@ -627,11 +542,6 @@ function fmtNorm($n) {
       <div class="card">
         <h2>📁 Группы</h2>
         <div class="tree">
-          <a href="?complectation=<?= urlencode($complectation) ?>"
-             class="tree-sub <?= $groupCode === '' ? 'selected' : '' ?>"
-             style="padding-left:10px;font-weight:700;color:#1e3a8a;background:<?= $groupCode === '' ? '#eff6ff' : 'transparent' ?>;">
-            🏠 Все группы
-          </a>
           <?php foreach ($topGroups as $g): ?>
             <?php $isOpen = ($groupCode === $g['code_only']) || strpos($groupCode, $g['code_only']) === 0; ?>
             <?php $sel = ($groupCode === $g['code_only']); ?>
@@ -662,127 +572,77 @@ function fmtNorm($n) {
       <!-- ЦЕНТР -->
       <div class="card">
         <div class="breadcrumbs">
-          <a href="?complectation=<?= urlencode($complectation) ?>">📁 Все группы</a>
           <?php if ($currentGroup): ?>
-            <span class="sep">›</span>
-            <a href="?complectation=<?= urlencode($complectation) ?>&group=<?= urlencode($groupCode) ?>"><?= e($currentGroup['name']) ?></a>
-          <?php endif; ?>
-          <?php if ($category && isset($CATEGORIES[$category])): ?>
-            <span class="sep">›</span>
-            <span><?= e($CATEGORIES[$category]['label']) ?></span>
+            <span>📁 <?= e($currentGroup['name']) ?></span>
           <?php endif; ?>
         </div>
 
-        <?php if ($groupCode === ''): ?>
-          <h2>📋 Шаг 1: выберите группу работ</h2>
-          <div class="step-hint">
-            Выберите группу в левом меню или кликните по категории ниже, чтобы увидеть работы по всем группам.
-          </div>
-          <h3>Или выберите сразу категорию:</h3>
-          <div class="cat-grid">
-            <?php foreach ($CATEGORIES as $key => $cat): ?>
-              <?php $cnt = (int)($catCountsAll[$key] ?? 0); ?>
-              <a class="cat-card <?= $cnt === 0 ? 'empty' : '' ?>"
-                 href="?complectation=<?= urlencode($complectation) ?>&cat=<?= urlencode($key) ?>">
-                <div class="cat-head">
-                  <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($cat['icon']) ?></div>
-                  <div class="cat-title"><?= e($cat['label']) ?></div>
-                  <div class="cat-count"><?= number_format($cnt, 0, '.', ' ') ?></div>
-                </div>
-                <div class="cat-desc"><?= e($cat['desc']) ?></div>
-              </a>
-            <?php endforeach; ?>
-          </div>
+        <h2>📋 Работы<?= $currentGroup ? ' — ' . e($currentGroup['name']) : '' ?></h2>
 
-        <?php elseif ($category === ''): ?>
-          <h2>📋 Шаг 2: выберите категорию в группе «<?= e($currentGroup['name'] ?? '') ?>»</h2>
-          <div class="step-hint">
-            Показаны только те категории, в которых есть работы внутри выбранной группы.
-          </div>
-          <div class="cat-grid">
-            <?php foreach ($CATEGORIES as $key => $cat): ?>
-              <?php $cnt = (int)($catCountsInGroup[$key] ?? 0); ?>
-              <a class="cat-card <?= $cnt === 0 ? 'empty' : '' ?>"
-                 href="?complectation=<?= urlencode($complectation) ?>&group=<?= urlencode($groupCode) ?>&cat=<?= urlencode($key) ?>">
-                <div class="cat-head">
-                  <div class="cat-letter" style="background:<?= e($cat['color']) ?>;"><?= e($cat['icon']) ?></div>
-                  <div class="cat-title"><?= e($cat['label']) ?></div>
-                  <div class="cat-count"><?= number_format($cnt, 0, '.', ' ') ?></div>
-                </div>
-                <div class="cat-desc"><?= e($cat['desc']) ?></div>
-              </a>
-            <?php endforeach; ?>
-          </div>
-
-        <?php else: ?>
-          <h2>📋 Шаг 3: работы — <?= e($CATEGORIES[$category]['label']) ?></h2>
-
-          <form method="get" style="margin-bottom:12px;">
-            <input type="hidden" name="complectation" value="<?= e($complectation) ?>">
-            <input type="hidden" name="group" value="<?= e($groupCode) ?>">
-            <input type="hidden" name="cat" value="<?= e($category) ?>">
-            <div class="search-bar">
-              <input type="text" name="q" id="worksQ" value="<?= e($q) ?>" placeholder="Поиск по названию или коду…">
-              <button type="submit" class="btn">🔍 Найти</button>
-              <button type="button" class="ai-btn" onclick="openAiModal(document.getElementById('worksQ').value)">🤖 Спросить ИИ</button>
-              <?php if ($q !== ''): ?>
-                <a href="?complectation=<?= urlencode($complectation) ?>&group=<?= urlencode($groupCode) ?>&cat=<?= urlencode($category) ?>" class="btn btn-secondary">Сбросить</a>
-              <?php endif; ?>
-            </div>
-          </form>
-
-          <?php if (!$rows): ?>
-            <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
-          <?php else: ?>
-            <table class="works">
-              <thead>
-                <tr>
-                  <th style="width:120px;">Код операции</th>
-                  <th>Наименование работы</th>
-                  <th style="width:80px;">Норма</th>
-                  <th style="width:90px;"></th>
-                </tr>
-              </thead>
-              <tbody>
-                <?php foreach ($rows as $r): ?>
-                  <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
-                  <tr>
-                    <td>
-                      <?php if ($r['operation_code']): ?>
-                        <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
-                          <?= e($r['operation_code']) ?>
-                        </span>
-                      <?php else: ?>—<?php endif; ?>
-                    </td>
-                    <td>
-                      <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
-                      <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
-                    </td>
-                    <td>
-                      <?php if ($r['norm_time'] !== null): ?>
-                        <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
-                      <?php else: ?>—<?php endif; ?>
-                    </td>
-                    <td>
-                      <button type="button" class="add-btn"
-                        data-code="<?= e($r['code']) ?>"
-                        data-op="<?= e($r['operation_code']) ?>"
-                        data-name="<?= e($r['name']) ?>"
-                        data-norm="<?= e((string)$r['norm_time']) ?>">➕</button>
-                    </td>
-                  </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
-
-            <?php if ($pages > 1): ?>
-              <div class="pagination">
-                <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
-                <span class="active"><?= $page ?></span>
-                <span>из <?= $pages ?></span>
-                <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
-              </div>
+        <form method="get" style="margin-bottom:12px;">
+          <input type="hidden" name="complectation" value="<?= e($complectation) ?>">
+          <input type="hidden" name="group" value="<?= e($groupCode) ?>">
+          <div class="search-bar">
+            <input type="text" name="q" id="worksQ" value="<?= e($q) ?>" placeholder="Поиск по названию или коду…">
+            <button type="submit" class="btn">🔍 Найти</button>
+            <button type="button" class="ai-btn" onclick="openAiModal(document.getElementById('worksQ').value)">🤖 Спросить ИИ</button>
+            <?php if ($q !== ''): ?>
+              <a href="?complectation=<?= urlencode($complectation) ?>&group=<?= urlencode($groupCode) ?>" class="btn btn-secondary">Сбросить</a>
             <?php endif; ?>
+          </div>
+        </form>
+
+        <?php if (!$rows): ?>
+          <div class="empty"><div class="big">🔍</div>Ничего не найдено</div>
+        <?php else: ?>
+          <table class="works">
+            <thead>
+              <tr>
+                <th style="width:120px;">Код операции</th>
+                <th>Наименование работы</th>
+                <th style="width:80px;">Норма</th>
+                <th style="width:90px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($rows as $r): ?>
+                <?php $catKey = opCategoryKey($r['operation_code'], $r['name']); ?>
+                <tr>
+                  <td>
+                    <?php if ($r['operation_code']): ?>
+                      <span class="op-code <?= $catKey ? 'cat-' . strtolower($catKey) : '' ?>">
+                        <?= e($r['operation_code']) ?>
+                      </span>
+                    <?php else: ?>—<?php endif; ?>
+                  </td>
+                  <td>
+                    <div class="work-name"><?= e($r['name'] ?: '—') ?></div>
+                    <?php if ($r['eng_name']): ?><div class="work-eng"><?= e($r['eng_name']) ?></div><?php endif; ?>
+                  </td>
+                  <td>
+                    <?php if ($r['norm_time'] !== null): ?>
+                      <span class="norm-time"><?= e(fmtNorm($r['norm_time'])) ?> ч</span>
+                    <?php else: ?>—<?php endif; ?>
+                  </td>
+                  <td>
+                    <button type="button" class="add-btn"
+                      data-code="<?= e($r['code']) ?>"
+                      data-op="<?= e($r['operation_code']) ?>"
+                      data-name="<?= e($r['name']) ?>"
+                      data-norm="<?= e((string)$r['norm_time']) ?>">➕</button>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+
+          <?php if ($pages > 1): ?>
+            <div class="pagination">
+              <?php if ($page > 1): ?><a href="<?= e(buildUrl(['page' => $page - 1])) ?>">← Назад</a><?php endif; ?>
+              <span class="active"><?= $page ?></span>
+              <span>из <?= $pages ?></span>
+              <?php if ($page < $pages): ?><a href="<?= e(buildUrl(['page' => $page + 1])) ?>">Вперёд →</a><?php endif; ?>
+            </div>
           <?php endif; ?>
         <?php endif; ?>
       </div>
@@ -820,7 +680,6 @@ function fmtNorm($n) {
   </div>
 </div>
 
-<!-- AI-модалка -->
 <div class="ai-modal-overlay" id="aiModal">
   <div class="ai-modal">
     <h3>🤖 Помощник ИИ <button type="button" class="btn btn-secondary btn-small" onclick="closeAiModal()" style="margin-left:auto;">✕</button></h3>
@@ -847,7 +706,6 @@ function basketLoad() {
   if (!Array.isArray(basket)) basket = [];
 }
 function basketSave() { localStorage.setItem(BASKET_KEY, JSON.stringify(basket)); }
-
 function escapeHtml(s) {
   const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML;
 }
@@ -859,7 +717,6 @@ function basketRender() {
   const actions = document.getElementById('basketActions');
 
   count.textContent = basket.length;
-
   let sum = 0;
   basket.forEach(b => { if (b.norm) sum += parseFloat(b.norm); });
   total.textContent = sum.toFixed(2).replace('.', ',');
@@ -871,7 +728,6 @@ function basketRender() {
     return;
   }
   actions.style.display = 'flex';
-
   list.innerHTML = basket.map((b, i) => `
     <li class="basket-item">
       <div class="basket-item-content">
@@ -892,10 +748,7 @@ function basketRender() {
 
 function basketAdd(item) {
   if (basket.some(b => b.code === item.code)) return false;
-  basket.push(item);
-  basketSave();
-  basketRender();
-  return true;
+  basket.push(item); basketSave(); basketRender(); return true;
 }
 function basketRemove(i) { basket.splice(i, 1); basketSave(); basketRender(); }
 function basketClear() {
@@ -936,8 +789,7 @@ function extractPrereqObjects(name) {
     let inner = m[1];
     inner = inner
       .replace(/\b(и\s+разобран[а-я]*|разобран[а-я]*|с\s+автомобиля\s+снят[а-я]*|снят[а-я]*|отсоединён[а-я]*|установлен[а-я]*)\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+      .replace(/\s+/g, ' ').trim();
     if (inner.length >= 3) results.push(inner);
   }
   return results;
@@ -945,7 +797,6 @@ function extractPrereqObjects(name) {
 
 async function findDependencies(item, existingCodes, depth) {
   if (depth > 2) return null;
-
   const objects = extractPrereqObjects(item.name);
   if (objects.length === 0) return null;
 
@@ -967,8 +818,7 @@ async function findDependencies(item, existingCodes, depth) {
   const seen = new Set();
   allPrereqs = allPrereqs.filter(p => {
     if (seen.has(p.code)) return false;
-    seen.add(p.code);
-    return true;
+    seen.add(p.code); return true;
   });
   if (allPrereqs.length === 0) return null;
 
@@ -999,12 +849,10 @@ async function findDependencies(item, existingCodes, depth) {
     const subCodes = new Set([...existingCodes, p.code, ...allPrereqs.map(x => x.code)]);
     const subResult = await findDependencies(
       { code: p.code, name: p.name, operation_code: p.operation_code, norm_time: p.norm_time },
-      subCodes,
-      depth + 1
+      subCodes, depth + 1
     );
     if (subResult) { subResult.parentCode = p.code; deeper.push(subResult); }
   }
-
   return { parent: item, prereqs: allPrereqs, deeper: deeper };
 }
 
@@ -1047,7 +895,6 @@ function renderPrereqModal(tree) {
       </li>
     `;
   }).join('');
-
   modal.classList.add('active');
 }
 function closePrereq() { document.getElementById('prereqModal').classList.remove('active'); }
@@ -1056,10 +903,8 @@ function addPrereqSelected() {
   let added = 0;
   checked.forEach(chk => {
     if (basketAdd({
-      code: chk.dataset.code,
-      op:   chk.dataset.op,
-      name: chk.dataset.name,
-      norm: chk.dataset.norm || null
+      code: chk.dataset.code, op: chk.dataset.op,
+      name: chk.dataset.name, norm: chk.dataset.norm || null
     })) added++;
   });
   closePrereq();
@@ -1069,51 +914,43 @@ function addPrereqSelected() {
 document.addEventListener('click', async function(e) {
   if (!e.target.classList.contains('add-btn')) return;
   const btn = e.target;
-
   const item = {
-    code: btn.dataset.code,
-    op:   btn.dataset.op,
-    name: btn.dataset.name,
-    norm: btn.dataset.norm || null
+    code: btn.dataset.code, op: btn.dataset.op,
+    name: btn.dataset.name, norm: btn.dataset.norm || null
   };
-
   if (basket.some(b => b.code === item.code)) { showMsg('Уже в корзине'); return; }
-
   basketAdd(item);
-
   const existingCodes = new Set(basket.map(b => b.code));
   const tree = await findDependencies(item, existingCodes, 0);
   if (tree && tree.prereqs.length > 0) renderPrereqModal(tree);
 });
 
-/* ==== AI-модалка ==== */
+/* ==== AI ==== */
 const AI_CONTEXT = {
   complectation: <?= json_encode($complectation ?? '') ?>,
   brand: 'KAMAZ'
 };
 
 function openAiModal(initialQ) {
+  if (!AI_CONTEXT.complectation) {
+    alert('Сначала введите VIN и нажмите «Найти работы»');
+    return;
+  }
   const modal = document.getElementById('aiModal');
   const ctx   = document.getElementById('aiContext');
   const q     = document.getElementById('aiQuestion');
   const a     = document.getElementById('aiAnswer');
   const e     = document.getElementById('aiError');
 
-  const parts = [];
-  if (AI_CONTEXT.complectation) parts.push('Комплектация: ' + AI_CONTEXT.complectation);
-  if (AI_CONTEXT.brand)         parts.push('Бренд: ' + AI_CONTEXT.brand);
-  ctx.textContent = parts.length ? 'Контекст: ' + parts.join(' · ') : 'Без контекста';
-
+  ctx.textContent = 'Контекст: Комплектация ' + AI_CONTEXT.complectation + ' · Бренд: ' + AI_CONTEXT.brand;
   q.value = initialQ || '';
   a.style.display = 'none'; a.textContent = '';
   e.style.display = 'none'; e.textContent = '';
-
   modal.classList.add('active');
   setTimeout(() => q.focus(), 100);
 }
-function closeAiModal() {
-  document.getElementById('aiModal').classList.remove('active');
-}
+function closeAiModal() { document.getElementById('aiModal').classList.remove('active'); }
+
 async function askAi() {
   const q = document.getElementById('aiQuestion').value.trim();
   if (q.length < 3) return;
@@ -1125,8 +962,7 @@ async function askAi() {
 
   btn.disabled = true; btn.textContent = '⏳ Думаю…';
   load.style.display = 'inline';
-  ans.style.display = 'none';
-  err.style.display = 'none';
+  ans.style.display = 'none'; err.style.display = 'none';
 
   try {
     const fd = new FormData();
@@ -1136,7 +972,6 @@ async function askAi() {
 
     const resp = await fetch('ai_search_ajax.php', { method: 'POST', body: fd });
     const data = await resp.json();
-
     if (!data.ok) {
       err.textContent = '❌ ' + (data.error || 'Ошибка');
       err.style.display = 'block';
