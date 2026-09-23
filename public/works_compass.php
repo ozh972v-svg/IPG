@@ -113,7 +113,11 @@ function fmtNorm($n) {
         color: #1d4ed8;
     }
 
-    .search-box { margin-bottom: 20px; }
+    .search-row {
+        display: flex; gap: 8px; align-items: center;
+        margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .search-box { flex: 1; min-width: 240px; margin: 0; }
     .search-box input {
         width: 100%;
         padding: 12px 16px;
@@ -268,6 +272,21 @@ function fmtNorm($n) {
         z-index: 2000; opacity: 0; transition: opacity .3s; pointer-events: none;
     }
     .copy-msg.show { opacity: 1; }
+
+    /* === AI-модалка === */
+    .ai-btn{background:#7c3aed;color:#fff;border:none;padding:11px 16px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+    .ai-btn:hover{opacity:.9}
+    .ai-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:3000;padding:20px}
+    .ai-modal-overlay.active{display:flex}
+    .ai-modal{background:#fff;border-radius:14px;max-width:800px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}
+    .ai-modal h3{margin:0 0 8px;font-size:18px;color:#1e3a8a;display:flex;align-items:center;gap:8px}
+    .ai-modal .ai-context{font-size:12px;color:#666;background:#f9fafb;padding:6px 10px;border-radius:6px;margin-bottom:12px;display:inline-block}
+    .ai-modal textarea{width:100%;padding:12px;border:1.5px solid #93c5fd;border-radius:10px;font-family:inherit;font-size:15px;min-height:70px;resize:vertical;background:#eff6ff}
+    .ai-modal textarea:focus{outline:none;border-color:#2563eb;background:#fff}
+    .ai-modal .ai-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
+    .ai-modal .ai-answer{background:#f0fdf4;border-left:4px solid #16a34a;padding:14px 16px;border-radius:10px;margin-top:16px;white-space:pre-wrap;font-size:14px;line-height:1.6;display:none}
+    .ai-modal .ai-error{background:#fef2f2;border-left:4px solid #dc2626;padding:14px 16px;border-radius:10px;margin-top:16px;font-size:14px;color:#991b1b;display:none}
+    .ai-modal .ai-loading{color:#2563eb;font-size:14px;display:none}
 </style>
 </head>
 <body>
@@ -287,7 +306,7 @@ function fmtNorm($n) {
 <div class="container">
     <a class="back" href="works_brand.php">← К выбору марки</a>
 
-    <!-- Кнопки моделей: активная подсвечивается прямо в HTML (inline-стиль) -->
+    <!-- Кнопки моделей -->
     <div class="model-bar">
         <?php foreach ($models as $key => $m): ?>
             <?php $isActive = ((string)$key === (string)$modelKey); ?>
@@ -300,11 +319,14 @@ function fmtNorm($n) {
         <?php endforeach; ?>
     </div>
 
-    <form class="search-box" method="get">
-        <input type="hidden" name="model" value="<?= e($modelKey) ?>">
-        <input type="text" name="q" value="<?= e($search) ?>"
-               placeholder="Поиск по названию работы или коду (например, «масляный фильтр» или LT1004210)">
-    </form>
+    <div class="search-row">
+        <form class="search-box" method="get">
+            <input type="hidden" name="model" value="<?= e($modelKey) ?>">
+            <input type="text" name="q" id="compassQ" value="<?= e($search) ?>"
+                   placeholder="Поиск по названию работы или коду (например, «масляный фильтр» или LT1004210)">
+        </form>
+        <button type="button" class="ai-btn" onclick="openAiModal(document.getElementById('compassQ').value)">🤖 Спросить ИИ</button>
+    </div>
 
     <div class="layout">
 
@@ -390,6 +412,21 @@ function fmtNorm($n) {
         </div>
 
     </div>
+</div>
+
+<!-- AI-модалка -->
+<div class="ai-modal-overlay" id="aiModal">
+  <div class="ai-modal">
+    <h3>🤖 Помощник ИИ <button type="button" class="btn btn-secondary" onclick="closeAiModal()" style="margin-left:auto;padding:6px 12px;">✕</button></h3>
+    <div class="ai-context" id="aiContext">Без контекста</div>
+    <textarea id="aiQuestion" placeholder="Например: найди работу по замене генератора"></textarea>
+    <div class="ai-row">
+      <button type="button" class="ai-btn" id="aiAskBtn" onclick="askAi()">🤖 Спросить ИИ</button>
+      <span class="ai-loading" id="aiLoading">⏳ Думаю… 5–20 сек.</span>
+    </div>
+    <div class="ai-answer" id="aiAnswer"></div>
+    <div class="ai-error" id="aiError"></div>
+  </div>
 </div>
 
 <div class="copy-msg" id="copyMsg">✅ Скопировано в буфер</div>
@@ -496,6 +533,75 @@ document.addEventListener('click', function(e) {
     if (basket.some(b => b.code === item.code)) { showMsg('Уже в корзине'); return; }
     basketAdd(item);
 });
+
+/* ==== AI-модалка ==== */
+const AI_CONTEXT = {
+    chassis: <?= json_encode($chassis) ?>,
+    model:   <?= json_encode($modelName) ?>,
+    brand:   'COMPASS'
+};
+
+function openAiModal(initialQ) {
+    const modal = document.getElementById('aiModal');
+    const ctx   = document.getElementById('aiContext');
+    const q     = document.getElementById('aiQuestion');
+    const a     = document.getElementById('aiAnswer');
+    const e     = document.getElementById('aiError');
+
+    const parts = [];
+    if (AI_CONTEXT.model)   parts.push('Модель: ' + AI_CONTEXT.model);
+    if (AI_CONTEXT.chassis) parts.push('Шасси: ' + AI_CONTEXT.chassis);
+    ctx.textContent = parts.length ? 'Контекст: ' + parts.join(' · ') : 'Без контекста';
+
+    q.value = initialQ || '';
+    a.style.display = 'none'; a.textContent = '';
+    e.style.display = 'none'; e.textContent = '';
+
+    modal.classList.add('active');
+    setTimeout(() => q.focus(), 100);
+}
+function closeAiModal() {
+    document.getElementById('aiModal').classList.remove('active');
+}
+async function askAi() {
+    const q = document.getElementById('aiQuestion').value.trim();
+    if (q.length < 3) return;
+
+    const btn  = document.getElementById('aiAskBtn');
+    const load = document.getElementById('aiLoading');
+    const ans  = document.getElementById('aiAnswer');
+    const err  = document.getElementById('aiError');
+
+    btn.disabled = true; btn.textContent = '⏳ Думаю…';
+    load.style.display = 'inline';
+    ans.style.display = 'none';
+    err.style.display = 'none';
+
+    try {
+        const fd = new FormData();
+        fd.append('q', q);
+        fd.append('chassis', AI_CONTEXT.chassis);
+        fd.append('model',   AI_CONTEXT.model);
+        fd.append('brand',   AI_CONTEXT.brand);
+
+        const resp = await fetch('ai_search_ajax.php', { method: 'POST', body: fd });
+        const data = await resp.json();
+
+        if (!data.ok) {
+            err.textContent = '❌ ' + (data.error || 'Ошибка');
+            err.style.display = 'block';
+            return;
+        }
+        ans.textContent = data.answer;
+        ans.style.display = 'block';
+    } catch (ex) {
+        err.textContent = '❌ Ошибка запроса: ' + ex.message;
+        err.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = '🤖 Спросить ИИ';
+        load.style.display = 'none';
+    }
+}
 
 basketLoad();
 basketRender();
