@@ -210,7 +210,15 @@ $backLabel    = 'На главную';
   .brand-compass .brand-icon {
     background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
   }
-
+  .brand-foton {
+    --c1: #dc2626;
+    --c2: #f97316;
+    --glow: rgba(220, 38, 38, 0.22);
+    --shadow: rgba(220, 38, 38, 0.55);
+  }
+  .brand-foton .brand-icon {
+    background: linear-gradient(135deg, #dc2626 0%, #f97316 100%);
+  }
   @media (max-width: 640px) {
     .brand-hero h1 { font-size: 20px; }
     .brand-hero p { font-size: 13.5px; }
