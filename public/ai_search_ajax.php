@@ -9,17 +9,50 @@ if (!$user) { echo json_encode(['ok'=>false,'error'=>'Не авторизова�
 $pdo = get_db();
 
 /* ============================================================
-   Расшифровка типов работ по первой букве кода операции
+   Словарь аббревиатур — для нормализации вопроса и поиска
+   ============================================================ */
+function expandAbbreviations(string $text): string {
+    $map = [
+        'ГБЦ'   => 'головка блок цилиндров',
+        'БЦ'    => 'блок цилиндров',
+        'ДВС'   => 'двигатель',
+        'КПП'   => 'коробка передач',
+        'АКПП'  => 'автоматическая коробка передач',
+        'МКПП'  => 'механическая коробка передач',
+        'ТНВД'  => 'топливный насос высокого давления',
+        'ТННД'  => 'топливный насос низкого давления',
+        'ОЖ'    => 'охлаждающая жидкость',
+        'ГУР'   => 'гидроусилитель руля',
+        'ЭБУ'   => 'электронный блок управления',
+        'ЦБУ'   => 'центральный блок управления',
+        'ТНВ'   => 'теплообменник наддувочного воздуха',
+        'ТРК'   => 'турбокомпрессор',
+        'ЭГР'   => 'система рециркуляции выхлопных газов',
+        'EGR'   => 'система рециркуляции выхлопных газов',
+        'ABS'   => 'антиблокировочная система',
+        'АБС'   => 'антиблокировочная система',
+        'ГП'    => 'главная передача',
+        'КП'    => 'коробка передач',
+        'ПГУ'   => 'пневмогидроусилитель',
+        'ОГ'    => 'система выпуска газов',
+    ];
+    $result = $text;
+    foreach ($map as $abbr => $full) {
+        $pattern = '/(?<![А-ЯA-Z])' . preg_quote($abbr, '/') . '(?![А-ЯA-Z])/ui';
+        $result = preg_replace($pattern, $full, $result);
+    }
+    return $result;
+}
+
+/* ============================================================
+   Расшифровка типов работ
    ============================================================ */
 function opTypeInfo(?string $code): array {
     $c = strtoupper(trim((string)$code));
     if ($c === '') return ['short' => '—', 'full' => '—'];
 
     if (preg_match('/^9{4,}/', $c)) {
-        return [
-            'short' => 'Ненормированная',
-            'full'  => 'Ненормированная трудоёмкость — определяется фактически затраченным временем на проведение работ',
-        ];
+        return ['short' => 'Ненормированная', 'full' => 'Ненормированная трудоёмкость'];
     }
 
     $letter = mb_substr($c, 0, 1);
@@ -27,35 +60,20 @@ function opTypeInfo(?string $code): array {
     if (isset($rus[$letter])) $letter = $rus[$letter];
 
     switch ($letter) {
-        case 'A':
-            return ['short' => 'Административные', 'full' => 'Административные — оформить заказ-наряд на ТО и ремонт'];
-        case 'B':
-            return ['short' => 'Предпродажная', 'full' => 'Предпродажная подготовка — подготовка автотехники к продаже/передаче'];
-        case 'T':
-            return ['short' => 'ТО', 'full' => 'Техническое обслуживание — регламентные работы ТО'];
-        case 'X':
-            return ['short' => 'Комплекс ТО', 'full' => 'Комплекс работ ТО — комплексные регламентные работы'];
-        case 'E':
-            return ['short' => 'Диагностика', 'full' => 'Диагностические — работы по оценке состояния техники в целом'];
-        case 'P':
-            return [
-                'short' => 'Постовые ТРП',
-                'full'  => 'Постовые работы текущего ремонта (ТРП) — работы по снятию и установке изделий с автотехники, включая оценку их состояния, слив/залив технических жидкостей и прокачку систем, регулировку после их установки',
-            ];
-        case 'C':
-            return [
-                'short' => 'Цеховые ТРЦ',
-                'full'  => 'Цеховые работы текущего ремонта (ТРЦ) — работы по разборке, очистке, оценке состояния, сборке, регулировке, обкатке и т.д., выполняемые в отношении изделий, снятых с автотехники',
-            ];
-        case 'M':
-            return ['short' => 'ОТМ', 'full' => 'Доработка — работы только для ОТМ (организационно-технических мероприятий)'];
-        default:
-            return ['short' => '—', 'full' => '—'];
+        case 'A': return ['short' => 'Административные', 'full' => 'Административные'];
+        case 'B': return ['short' => 'Предпродажная', 'full' => 'Предпродажная подготовка'];
+        case 'T': return ['short' => 'ТО', 'full' => 'Техническое обслуживание'];
+        case 'X': return ['short' => 'Комплекс ТО', 'full' => 'Комплекс работ ТО'];
+        case 'E': return ['short' => 'Диагностика', 'full' => 'Диагностические работы'];
+        case 'P': return ['short' => 'Постовые ТРП', 'full' => 'Постовые работы текущего ремонта'];
+        case 'C': return ['short' => 'Цеховые ТРЦ', 'full' => 'Цеховые работы текущего ремонта'];
+        case 'M': return ['short' => 'ОТМ', 'full' => 'Доработка (ОТМ)'];
+        default:  return ['short' => '—', 'full' => '—'];
     }
 }
 
 /* ============================================================
-   GigaChat: получение access_token с кэшем в файл
+   GigaChat: access_token с кэшем в файл
    ============================================================ */
 function getGigaChatToken(): ?string {
     $authKey = getenv('GIGACHAT_AUTH_KEY');
@@ -116,7 +134,7 @@ function getGigaChatToken(): ?string {
 }
 
 /* ============================================================
-   Резолвер VIN → комплектация через 1С:ГОА
+   Резолвер VIN → комплектация
    ============================================================ */
 function resolveComplectationByVin(string $vin, PDO $pdo): ?string {
     static $cache = [];
@@ -215,6 +233,9 @@ if ($resolvedComplectation === null && $vinCandidate) {
     $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
 }
 
+/* ---- Нормализация: расшифровка аббревиатур ---- */
+$questionExpanded = expandAbbreviations($question);
+
 /* ---- Ключевые слова ---- */
 $stopWords = [
     'какие','какая','какой','каких','работы','работа','работ','работу','работой','работе','работам','работах',
@@ -226,7 +247,11 @@ $stopWords = [
     'зачем','требуется','пожалуйста','меня','этом','этой',
     'камаз','камаза','компас','компаса','компасе','фотон','фотона','фотоне',
 ];
-$textLower = mb_strtolower($question);
+
+/* Глаголы-действия — не считаем их «уточняющими» для AND-поиска */
+$actionVerbs = ['замен','снять','установить','проверить','отремонтировать','демонтаж','монтаж','разобрать','собрать','отрегулировать'];
+
+$textLower = mb_strtolower($questionExpanded);
 $textClean = preg_replace('/[^\p{L}\p{N}\s]/u', ' ', $textLower);
 $words = preg_split('/\s+/u', $textClean);
 $keywords = [];
@@ -243,119 +268,220 @@ if (empty($keywords)) {
     exit;
 }
 
-/* ============================================================
-   Поиск работ
-   ============================================================ */
-$where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
-$params = [];
-
-/* Строим фильтр по комплектации, но с флагом «можно расширить» */
-$familyFilterActive = false;
-$familyFilterValue  = null;
-
-if ($resolvedComplectation !== null) {
-    $fotonFamilies = ['AUMAN','AUMARK','TOANO','SAUVANA','GRATOUR','TUNLAND','VIEW','SUP','Miler','LOXA','TM'];
-    if ($brand === 'FOTON' && in_array($resolvedComplectation, $fotonFamilies, true)) {
-        $where[] = 'complectation LIKE :comp';
-        $params[':comp'] = $resolvedComplectation . '%';
-        $familyFilterActive = true;
-        $familyFilterValue  = $resolvedComplectation;
-    } else {
-        $where[] = 'complectation = :comp';
-        $params[':comp'] = $resolvedComplectation;
-    }
-} elseif ($contextChassis !== null) {
-    $where[] = 'complectation = :chassis';
-    $params[':chassis'] = $contextChassis;
-} elseif ($brand !== null) {
-    $where[] = 'brand = :brand';
-    $params[':brand'] = $brand;
-}
-
-/* Расширение ключевых слов синонимами */
+/* Стемминг + синонимы */
 $synonyms = [
     'диагност'    => ['проверк', 'оценк', 'дефектовк'],
     'проверк'     => ['диагност', 'оценк'],
     'подвес'      => ['амортизатор', 'рессор', 'пружин'],
     'амортизатор' => ['подвес', 'рессор'],
     'рессор'      => ['подвес', 'амортизатор'],
-    'замен'       => ['снять', 'установить'],
-    'снять'       => ['замен', 'демонтаж'],
-    'установить'  => ['замен', 'монтаж'],
+    'прокладк'    => ['прокладка', 'уплотнен'],
+    'головк'      => ['гбц', 'головка'],
+    'уплотнен'    => ['прокладк', 'сальник'],
 ];
 
-$orParts   = [];
-$scoreExpr = [];
-foreach ($keywords as $i => $kw) {
+$stems = [];
+foreach ($keywords as $kw) {
     $stem = mb_substr($kw, 0, max(4, mb_strlen($kw) - 2));
-    $k = ":k{$i}";
-    $params[$k] = '%' . $stem . '%';
-    $orParts[]   = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
-    $scoreExpr[] = "CASE WHEN name ILIKE $k THEN 5 ELSE 0 END";
-    $scoreExpr[] = "CASE WHEN eng_name ILIKE $k THEN 2 ELSE 0 END";
-
-    /* Добавляем синонимы */
+    if (mb_strlen($stem) < 4) $stem = $kw;
+    $stems[] = $stem;
     if (isset($synonyms[$stem])) {
-        foreach ($synonyms[$stem] as $j => $syn) {
-            $ks = ":ks{$i}_{$j}";
-            $params[$ks] = '%' . $syn . '%';
-            $orParts[]   = "(name ILIKE $ks OR eng_name ILIKE $ks)";
-            $scoreExpr[] = "CASE WHEN name ILIKE $ks THEN 3 ELSE 0 END";
+        foreach ($synonyms[$stem] as $syn) {
+            if (mb_strlen($syn) >= 4) $stems[] = $syn;
         }
     }
 }
-$where[] = '(' . implode(' OR ', $orParts) . ')';
+$stems = array_values(array_unique($stems));
 
-$scoreSQL = '(' . implode(' + ', $scoreExpr) . ')';
-
-/* Первый проход — с фильтром по семейству */
-$sql = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
-               $scoreSQL AS _score
-          FROM work_operations
-         WHERE " . implode(' AND ', $where) . "
-         ORDER BY _score DESC, LENGTH(name), operation_code
-         LIMIT 300";
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$rows = $stmt->fetchAll();
-
-/* Если в семействе пусто — расширяем на весь FOTON */
-$expandedSearch = false;
-if (empty($rows) && $familyFilterActive && $brand === 'FOTON') {
-    /* Пересобираем $where без фильтра по complectation */
-    $where2 = [];
-    foreach ($where as $w) {
-        if (strpos($w, 'complectation') === false) $where2[] = $w;
+/* «Уточняющие» слова — НЕ глаголы. Именно их требуем в AND-поиске */
+$specificStems = [];
+foreach ($stems as $s) {
+    $isVerb = false;
+    foreach ($actionVerbs as $v) {
+        if (mb_strpos($s, $v) === 0 || mb_strpos($v, $s) === 0) { $isVerb = true; break; }
     }
-    $where2[] = 'brand = :brand';
-    $params2 = $params;
-    $params2[':brand'] = 'FOTON';
-    unset($params2[':comp']);
-
-    $sql2 = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
-                    $scoreSQL AS _score
-               FROM work_operations
-              WHERE " . implode(' AND ', $where2) . "
-              ORDER BY _score DESC, LENGTH(name), operation_code
-              LIMIT 300";
-    $stmt = $pdo->prepare($sql2);
-    $stmt->execute($params2);
-    $rows = $stmt->fetchAll();
-    if (!empty($rows)) $expandedSearch = true;
+    if (!$isVerb) $specificStems[] = $s;
 }
+if (empty($specificStems)) $specificStems = $stems;
 
-$works = [];
-$seen = [];
-foreach ($rows as $r) {
-    if (isset($seen[$r['operation_code']])) continue;
-    $seen[$r['operation_code']] = true;
-    unset($r['_score']);
-    $works[] = $r;
-    if (count($works) >= 50) break;
+/* ============================================================
+   Фильтр по бренду / комплектации
+   ============================================================ */
+$baseWhere  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
+$baseParams = [];
+
+$familyFilterActive = false;
+$familyFilterValue  = null;
+
+if ($resolvedComplectation !== null) {
+    $fotonFamilies = ['AUMAN','AUMARK','TOANO','SAUVANA','GRATOUR','TUNLAND','VIEW','SUP','Miler','LOXA','TM'];
+    if ($brand === 'FOTON' && in_array($resolvedComplectation, $fotonFamilies, true)) {
+        $baseWhere[] = 'complectation LIKE :comp';
+        $baseParams[':comp'] = $resolvedComplectation . '%';
+        $familyFilterActive = true;
+        $familyFilterValue  = $resolvedComplectation;
+    } else {
+        $baseWhere[] = 'complectation = :comp';
+        $baseParams[':comp'] = $resolvedComplectation;
+    }
+} elseif ($contextChassis !== null) {
+    $baseWhere[] = 'complectation = :chassis';
+    $baseParams[':chassis'] = $contextChassis;
+} elseif ($brand !== null) {
+    $baseWhere[] = 'brand = :brand';
+    $baseParams[':brand'] = $brand;
 }
 
 /* ============================================================
-   Контекст для LLM
+   Функция поиска: AND по specificStems, OR — fallback
+   ============================================================ */
+function searchWorks(PDO $pdo, array $baseWhere, array $baseParams, array $stems, array $specificStems, int $limit = 60): array {
+    /* 1. AND-поиск по уточняющим словам */
+    $where = $baseWhere;
+    $params = $baseParams;
+    $ors = [];
+    foreach ($specificStems as $i => $s) {
+        $k = ":a{$i}";
+        $params[$k] = '%' . $s . '%';
+        $ors[] = "(name ILIKE $k OR eng_name ILIKE $k)";
+    }
+    if (!empty($ors)) {
+        $where[] = '(' . implode(' AND ', $ors) . ')';
+        $sql = "SELECT DISTINCT ON (operation_code)
+                       operation_code, name, eng_name, norm_time, complectation, brand
+                  FROM work_operations
+                 WHERE " . implode(' AND ', $where) . "
+                 ORDER BY operation_code, LENGTH(name)
+                 LIMIT " . (int)$limit;
+        $st = $pdo->prepare($sql);
+        $st->execute($params);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($rows)) return $rows;
+    }
+
+    /* 2. OR-поиск по всем стемам */
+    $where = $baseWhere;
+    $params = $baseParams;
+    $ors = [];
+    foreach ($stems as $i => $s) {
+        $k = ":o{$i}";
+        $params[$k] = '%' . $s . '%';
+        $ors[] = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
+    }
+    $where[] = '(' . implode(' OR ', $ors) . ')';
+    $sql = "SELECT DISTINCT ON (operation_code)
+                   operation_code, name, eng_name, norm_time, complectation, brand
+              FROM work_operations
+             WHERE " . implode(' AND ', $where) . "
+             ORDER BY operation_code, LENGTH(name)
+             LIMIT " . (int)$limit;
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* ============================================================
+   Три поиска: основные (AND), связанные (OR), рекомендации (типы)
+   ============================================================ */
+
+/* --- 1. Основные работы --- */
+$mainWorks = searchWorks($pdo, $baseWhere, $baseParams, $stems, $specificStems, 40);
+
+/* --- 2. Расширенный поиск: если пусто в семействе — расширяем на бренд --- */
+$expandedSearch = false;
+if (empty($mainWorks) && $familyFilterActive && $brand === 'FOTON') {
+    $baseWhereNoFamily = [];
+    foreach ($baseWhere as $w) {
+        if (strpos($w, 'complectation') === false) $baseWhereNoFamily[] = $w;
+    }
+    $baseWhereNoFamily[] = 'brand = :brand';
+    $baseParamsNoFamily = $baseParams;
+    unset($baseParamsNoFamily[':comp']);
+    $baseParamsNoFamily[':brand'] = 'FOTON';
+
+    $mainWorks = searchWorks($pdo, $baseWhereNoFamily, $baseParamsNoFamily, $stems, $specificStems, 40);
+    if (!empty($mainWorks)) $expandedSearch = true;
+
+    /* Возвращаем family-фильтр обратно (для следующих поисков) */
+}
+
+/* --- 3. Связанные работы: OR-поиск с бОльшим лимитом, минус уже найденные --- */
+$relatedStems = [];
+foreach ($stems as $s) {
+    if (mb_strlen($s) >= 5) $relatedStems[] = $s;
+}
+if (empty($relatedStems)) $relatedStems = $stems;
+
+$relatedWhere = $baseWhere;
+$relatedParams = $baseParams;
+$rOrs = [];
+foreach ($relatedStems as $i => $s) {
+    $k = ":r{$i}";
+    $relatedParams[$k] = '%' . $s . '%';
+    $rOrs[] = "(name ILIKE $k OR eng_name ILIKE $k)";
+}
+$relatedWhere[] = '(' . implode(' OR ', $rOrs) . ')';
+
+$relatedSql = "SELECT DISTINCT ON (operation_code)
+                      operation_code, name, eng_name, norm_time, complectation, brand
+                 FROM work_operations
+                WHERE " . implode(' AND ', $relatedWhere) . "
+                ORDER BY operation_code, LENGTH(name)
+                LIMIT 200";
+$st = $pdo->prepare($relatedSql);
+$st->execute($relatedParams);
+$relatedRaw = $st->fetchAll(PDO::FETCH_ASSOC);
+
+$mainCodes = array_column($mainWorks, 'operation_code');
+$relatedWorks = [];
+foreach ($relatedRaw as $r) {
+    if (in_array($r['operation_code'], $mainCodes, true)) continue;
+    $relatedWorks[] = $r;
+    if (count($relatedWorks) >= 40) break;
+}
+
+/* --- 4. Рекомендуемые работы: диагностика/дефектовка по тому же узлу --- */
+$recommendedWorks = [];
+if (!empty($specificStems)) {
+    $recWhere = $baseWhere;
+    $recParams = $baseParams;
+    /* Ищем работы, где встречается специфичное слово (узел) и есть диагностический триггер */
+    $recOrs = [];
+    foreach ($specificStems as $i => $s) {
+        $k = ":rc{$i}";
+        $recParams[$k] = '%' . $s . '%';
+        $recOrs[] = "name ILIKE $k";
+    }
+    $recWhere[] = '(' . implode(' OR ', $recOrs) . ')';
+    $recWhere[] = "(operation_code ILIKE 'E%' OR operation_code ILIKE 'Е%'
+                   OR name ILIKE '%проверк%' OR name ILIKE '%диагност%' OR name ILIKE '%дефектов%'
+                   OR name ILIKE '%оценк%' OR name ILIKE 'Снять%' OR name ILIKE 'Установить%')";
+
+    $recSql = "SELECT DISTINCT ON (operation_code)
+                      operation_code, name, eng_name, norm_time, complectation, brand
+                 FROM work_operations
+                WHERE " . implode(' AND ', $recWhere) . "
+                ORDER BY operation_code, LENGTH(name)
+                LIMIT 25";
+    try {
+        $st = $pdo->prepare($recSql);
+        $st->execute($recParams);
+        $recRaw = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        $allFoundCodes = array_merge(
+            array_column($mainWorks, 'operation_code'),
+            array_column($relatedWorks, 'operation_code')
+        );
+        foreach ($recRaw as $r) {
+            if (in_array($r['operation_code'], $allFoundCodes, true)) continue;
+            $recommendedWorks[] = $r;
+            if (count($recommendedWorks) >= 12) break;
+        }
+    } catch (Throwable $e) {}
+}
+
+/* ============================================================
+   Формируем контекст для LLM — три секции
    ============================================================ */
 $filterInfo = '';
 if ($brand !== null)         $filterInfo .= 'Бренд: ' . $brand . '. ';
@@ -364,6 +490,15 @@ if ($contextChassis)         $filterInfo .= 'Шасси: ' . $contextChassis . '
 if ($vinCandidate)           $filterInfo .= 'VIN: ' . $vinCandidate . '. ';
 if ($resolvedComplectation)  $filterInfo .= 'Комплектация: ' . $resolvedComplectation . '. ';
 
+function formatWorkLine(array $w): string {
+    $op   = $w['operation_code'] ? '[' . $w['operation_code'] . '] ' : '';
+    $type = opTypeInfo($w['operation_code']);
+    $tag  = $type['short'] !== '—' ? ' <' . $type['short'] . '> ' : ' ';
+    $n    = $w['norm_time'] !== null ? ' (' . rtrim(rtrim(number_format((float)$w['norm_time'], 3, '.', ' '), '0'), '.') . ' ч)' : '';
+    $comp = $w['complectation'] ? ' | компл.: ' . $w['complectation'] : '';
+    return $op . $tag . $w['name'] . $n . $comp;
+}
+
 $ctx = [];
 if ($filterInfo) $ctx[] = "=== ФИЛЬТРЫ ===\n" . trim($filterInfo);
 
@@ -371,19 +506,24 @@ if (!empty($expandedSearch)) {
     $ctx[] = "=== ПРИМЕЧАНИЕ ===\nВ исходном семействе ({$familyFilterValue}) ничего не найдено. Показаны работы со всего бренда FOTON.";
 }
 
-if (!empty($works)) {
-    $lines = [];
-    foreach ($works as $w) {
-        $op   = $w['operation_code'] ? '[' . $w['operation_code'] . '] ' : '';
-        $type = opTypeInfo($w['operation_code']);
-        $typeTag = $type['short'] !== '—' ? ' <' . $type['short'] . '> ' : ' ';
-        $n    = $w['norm_time'] !== null ? ' (' . rtrim(rtrim(number_format((float)$w['norm_time'], 3, '.', ' '), '0'), '.') . ' ч)' : '';
-        $comp = $w['complectation'] ? ' | компл.: ' . $w['complectation'] : '';
-        $lines[] = $op . $typeTag . $w['name'] . $n . $comp;
-    }
-    $ctx[] = "=== СПРАВОЧНИК РАБОТ (сверху — самые релевантные) ===\n" . implode("\n", $lines);
+/* Секция 1: основные */
+if (!empty($mainWorks)) {
+    $lines = array_map('formatWorkLine', $mainWorks);
+    $ctx[] = "=== ОСНОВНЫЕ РАБОТЫ (прямое совпадение с запросом) ===\n" . implode("\n", $lines);
 } else {
-    $ctx[] = "=== СПРАВОЧНИК РАБОТ ===\nНичего не найдено по запросу.";
+    $ctx[] = "=== ОСНОВНЫЕ РАБОТЫ ===\nПрямых совпадений не найдено.";
+}
+
+/* Секция 2: связанные */
+if (!empty($relatedWorks)) {
+    $lines = array_map('formatWorkLine', $relatedWorks);
+    $ctx[] = "=== СВЯЗАННЫЕ РАБОТЫ (та же деталь/узел, могут быть нужны дополнительно) ===\n" . implode("\n", $lines);
+}
+
+/* Секция 3: рекомендуемые */
+if (!empty($recommendedWorks)) {
+    $lines = array_map('formatWorkLine', $recommendedWorks);
+    $ctx[] = "=== РЕКОМЕНДУЕМЫЕ РАБОТЫ (диагностика / дефектовка / снятие-установка по этому узлу) ===\n" . implode("\n", $lines);
 }
 
 $context = implode("\n\n", $ctx);
@@ -399,44 +539,59 @@ if (!$token) {
 
 $model = getenv('GIGACHAT_MODEL') ?: 'GigaChat';
 
-$system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС/ФОТОН.\n"
-        . "Тебе дают контекст: фильтры и справочник работ. У каждой работы указан код операции "
-        . "и в угловых скобках её тип — например <Постовые ТРП> или <Цеховые ТРЦ>.\n"
+$system = "Ты — опытный эксперт-помощник мастера-приёмщика сервиса КАМАЗ / КОМПАС / ФОТОН. "
+        . "Твоя задача — не просто найти работу в справочнике, а СОСТАВИТЬ ПОЛНЫЙ ПЛАН РЕМОНТА.\n"
         . "\n"
-        . "РАСШИФРОВКА ТИПОВ РАБОТ ПО ПЕРВОЙ БУКВЕ КОДА:\n"
-        . "- A — Административные: оформить заказ-наряд на ТО и ремонт\n"
-        . "- B — Предпродажная подготовка: подготовка автотехники к продаже/передаче\n"
-        . "- T — Техническое обслуживание: регламентные работы ТО\n"
-        . "- X — Комплекс работ ТО: комплексные регламентные работы\n"
-        . "- E — Диагностические: работы по оценке состояния техники в целом\n"
-        . "- P — Постовые работы текущего ремонта (ТРП): работы по снятию и установке изделий "
-        . "с автотехники, включая оценку их состояния, слив/залив технических жидкостей и прокачку систем, "
-        . "регулировку после их установки\n"
-        . "- C — Цеховые работы текущего ремонта (ТРЦ): работы по разборке, очистке, оценке состояния, "
-        . "сборке, регулировке, обкатке и т.д., выполняемые в отношении изделий, снятых с автотехники\n"
-        . "- M — Доработка: работы только для ОТМ (организационно-технических мероприятий)\n"
-        . "- 99999 — Ненормированная трудоёмкость: определяется фактически затраченным временем\n"
+        . "Контекст содержит три группы работ:\n"
+        . "  • ОСНОВНЫЕ — прямое совпадение с запросом\n"
+        . "  • СВЯЗАННЫЕ — та же деталь/узел, могут понадобиться дополнительно\n"
+        . "  • РЕКОМЕНДУЕМЫЕ — диагностика, дефектовка, снятие/установка\n"
         . "\n"
-        . "ПРАВИЛА ОТВЕТА:\n"
-        . "1. Сначала кратко перечисли подходящие работы из контекста.\n"
-        . "2. Для КАЖДОЙ предложенной работы в скобках укажи её тип (расшифровку по первой букве кода). "
-        . "Например: «P37-0110 (постовые работы текущего ремонта) — Заменить генератор, 4.49 ч».\n"
-        . "3. Если в контексте есть хотя бы близкие по смыслу работы (например, «проверка подвески» "
-        . "вместо «диагностика подвески») — предложи их и объясни.\n"
-        . "4. Если в контексте совсем ничего нет — ответь своими знаниями и начни со строки "
-        . "«⚠️ Общий ответ (в базе по этому запросу ничего не найдено):». Но всё равно укажи, "
-        . "что именно ты искал и в каком семействе.\n"
-        . "5. Не выдумывай коды и номера, которых нет в контексте.\n"
-        . "6. Отвечай кратко, по-русски.";
+        . "РАСШИФРОВКА ТИПОВ РАБОТ (по первой букве кода):\n"
+        . "  A — Административные\n"
+        . "  B — Предпродажная подготовка\n"
+        . "  T — Техническое обслуживание\n"
+        . "  X — Комплекс работ ТО\n"
+        . "  E — Диагностические работы\n"
+        . "  P — Постовые работы текущего ремонта (снятие/установка с автотехники)\n"
+        . "  C — Цеховые работы (разборка, очистка, сборка снятых изделий)\n"
+        . "  M — Доработка (ОТМ)\n"
+        . "\n"
+        . "ФОРМАТ ОТВЕТА (обязательно соблюдай структуру):\n"
+        . "\n"
+        . "🔧 **Основная работа:** [код] [название] — [норма] ч\n"
+        . "   _Тип: [постовые/цеховые/диагностические]._\n"
+        . "\n"
+        . "📋 **Что нужно сделать (порядок):**\n"
+        . "1. [код] Снять / демонтировать ... — [норма]\n"
+        . "2. [код] Заменить / установить ... — [норма]\n"
+        . "3. [код] Установить обратно ... — [норма]\n"
+        . "(если для этой работы есть сопутствующие операции — перечисли их из СВЯЗАННЫХ)\n"
+        . "\n"
+        . "🔍 **Дополнительно рекомендуется:**\n"
+        . "- [код] Проверить / продиагностировать [узел] — [норма] ч\n"
+        . "- [код] Дефектовка [детали] — [норма] ч\n"
+        . "(из РЕКОМЕНДУЕМЫХ или из знаний)\n"
+        . "\n"
+        . "💡 **Совет мастеру:** 1–2 фразы — на что обратить внимание, какие нюансы.\n"
+        . "\n"
+        . "ПРАВИЛА:\n"
+        . "1. Используй ТОЛЬКО коды и нормы из контекста. Не выдумывай.\n"
+        . "2. Если в ОСНОВНЫХ нет точного совпадения, но есть близкое по смыслу в СВЯЗАННЫХ — "
+        . "предложи его и скажи «точного совпадения нет, но есть похожее».\n"
+        . "3. Если ничего нет даже в связных — ответь своими знаниями и начни со строки "
+        . "«⚠️ Общий ответ (в базе по этому запросу ничего не найдено):».\n"
+        . "4. Указание кода и типа работы в квадратных/угловых скобках — обязательно для каждой упомянутой работы.\n"
+        . "5. Отвечай по-русски, кратко, структурированно. Без воды.";
 
 $payload = [
     'model'       => $model,
     'messages'    => [
         ['role' => 'system', 'content' => $system],
-        ['role' => 'user',   'content' => "Вопрос:\n{$question}\n\nКонтекст:\n{$context}"],
+        ['role' => 'user',   'content' => "Вопрос мастера:\n{$question}\n\nКонтекст из базы:\n{$context}"],
     ],
-    'temperature' => 0.2,
-    'max_tokens'  => 1800,
+    'temperature' => 0.3,
+    'max_tokens'  => 2500,
 ];
 
 $ch = curl_init('https://gigachat.devices.sberbank.ru/api/v1/chat/completions');
@@ -480,5 +635,12 @@ echo json_encode([
         'vin'           => $vinCandidate,
         'complectation' => $resolvedComplectation,
         'expanded'      => $expandedSearch,
+        'stems'         => $stems,
+        'specific'      => $specificStems,
+        'counts'        => [
+            'main'        => count($mainWorks),
+            'related'     => count($relatedWorks),
+            'recommended' => count($recommendedWorks),
+        ],
     ],
 ], JSON_UNESCAPED_UNICODE);
