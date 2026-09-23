@@ -59,7 +59,8 @@ $backLabel    = 'На главную';
     animation: brandFadeUp 0.55s ease-out both;
   }
   .brand-tile:nth-child(1) { animation-delay: 0.08s; }
-  .brand-tile:nth-child(2) { animation-delay: 0.18s; }
+  .brand-tile:nth-child(2) { animation-delay: 0.16s; }
+  .brand-tile:nth-child(3) { animation-delay: 0.24s; }
 
   @keyframes brandFadeUp {
     from { opacity: 0; transform: translateY(18px); }
@@ -210,6 +211,7 @@ $backLabel    = 'На главную';
   .brand-compass .brand-icon {
     background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
   }
+
   .brand-foton {
     --c1: #dc2626;
     --c2: #f97316;
@@ -219,6 +221,7 @@ $backLabel    = 'На главную';
   .brand-foton .brand-icon {
     background: linear-gradient(135deg, #dc2626 0%, #f97316 100%);
   }
+
   @media (max-width: 640px) {
     .brand-hero h1 { font-size: 20px; }
     .brand-hero p { font-size: 13.5px; }
@@ -262,8 +265,24 @@ $backLabel    = 'На главную';
       </div>
     </a>
 
-        <a class="brand-tile brand-compass" href="works_compass.php">
-      ...
+    <a class="brand-tile brand-compass" href="works_compass.php">
+      <div class="brand-glow"></div>
+      <div class="brand-head">
+        <div class="brand-icon">🚚</div>
+        <div>
+          <div class="brand-name">КОМПАС</div>
+          <div class="brand-tag">Компас 5 · 6 · 9 · 12</div>
+        </div>
+      </div>
+      <div class="brand-desc">
+        Справочник работ по моделям Компас 5, 6, 9 и 12. Нормочасы
+        по операциям, дерево групп, поиск по названию и коду.
+      </div>
+      <div class="brand-foot">
+        <span class="brand-cta">
+          Перейти к справочнику <span class="arr">→</span>
+        </span>
+      </div>
     </a>
 
     <a class="brand-tile brand-foton" href="works_foton.php">
