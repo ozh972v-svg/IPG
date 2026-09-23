@@ -282,22 +282,45 @@ if ($viewMode) {
   .form-row { margin-bottom: 14px; }
   .form-row .form-label { margin-bottom: 6px; }
 
-  /* === Брендовая секция === */
-  .brand-section { margin-bottom: 22px; }
+    /* === Брендовая секция (сворачиваемая) === */
+  .brand-section {
+    margin-bottom: 14px;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 4px 14px -6px rgba(15,23,42,0.15);
+  }
+
   .brand-title {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-size: 15px;
     font-weight: 800;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: #fff;
-    padding: 12px 20px;
-    border-radius: 14px 14px 0 0;
-    margin-bottom: 0;
-    box-shadow: 0 4px 12px -4px rgba(15,23,42,0.2);
+    padding: 15px 22px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: filter 0.15s;
+    position: relative;
   }
+  .brand-title::-webkit-details-marker { display: none; }
+  .brand-title:hover { filter: brightness(1.08); }
+
+  .brand-title::before {
+    content: '▶';
+    font-size: 11px;
+    color: rgba(255,255,255,0.95);
+    transition: transform 0.2s;
+    display: inline-block;
+    margin-right: 2px;
+  }
+  .brand-section[open] > .brand-title::before {
+    transform: rotate(90deg);
+  }
+
   .brand-title .cnt {
     background: rgba(255,255,255,0.28);
     padding: 3px 12px;
@@ -305,15 +328,13 @@ if ($viewMode) {
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0;
+    margin-left: auto;
   }
 
   .brand-body {
-    background: rgba(255,255,255,0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: #f8fafc;
     padding: 14px;
-    border-radius: 0 0 14px 14px;
-    border: 1px solid rgba(255,255,255,0.7);
+    border: 1px solid rgba(15,23,42,0.06);
     border-top: none;
   }
 
