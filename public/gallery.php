@@ -1144,15 +1144,28 @@ window.IPG_KEY_VALUE = <?= json_encode($viewKeyValue) ?>;
     });
   });
 
-  function uploadFile(file) {
+    async function uploadFile(file) {
     const comment = document.getElementById('commentInput').value.trim();
+
+    /* Сжимаем фото на клиенте перед отправкой, если это картинка > 1.5 МБ */
+    let uploadBlob = file;
+    let uploadName = file.name || ('upload_' + Date.now() + '.jpg');
+
+    if (file.type && file.type.startsWith('image/') && file.size > 1.5 * 1024 * 1024) {
+      try {
+        uploadBlob = await compressImageForUpload(file);
+        uploadName = (file.name || ('photo_' + Date.now())).replace(/\.[^.]+$/, '') + '.jpg';
+      } catch (e) {
+        console.warn('Сжатие не удалось, отправляю оригинал:', e);
+      }
+    }
+
     const formData = new FormData();
     formData.append('key_type',   KEY_TYPE);
     formData.append('key_value',  KEY_VALUE);
     formData.append('photo_type', selectedPhotoType);
     formData.append('comment',    comment);
-    formData.append('photo', file, file.name || ('upload_' + Date.now() + '.jpg'));
-
+    formData.append('photo', uploadBlob, uploadName);
     const status = document.createElement('div');
     status.className = 'upload-status';
     status.style.background = 'linear-gradient(135deg, #2563eb, #4f46e5)';
