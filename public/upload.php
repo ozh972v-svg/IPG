@@ -13,7 +13,42 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+/* Определяем, это AJAX-запрос (fetch) или обычная форма */
+$isAjax = (
+    ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'fetch'
+    || strpos($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json') !== false
+);
+
+/* Универсальный ответ об успехе */
+function respond_ok(string $fileUrl, string $kt, string $kv): void {
+    global $isAjax;
+    $redirect = 'gallery.php?key_type=' . urlencode($kt) . '&key_value=' . urlencode($kv) . '&uploaded=1';
+
+    if ($isAjax) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'ok'       => true,
+            'url'      => $fileUrl,
+            'redirect' => $redirect,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    header('Location: ' . $redirect);
+    exit;
+}
+
+/* Универсальный ответ об ошибке */
 function redirect_error(string $msg, string $kt = '', string $kv = ''): void {
+    global $isAjax;
+
+    if ($isAjax) {
+        http_response_code(400);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => false, 'error' => $msg], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     $back = 'gallery.php';
     if ($kt && $kv) {
         $back = 'gallery.php?key_type=' . urlencode($kt) . '&key_value=' . urlencode($kv);
@@ -25,16 +60,17 @@ function redirect_error(string $msg, string $kt = '', string $kv = ''): void {
     exit;
 }
 
-$keyType = $_POST['key_type'] ?? '';
-$keyValue = trim($_POST['key_value'] ?? '');
+$keyType   = $_POST['key_type'] ?? '';
+$keyValue  = trim($_POST['key_value'] ?? '');
 $photoType = $_POST['photo_type'] ?? '';
-$comment = trim($_POST['comment'] ?? '');
+$comment   = trim($_POST['comment'] ?? '');
 
-if (!in_array($keyType, ['ra', 'vin'], true)) {
-    redirect_error('Неверный тип привязки');
+/* Расширенный whitelist типов привязки */
+if (!in_array($keyType, ['ra', 'vin', 'order', 'gos'], true)) {
+    redirect_error('Неверный тип привязки: ' . htmlspecialchars($keyType));
 }
 if ($keyValue === '') {
-    redirect_error('Укажите номер РА или VIN');
+    redirect_error('Укажите номер РА, VIN, заказ-наряд или гос.номер');
 }
 
 $allowedTypes = [
@@ -43,15 +79,40 @@ $allowedTypes = [
     'other', 'video_defect'
 ];
 if (!in_array($photoType, $allowedTypes, true)) {
-    redirect_error('Неверный тип фото');
+    redirect_error('Неверный тип фото: ' . htmlspecialchars($photoType));
 }
 
-if (empty($_FILES['photo']) || $_FILES['photo']['error'] !== UPLOAD_ERR_OK) {
-    redirect_error('Файл не загружен', $keyType, $keyValue);
+/* Явные проверки ошибок $_FILES */
+if (empty($_FILES['photo'])) {
+    redirect_error('Файл не пришёл на сервер (поле photo пустое)', $keyType, $keyValue);
+}
+
+$errCode = $_FILES['photo']['error'] ?? -1;
+if ($errCode !== UPLOAD_ERR_OK) {
+    $iniMax = ini_get('upload_max_filesize');
+    $postMax = ini_get('post_max_size');
+    $msg = match($errCode) {
+        UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE
+            => "Файл больше лимита хостинга. Лимит upload_max_filesize = {$iniMax}, post_max_size = {$postMax}. Сожмите фото перед загрузкой.",
+        UPLOAD_ERR_PARTIAL
+            => 'Файл загружен частично (обрыв соединения). Попробуйте ещё раз.',
+        UPLOAD_ERR_NO_FILE
+            => 'Файл не был выбран.',
+        UPLOAD_ERR_NO_TMP_DIR
+            => 'На сервере нет временной папки для загрузки.',
+        UPLOAD_ERR_CANT_WRITE
+            => 'Сервер не может записать файл на диск.',
+        UPLOAD_ERR_EXTENSION
+            => 'Загрузка заблокирована расширением PHP.',
+        default
+            => 'Неизвестная ошибка загрузки (код ' . $errCode . ').',
+    };
+    redirect_error($msg, $keyType, $keyValue);
 }
 
 $file = $_FILES['photo'];
 
+/* MIME через finfo */
 $finfo = finfo_open(FILEINFO_MIME_TYPE);
 $mime = finfo_file($finfo, $file['tmp_name']);
 finfo_close($finfo);
@@ -59,33 +120,51 @@ finfo_close($finfo);
 $allowedImageMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 $allowedVideoMimes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp'];
 
-$isVideo = (strpos($mime, 'video/') === 0);
+/* Fallback: если MIME = octet-stream или пустой — определяем по расширению файла */
+$ext = strtolower(pathinfo($file['name'] ?? '', PATHINFO_EXTENSION));
+$imageExts = ['jpg','jpeg','png','webp','heic','heif'];
+$videoExts = ['mp4','mov','webm','m4v','3gp'];
+
+$mimeOkImage = in_array($mime, $allowedImageMimes, true);
+$mimeOkVideo = in_array($mime, $allowedVideoMimes, true);
+
+if (!$mimeOkImage && !$mimeOkVideo) {
+    if (in_array($ext, $imageExts, true)) {
+        $mime = ($ext === 'jpg') ? 'image/jpeg' : ('image/' . $ext);
+        $mimeOkImage = true;
+    } elseif (in_array($ext, $videoExts, true)) {
+        $mime = ($ext === 'mov') ? 'video/quicktime' : ('video/' . $ext);
+        $mimeOkVideo = true;
+    }
+}
+
+$isVideo = $mimeOkVideo || (strpos($mime, 'video/') === 0);
 
 if ($isVideo) {
-    if (!in_array($mime, $allowedVideoMimes, true)) {
-        redirect_error('Разрешены только видео MP4, MOV, WEBM', $keyType, $keyValue);
+    if (!$mimeOkVideo) {
+        redirect_error('Разрешены только видео MP4, MOV, WEBM, M4V, 3GP. Определён тип: ' . htmlspecialchars($mime), $keyType, $keyValue);
     }
-    $maxSize = 200 * 1024 * 1024; // 200 МБ для видео
+    $maxSize = 200 * 1024 * 1024;
     if ($file['size'] > $maxSize) {
-        redirect_error('Видео больше 200 МБ', $keyType, $keyValue);
+        redirect_error('Видео больше 200 МБ (' . round($file['size'] / 1048576, 1) . ' МБ)', $keyType, $keyValue);
     }
 } else {
-    if (!in_array($mime, $allowedImageMimes, true)) {
-        redirect_error('Разрешены только изображения (JPG, PNG, WEBP, HEIC)', $keyType, $keyValue);
+    if (!$mimeOkImage) {
+        redirect_error('Разрешены только изображения (JPG, PNG, WEBP, HEIC). Определён тип: ' . htmlspecialchars($mime) . ', расширение: ' . htmlspecialchars($ext), $keyType, $keyValue);
     }
-    $maxSize = 20 * 1024 * 1024; // 20 МБ для фото
+    $maxSize = 20 * 1024 * 1024;
     if ($file['size'] > $maxSize) {
-        redirect_error('Файл больше 20 МБ', $keyType, $keyValue);
+        redirect_error('Файл больше 20 МБ (' . round($file['size'] / 1048576, 1) . ' МБ). Сожмите фото перед загрузкой.', $keyType, $keyValue);
     }
 }
 
-// === Токен хранилища ===
+/* Токен хранилища */
 $storageKey = getenv('STORAGE_API_KEY');
 if (!$storageKey) {
-    redirect_error('STORAGE_API_KEY не настроен. Запустите реплой проекта.', $keyType, $keyValue);
+    redirect_error('STORAGE_API_KEY не настроен.', $keyType, $keyValue);
 }
 
-// === Загрузка в IzIPost ===
+/* Загрузка в хранилище RelaxDev */
 $safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $keyValue);
 $subPath = 'photos/' . $keyType . '-' . $safeKey;
 
@@ -93,21 +172,18 @@ $cfile = new CURLFile($file['tmp_name'], $mime, $file['name']);
 
 $ch = curl_init('https://relaxdev.ru/api/v1/storage/upload');
 curl_setopt_array($ch, [
-    CURLOPT_POST => true,
-    CURLOPT_POSTFIELDS => [
+    CURLOPT_POST           => true,
+    CURLOPT_POSTFIELDS     => [
         'file' => $cfile,
         'path' => $subPath,
-        'webp' => 'false', // сохраняем оригинал как есть
+        'webp' => 'false',
     ],
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => [
-        'Authorization: Bearer ' . $storageKey,
-    ],
-    CURLOPT_TIMEOUT => 60,
+    CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $storageKey],
+    CURLOPT_TIMEOUT        => 120,
 ]);
-
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$response  = curl_exec($ch);
+$httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlError = curl_error($ch);
 curl_close($ch);
 
@@ -117,21 +193,19 @@ if ($curlError) {
 
 $data = json_decode($response, true);
 if ($httpCode < 200 || $httpCode >= 300 || empty($data['url'])) {
-    redirect_error('Хранилище вернуло ошибку: ' . substr((string)$response, 0, 200), $keyType, $keyValue);
+    redirect_error('Хранилище вернуло ошибку ' . $httpCode . ': ' . substr((string)$response, 0, 300), $keyType, $keyValue);
 }
 
-$fileUrl = $data['url'];
+$fileUrl     = $data['url'];
 $storagePath = $data['path'] ?? '';
 
-// === Сохранение в БД ===
+/* Сохранение в БД */
 try {
     $pdo = get_db();
 
-        // Гос. номер и номер заказ-наряда (приходят из формы)
     $gosNumber   = trim($_POST['gos_number'] ?? '');
     $orderNumber = trim($_POST['order_number'] ?? '');
 
-    // Ключ (РА/VIN) в таблицу keys
     $stmt = $pdo->prepare("
         INSERT INTO keys (key_type, key_value, gos_number, order_number, user_id, created_at, updated_by, updated_at)
         VALUES (:kt, :kv, :gos, :ord, :uid, NOW(), :uid2, NOW())
@@ -144,13 +218,12 @@ try {
     $stmt->execute([
         ':kt'  => $keyType,
         ':kv'  => $keyValue,
-        ':gos' => $gosNumber ?: null,
+        ':gos' => $gosNumber   ?: null,
         ':ord' => $orderNumber ?: null,
         ':uid' => $user['id'],
         ':uid2'=> $user['id'],
     ]);
 
-    // Фото
     $stmt = $pdo->prepare('
         INSERT INTO photos
             (user_id, key_type, key_value, photo_type, comment, file_path, storage_path, file_size, mime_type)
@@ -169,8 +242,7 @@ try {
         ':mime_type'    => $mime,
     ]);
 } catch (Throwable $e) {
-    redirect_error('Ошибка базы: ' . $e->getMessage(), $keyType, $keyValue);
+    redirect_error('Ошибка базы данных: ' . $e->getMessage(), $keyType, $keyValue);
 }
 
-header('Location: gallery.php?key_type=' . urlencode($keyType) . '&key_value=' . urlencode($keyValue) . '&uploaded=1');
-exit;
+respond_ok($fileUrl, $keyType, $keyValue);
