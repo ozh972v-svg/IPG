@@ -262,18 +262,22 @@ $backLabel    = 'На главную';
       </div>
     </a>
 
-    <a class="brand-tile brand-compass" href="works_compass.php">
+        <a class="brand-tile brand-compass" href="works_compass.php">
+      ...
+    </a>
+
+    <a class="brand-tile brand-foton" href="works_foton.php">
       <div class="brand-glow"></div>
       <div class="brand-head">
-        <div class="brand-icon">🚚</div>
+        <div class="brand-icon">🚛</div>
         <div>
-          <div class="brand-name">КОМПАС</div>
-          <div class="brand-tag">Компас 5 · 6 · 9 · 12</div>
+          <div class="brand-name">ФОТОН</div>
+          <div class="brand-tag">AUMAN · AUMARK · TOANO · …</div>
         </div>
       </div>
       <div class="brand-desc">
-        Справочник работ по моделям Компас 5, 6, 9 и 12. Нормочасы
-        по операциям, дерево групп, поиск по названию и коду.
+        Справочник работ по семействам ФОТОН — AUMAN, AUMARK, TOANO, SAUVANA,
+        GRATOUR, TUNLAND, VIEW, SUP, Miler, LOXA, TM.
       </div>
       <div class="brand-foot">
         <span class="brand-cta">
