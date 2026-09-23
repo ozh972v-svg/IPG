@@ -15,7 +15,6 @@ function opTypeInfo(?string $code): array {
     $c = strtoupper(trim((string)$code));
     if ($c === '') return ['short' => '—', 'full' => '—'];
 
-    /* 99999 и подобные ненормированные */
     if (preg_match('/^9{4,}/', $c)) {
         return [
             'short' => 'Ненормированная',
@@ -24,7 +23,6 @@ function opTypeInfo(?string $code): array {
     }
 
     $letter = mb_substr($c, 0, 1);
-    /* Если код начинается с русской буквы — мапим */
     $rus = ['А'=>'A','В'=>'B','Т'=>'T','Х'=>'X','Е'=>'E','Р'=>'P','С'=>'C','М'=>'M'];
     if (isset($rus[$letter])) $letter = $rus[$letter];
 
@@ -197,17 +195,21 @@ $contextBrand         = trim((string)($_POST['brand'] ?? ''))         ?: null;
 $contextChassis       = trim((string)($_POST['chassis'] ?? ''))       ?: null;
 $contextModel         = trim((string)($_POST['model'] ?? ''))         ?: null;
 
+/* ---- Бренд ---- */
 $brand = $contextBrand;
 if ($brand === null) {
     if (mb_stripos($question, 'компас') !== false) $brand = 'COMPASS';
     if (mb_stripos($question, 'камаз')  !== false) $brand = 'KAMAZ';
+    if (mb_stripos($question, 'фотон')  !== false) $brand = 'FOTON';
 }
 
+/* ---- VIN ---- */
 $vinCandidate = null;
 if (preg_match('/\b([A-HJ-NPR-Z0-9]{17})\b/i', $question, $m)) {
     $vinCandidate = strtoupper($m[1]);
 }
 
+/* ---- Резолв VIN → комплектация ---- */
 $resolvedComplectation = $contextComplectation;
 if ($resolvedComplectation === null && $vinCandidate) {
     $resolvedComplectation = resolveComplectationByVin($vinCandidate, $pdo);
@@ -222,7 +224,7 @@ $stopWords = [
     'чем','что','как','где','когда','нужно','надо','нужен','нужна','если','может','можно',
     'авто','автомобиля','автомобиль','тс','список','сколько','который','которая','которые','почему',
     'зачем','требуется','пожалуйста','меня','этом','этой',
-    'камаз','камаза','компас','компаса','компасе',
+    'камаз','камаза','компас','компаса','компасе','фотон','фотона','фотоне',
 ];
 $textLower = mb_strtolower($question);
 $textClean = preg_replace('/[^\p{L}\p{N}\s]/u', ' ', $textLower);
@@ -247,13 +249,17 @@ if (empty($keywords)) {
 $where  = ['it_is_group = FALSE', 'deleted = FALSE', 'operation_code IS NOT NULL'];
 $params = [];
 
+/* Строим фильтр по комплектации, но с флагом «можно расширить» */
+$familyFilterActive = false;
+$familyFilterValue  = null;
+
 if ($resolvedComplectation !== null) {
-    /* Проверяем: если это семейство FOTON (AUMAN, AUMARK, TOANO, ...),
-       используем LIKE, чтобы захватить все модели. Иначе — точное совпадение. */
     $fotonFamilies = ['AUMAN','AUMARK','TOANO','SAUVANA','GRATOUR','TUNLAND','VIEW','SUP','Miler','LOXA','TM'];
     if ($brand === 'FOTON' && in_array($resolvedComplectation, $fotonFamilies, true)) {
         $where[] = 'complectation LIKE :comp';
         $params[':comp'] = $resolvedComplectation . '%';
+        $familyFilterActive = true;
+        $familyFilterValue  = $resolvedComplectation;
     } else {
         $where[] = 'complectation = :comp';
         $params[':comp'] = $resolvedComplectation;
@@ -266,6 +272,18 @@ if ($resolvedComplectation !== null) {
     $params[':brand'] = $brand;
 }
 
+/* Расширение ключевых слов синонимами */
+$synonyms = [
+    'диагност'    => ['проверк', 'оценк', 'дефектовк'],
+    'проверк'     => ['диагност', 'оценк'],
+    'подвес'      => ['амортизатор', 'рессор', 'пружин'],
+    'амортизатор' => ['подвес', 'рессор'],
+    'рессор'      => ['подвес', 'амортизатор'],
+    'замен'       => ['снять', 'установить'],
+    'снять'       => ['замен', 'демонтаж'],
+    'установить'  => ['замен', 'монтаж'],
+];
+
 $orParts   = [];
 $scoreExpr = [];
 foreach ($keywords as $i => $kw) {
@@ -275,11 +293,22 @@ foreach ($keywords as $i => $kw) {
     $orParts[]   = "(name ILIKE $k OR eng_name ILIKE $k OR operation_code ILIKE $k)";
     $scoreExpr[] = "CASE WHEN name ILIKE $k THEN 5 ELSE 0 END";
     $scoreExpr[] = "CASE WHEN eng_name ILIKE $k THEN 2 ELSE 0 END";
+
+    /* Добавляем синонимы */
+    if (isset($synonyms[$stem])) {
+        foreach ($synonyms[$stem] as $j => $syn) {
+            $ks = ":ks{$i}_{$j}";
+            $params[$ks] = '%' . $syn . '%';
+            $orParts[]   = "(name ILIKE $ks OR eng_name ILIKE $ks)";
+            $scoreExpr[] = "CASE WHEN name ILIKE $ks THEN 3 ELSE 0 END";
+        }
+    }
 }
 $where[] = '(' . implode(' OR ', $orParts) . ')';
 
 $scoreSQL = '(' . implode(' + ', $scoreExpr) . ')';
 
+/* Первый проход — с фильтром по семейству */
 $sql = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
                $scoreSQL AS _score
           FROM work_operations
@@ -289,6 +318,31 @@ $sql = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $rows = $stmt->fetchAll();
+
+/* Если в семействе пусто — расширяем на весь FOTON */
+$expandedSearch = false;
+if (empty($rows) && $familyFilterActive && $brand === 'FOTON') {
+    /* Пересобираем $where без фильтра по complectation */
+    $where2 = [];
+    foreach ($where as $w) {
+        if (strpos($w, 'complectation') === false) $where2[] = $w;
+    }
+    $where2[] = 'brand = :brand';
+    $params2 = $params;
+    $params2[':brand'] = 'FOTON';
+    unset($params2[':comp']);
+
+    $sql2 = "SELECT operation_code, name, eng_name, norm_time, complectation, brand,
+                    $scoreSQL AS _score
+               FROM work_operations
+              WHERE " . implode(' AND ', $where2) . "
+              ORDER BY _score DESC, LENGTH(name), operation_code
+              LIMIT 300";
+    $stmt = $pdo->prepare($sql2);
+    $stmt->execute($params2);
+    $rows = $stmt->fetchAll();
+    if (!empty($rows)) $expandedSearch = true;
+}
 
 $works = [];
 $seen = [];
@@ -301,7 +355,7 @@ foreach ($rows as $r) {
 }
 
 /* ============================================================
-   Контекст для LLM — с типом для каждой работы
+   Контекст для LLM
    ============================================================ */
 $filterInfo = '';
 if ($brand !== null)         $filterInfo .= 'Бренд: ' . $brand . '. ';
@@ -312,6 +366,10 @@ if ($resolvedComplectation)  $filterInfo .= 'Комплектация: ' . $reso
 
 $ctx = [];
 if ($filterInfo) $ctx[] = "=== ФИЛЬТРЫ ===\n" . trim($filterInfo);
+
+if (!empty($expandedSearch)) {
+    $ctx[] = "=== ПРИМЕЧАНИЕ ===\nВ исходном семействе ({$familyFilterValue}) ничего не найдено. Показаны работы со всего бренда FOTON.";
+}
 
 if (!empty($works)) {
     $lines = [];
@@ -341,7 +399,7 @@ if (!$token) {
 
 $model = getenv('GIGACHAT_MODEL') ?: 'GigaChat';
 
-$system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС.\n"
+$system = "Ты — помощник мастера-приёмщика сервиса КАМАЗ/КОМПАС/ФОТОН.\n"
         . "Тебе дают контекст: фильтры и справочник работ. У каждой работы указан код операции "
         . "и в угловых скобках её тип — например <Постовые ТРП> или <Цеховые ТРЦ>.\n"
         . "\n"
@@ -363,8 +421,11 @@ $system = "Ты — помощник мастера-приёмщика серв�
         . "1. Сначала кратко перечисли подходящие работы из контекста.\n"
         . "2. Для КАЖДОЙ предложенной работы в скобках укажи её тип (расшифровку по первой букве кода). "
         . "Например: «P37-0110 (постовые работы текущего ремонта) — Заменить генератор, 4.49 ч».\n"
-        . "3. Если в вопросе упомянут код работы — в первую очередь расшифруй его тип и категорию.\n"
-        . "4. Если работ по фильтру нет — честно скажи, для какой комплектации/модели искал.\n"
+        . "3. Если в контексте есть хотя бы близкие по смыслу работы (например, «проверка подвески» "
+        . "вместо «диагностика подвески») — предложи их и объясни.\n"
+        . "4. Если в контексте совсем ничего нет — ответь своими знаниями и начни со строки "
+        . "«⚠️ Общий ответ (в базе по этому запросу ничего не найдено):». Но всё равно укажи, "
+        . "что именно ты искал и в каком семействе.\n"
         . "5. Не выдумывай коды и номера, которых нет в контексте.\n"
         . "6. Отвечай кратко, по-русски.";
 
@@ -418,5 +479,6 @@ echo json_encode([
         'chassis'       => $contextChassis,
         'vin'           => $vinCandidate,
         'complectation' => $resolvedComplectation,
+        'expanded'      => $expandedSearch,
     ],
 ], JSON_UNESCAPED_UNICODE);
