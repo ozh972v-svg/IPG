@@ -10,7 +10,6 @@ $backLabel    = 'На рабочее место';
 
 $db = get_db();
 
-// Все матрицы (с проверкой, что таблицы есть)
 $matrices = [];
 try {
     $matrices = $db->query("SELECT * FROM to_matrices ORDER BY complectation")->fetchAll(PDO::FETCH_ASSOC);
@@ -38,11 +37,11 @@ if ($complectation !== '') {
         }
 
         if ($toCode !== '') {
-            // Все items, где есть этот код
+            // jsonb_exists вместо оператора ? (он конфликтует с PDO placeholders)
             $stI = $db->prepare("
                 SELECT row_num, name, article, unit, quantities
                   FROM to_items
-                 WHERE matrix_id = ? AND quantities ? ?
+                 WHERE matrix_id = ? AND jsonb_exists(quantities, ?)
                  ORDER BY row_num
             ");
             $stI->execute([$matrix['id'], $toCode]);
@@ -51,7 +50,6 @@ if ($complectation !== '') {
     }
 }
 
-// Человеческие названия для кодов ТО
 $TO_LABELS = [
     'PZ'   => 'Предварительно-заключительные работы',
     'PTO'  => 'ПТО (периодическое ТО)',
