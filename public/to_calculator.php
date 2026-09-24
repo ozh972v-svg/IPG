@@ -4,7 +4,7 @@ start_session();
 $user = current_user();
 
 $pageTitle    = 'Калькулятор ТО КАМАЗ';
-$pageSubtitle = 'регламент по комплектации';
+$pageSubtitle = 'регламент ТО по пробегу и сроку';
 $backLink     = 'index.html';
 $backLabel    = 'На рабочее место';
 
