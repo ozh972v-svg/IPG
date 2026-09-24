@@ -3,7 +3,7 @@
  * AJAX endpoint: VIN → комплектация через 1С:ГОА.
  * GET/POST: vin=...
  * Возвращает JSON:
- *   {ok, found_by, complectation, model, matrix_matches, exact_match, ...}
+ *   {ok, found_by, complectation, model, matrix_matches, exact_match, car}
  * или {ok: false, error: "..."}
  */
 require __DIR__ . '/db.php';
@@ -29,7 +29,7 @@ if (!$login || !$password) {
     exit;
 }
 
-/** Запрос к 1С. Возвращает ['ok'=>bool, 'car'=>?, 'error'=>?] */
+/** Запрос к 1С */
 function onec_request(string $method, string $number, string $login, string $password): array
 {
     $url = 'https://web-1c.kamaz.ru/GOA/hs/CarData/V1/' . $method
@@ -71,14 +71,29 @@ function onec_request(string $method, string $number, string $login, string $pas
     return ['ok' => true, 'car' => $data['Car'], 'http' => 200];
 }
 
-/** Извлекает модель из комплектации: 54901-0070004-CA → 54901 */
+/**
+ * Жёсткая нормализация кода комплектации — используется для сравнения.
+ * Убирает NBSP, длинные/короткие дефисы, множественные пробелы, приводит к верхнему регистру.
+ */
+function normalize_code(string $s): string
+{
+    // NBSP, узкий NBSP, тонкий пробел → обычный пробел
+    $s = str_replace(["\xC2\xA0", "\xE2\x80\xAF", "\xE2\x80\x89"], ' ', $s);
+    // Разные виды дефисов → обычный дефис
+    $s = str_replace(["\xE2\x80\x90", "\xE2\x80\x91", "\xE2\x80\x92", "\xE2\x80\x93", "\xE2\x80\x94", "\xE2\x88\x92"], '-', $s);
+    // Убираем ВСЕ пробелы (внутри и снаружи)
+    $s = preg_replace('/\s+/u', '', $s);
+    return mb_strtoupper($s, 'UTF-8');
+}
+
+/** Извлекает модель: 54901-0070004-CA → 54901 */
 function extract_model(string $c): ?string
 {
-    if (preg_match('/^([0-9]{4,6})/', $c, $m)) return $m[1];
+    if (preg_match('/([0-9]{5})/', $c, $m)) return $m[1];
     return null;
 }
 
-// Пробуем сначала VIN шасси, потом VIN ТС
+// Пробуем VIN шасси, потом VIN ТС
 $attempts = ['VINShassis', 'VINTS'];
 $lastError = 'Автотехника не найдена';
 $found = null;
@@ -101,45 +116,57 @@ $car = $found['car'];
 $complectation = trim((string)($car['TheDesignCodeOfTheConfiguration'] ?? ''));
 $model = $complectation !== '' ? extract_model($complectation) : null;
 
-// Проверяем, есть ли такая комплектация в БД; если нет — ищем по модели
+// --- Поиск в БД через нормализацию ---
 $db = get_db();
+$all = $db->query("SELECT complectation, model FROM to_matrices ORDER BY complectation")
+          ->fetchAll(PDO::FETCH_ASSOC);
+
 $exactMatch = false;
 $matrixMatches = [];
+$needleNorm = normalize_code($complectation);
 
-if ($complectation !== '') {
-    $st = $db->prepare("SELECT complectation, model FROM to_matrices WHERE complectation = ?");
-    $st->execute([$complectation]);
-    $row = $st->fetch(PDO::FETCH_ASSOC);
-    if ($row) {
-        $exactMatch = true;
-        $matrixMatches[] = $row;
+if ($needleNorm !== '') {
+    foreach ($all as $row) {
+        if (normalize_code($row['complectation']) === $needleNorm) {
+            $exactMatch = true;
+            $matrixMatches[] = [
+                'complectation' => $row['complectation'], // реальное значение из БД
+                'model'         => $row['model'],
+            ];
+            break;
+        }
     }
 }
 
+// Если точной нет — ищем по модели
 if (!$exactMatch && $model) {
-    $st = $db->prepare("SELECT complectation, model FROM to_matrices WHERE model = ? ORDER BY complectation");
-    $st->execute([$model]);
-    $matrixMatches = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($all as $row) {
+        if ($row['model'] === $model) {
+            $matrixMatches[] = [
+                'complectation' => $row['complectation'],
+                'model'         => $row['model'],
+            ];
+        }
+    }
 }
 
-// Извлекаем полезные поля из карточки авто
 $carInfo = [
-    'VINShassis'       => $car['VINShassis']    ?? null,
-    'VINTS'            => $car['VINTS']         ?? null,
-    'ShassisModel'     => $car['ShassisModel']  ?? null,
-    'CarModel'         => $car['CarModel']      ?? null,
-    'NumberShassis'    => $car['NumberShassis'] ?? null,
-    'NumberEngine'     => $car['NumberEngine']  ?? null,
-    'EngineModel'      => $car['EngineModel']   ?? null,
-    'ProductionDate'   => $car['ProductionDate'] ?? null,
+    'VINShassis'     => $car['VINShassis']    ?? null,
+    'VINTS'          => $car['VINTS']         ?? null,
+    'ShassisModel'   => $car['ShassisModel']  ?? null,
+    'CarModel'       => $car['CarModel']      ?? null,
+    'NumberShassis'  => $car['NumberShassis'] ?? null,
+    'NumberEngine'   => $car['NumberEngine']  ?? null,
+    'EngineModel'    => $car['EngineModel']   ?? null,
+    'ProductionDate' => $car['ProductionDate'] ?? null,
 ];
 
 echo json_encode([
-    'ok'              => true,
-    'found_by'        => $found['found_by'],
-    'complectation'   => $complectation,
-    'model'           => $model,
-    'exact_match'     => $exactMatch,
-    'matrix_matches'  => $matrixMatches,
-    'car'             => $carInfo,
+    'ok'             => true,
+    'found_by'       => $found['found_by'],
+    'complectation'  => $complectation,
+    'model'          => $model,
+    'exact_match'    => $exactMatch,
+    'matrix_matches' => $matrixMatches,
+    'car'            => $carInfo,
 ], JSON_UNESCAPED_UNICODE);
