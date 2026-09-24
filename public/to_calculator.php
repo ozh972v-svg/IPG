@@ -15,7 +15,6 @@ try {
     $matrices = $db->query("SELECT * FROM to_matrices ORDER BY model, complectation")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
 
-// --- Параметры ---
 $vin           = strtoupper(trim((string)($_GET['vin'] ?? '')));
 $complectation = trim((string)($_GET['c'] ?? ''));
 $toCode        = trim((string)($_GET['to'] ?? ''));
@@ -25,9 +24,6 @@ $lastMileage  = (int)($_GET['last_mileage'] ?? 0);
 $lastDate     = trim((string)($_GET['last_date'] ?? ''));
 $lastToLabel  = trim((string)($_GET['last_to'] ?? ''));
 
-/**
- * Модель = символы 4-8 VIN. Пример: XTC549015S2617735 → 54901
- */
 function extract_model_from_vin(string $vin): ?string
 {
     $vin = strtoupper(trim($vin));
@@ -39,17 +35,14 @@ function extract_model_from_vin(string $vin): ?string
 
 $vinModel = $vin !== '' ? extract_model_from_vin($vin) : null;
 
-// Фильтр матриц по модели
 $filteredMatrices = $matrices;
 if ($vinModel) {
     $filteredMatrices = array_values(array_filter($matrices, function ($m) use ($vinModel) {
         $mm = $m['model'] ?? '';
         if ($mm === '') return false;
-        // Точное совпадение или совпадение по первым 4 символам (54901 vs 5490)
-        return $mm === $vinModel
-            || substr($mm, 0, 4) === substr($vinModel, 0, 4);
+        return $mm === $vinModel || substr($mm, 0, 4) === substr($vinModel, 0, 4);
     }));
-    if (!$filteredMatrices) $filteredMatrices = $matrices; // нет матриц — показываем все
+    if (!$filteredMatrices) $filteredMatrices = $matrices;
 }
 
 $matrix = null;
@@ -176,31 +169,27 @@ include __DIR__ . '/header.php';
     <form method="get" style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
       <h2 style="margin:0 0 6px;font-size:17px">Определить ТО по VIN и пробегу</h2>
       <p style="margin:0 0 16px;color:#64748b;font-size:13.5px">
-        Введите что известно — программа подскажет, какое ТО пора делать.
+        Введите VIN и нажмите «Запросить 1С» — комплектация подставится автоматически. Или выберите вручную.
       </p>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
         <div>
           <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">VIN (опц.)</label>
-          <input type="text" name="vin" value="<?= e($vin) ?>" maxlength="20"
-                 placeholder="XTC549015S2617735" autocomplete="off" spellcheck="false"
-                 style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase">
-          <?php if ($vin !== ''): ?>
-            <?php if ($vinModel): ?>
-              <div style="margin-top:6px;font-size:12.5px;color:#166534">
-                ✓ модель <b><?= e($vinModel) ?></b> · найдено матриц: <b><?= count($filteredMatrices) ?></b>
-              </div>
-            <?php else: ?>
-              <div style="margin-top:6px;font-size:12.5px;color:#b91c1c">
-                ✗ не удалось определить модель (VIN короче 8 символов?)
-              </div>
-            <?php endif; ?>
-          <?php endif; ?>
+          <div style="display:flex;gap:8px">
+            <input type="text" name="vin" id="vinInput" value="<?= e($vin) ?>" maxlength="20"
+                   placeholder="XTC549015S2617735" autocomplete="off" spellcheck="false"
+                   style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase">
+            <button type="button" id="vinLookupBtn"
+                    style="padding:10px 14px;border:none;border-radius:10px;background:#059669;color:#fff;font-weight:600;cursor:pointer;font-size:13px;white-space:nowrap">
+              🔍 Запросить 1С
+            </button>
+          </div>
+          <div id="vinStatus" style="margin-top:8px;font-size:12.5px;line-height:1.5"></div>
         </div>
 
         <div>
           <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">Комплектация *</label>
-          <select name="c" required
+          <select name="c" id="complectationSelect" required
                   style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px">
             <option value="">— выберите —</option>
             <?php foreach ($filteredMatrices as $m): ?>
@@ -313,7 +302,7 @@ include __DIR__ . '/header.php';
                   <?php if ($hasNorm): ?>
                     • Трудоёмкость: <b><?= number_format($norms[$code], 3, ',', ' ') ?> чел/ч</b>
                   <?php else: ?>
-                    • <span style="color:#94a3b8">норматив не задан в матрице</span>
+                    • <span style="color:#94a3b8">норматив не задан</span>
                   <?php endif; ?>
                 </div>
                 <a href="?vin=<?= urlencode($vin) ?>&c=<?= urlencode($complectation) ?>&to=<?= urlencode($code) ?>&mileage=<?= $mileage ?>&last_mileage=<?= $lastMileage ?>&last_date=<?= urlencode($lastDate) ?>"
@@ -326,12 +315,11 @@ include __DIR__ . '/header.php';
 
           <?php if ($lastToLabel === ''): ?>
             <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:rgba(254,249,195,0.7);font-size:13px;color:#713f12">
-              💡 Если это <b>не первое</b> ТО — откройте дополнительно <b>А2</b> (2-е ПТО), <b>А3</b> (3-е ПТО)
-              или <b>В2/В3/В4</b> (если это 2-й/3-й/4-й годовой визит).
+              💡 Если это <b>не первое</b> ТО — откройте дополнительно <b>А2</b>, <b>А3</b> или <b>В2/В3/В4</b> из списка ниже.
             </div>
           <?php elseif ($lastToLabel === 'PTO'): ?>
             <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:rgba(254,249,195,0.7);font-size:13px;color:#713f12">
-              💡 Возможно, пора добавить <b>А2</b> или <b>А3</b> (в зависимости от того, какое по счёту ПТО).
+              💡 Возможно, пора добавить <b>А2</b> или <b>А3</b>.
             </div>
           <?php endif; ?>
         <?php endif; ?>
@@ -433,6 +421,87 @@ include __DIR__ . '/header.php';
   <?php endif; ?>
 
 </div>
+
+<script>
+(function() {
+  var btn    = document.getElementById('vinLookupBtn');
+  var input  = document.getElementById('vinInput');
+  var status = document.getElementById('vinStatus');
+  var select = document.getElementById('complectationSelect');
+  if (!btn || !input || !status || !select) return;
+
+  btn.addEventListener('click', function() {
+    var vin = (input.value || '').trim().toUpperCase();
+    if (vin.length < 8) {
+      status.innerHTML = '<span style="color:#b91c1c">Введите VIN (минимум 8 символов)</span>';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Ищу…';
+    status.innerHTML = '<span style="color:#64748b">Запрос в 1С:ГОА…</span>';
+
+    fetch('to_vin_lookup.php?vin=' + encodeURIComponent(vin), { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        btn.disabled = false;
+        btn.textContent = '🔍 Запросить 1С';
+
+        if (!data.ok) {
+          status.innerHTML = '<span style="color:#b91c1c">❌ ' + escapeHtml(data.error || 'Ошибка') + '</span>';
+          return;
+        }
+
+        var complectation = (data.complectation || '').trim();
+        var model = (data.model || '').trim();
+        var car = data.car || {};
+        var carLine = '';
+        if (car.ShassisModel) carLine = ' · модель: ' + escapeHtml(car.ShassisModel);
+
+        if (data.exact_match) {
+          // Точное совпадение — подставляем в select
+          var found = false;
+          for (var i = 0; i < select.options.length; i++) {
+            if (select.options[i].value === complectation) {
+              select.selectedIndex = i;
+              found = true;
+              break;
+            }
+          }
+          status.innerHTML =
+            '<span style="color:#166534">✅ Комплектация из 1С: <b>' + escapeHtml(complectation) + '</b>' + carLine + '</span>' +
+            (found ? '<br><span style="color:#64748b">подставлено в список</span>' : '');
+        } else if (data.matrix_matches && data.matrix_matches.length > 0) {
+          // Точной нет, но по модели есть матрицы
+          var list = data.matrix_matches.map(function(m) { return m.complectation; }).join(', ');
+          status.innerHTML =
+            '<span style="color:#92400e">⚠️ 1С отдал: <b>' + escapeHtml(complectation) + '</b>' + carLine + '</span>' +
+            '<br><span style="color:#64748b">Такой матрицы в базе нет. По модели <b>' + escapeHtml(model) + '</b> доступны: ' + escapeHtml(list) + '</span>';
+        } else {
+          status.innerHTML =
+            '<span style="color:#92400e">⚠️ 1С отдал: <b>' + escapeHtml(complectation || '—') + '</b>' + carLine + '</span>' +
+            '<br><span style="color:#64748b">Матрицы для этой комплектации в базе нет. Выберите вручную из списка ниже.</span>';
+        }
+      })
+      .catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = '🔍 Запросить 1С';
+        status.innerHTML = '<span style="color:#b91c1c">❌ Ошибка сети: ' + escapeHtml(String(err)) + '</span>';
+      });
+  });
+
+  // Если пользователь меняет VIN — очищаем статус
+  input.addEventListener('input', function() {
+    status.innerHTML = '';
+  });
+
+  function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+  }
+})();
+</script>
 
 </body>
 </html>
