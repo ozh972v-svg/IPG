@@ -134,6 +134,7 @@ function campaignSectionTitle(string $key): array {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Поиск по VIN — 1С:ГОА</title>
 <link rel="stylesheet" href="app.css">
+<?php include __DIR__ . '/pwa.php'; ?>    
 <style>
   /* === Специфичные для страницы стили === */
 
