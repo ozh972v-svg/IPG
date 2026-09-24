@@ -5,8 +5,6 @@
  * После отладки — можно удалить.
  */
 require __DIR__ . '/xlsx_reader.php';
-start_session();
-$user = current_user();
 
 $out = [];
 $error = null;
