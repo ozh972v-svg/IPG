@@ -15,6 +15,7 @@ $backLabel    = 'На главную';
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Выбор марки — Рабочее место инженера по гарантии</title>
 <link rel="stylesheet" href="app.css">
+<?php include __DIR__ . '/pwa.php'; ?>
 <style>
   /* Локальные стили только для плиток марки */
   .brand-hero {
