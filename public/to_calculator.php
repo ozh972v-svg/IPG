@@ -173,14 +173,14 @@ include __DIR__ . '/header.php';
       </p>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
-        <div>
+                <div style="grid-column:1/-1">
           <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">VIN (опц.)</label>
           <div style="display:flex;gap:8px">
             <input type="text" name="vin" id="vinInput" value="<?= e($vin) ?>" maxlength="20"
                    placeholder="XTC549015S2617735" autocomplete="off" spellcheck="false"
-                   style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase">
+                   style="flex:1;min-width:0;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase">
             <button type="button" id="vinLookupBtn"
-                    style="padding:10px 14px;border:none;border-radius:10px;background:#059669;color:#fff;font-weight:600;cursor:pointer;font-size:13px;white-space:nowrap">
+                    style="flex-shrink:0;padding:10px 16px;border:none;border-radius:10px;background:#059669;color:#fff;font-weight:600;cursor:pointer;font-size:13.5px;white-space:nowrap">
               🔍 Запросить 1С
             </button>
           </div>
