@@ -166,8 +166,20 @@ include __DIR__ . '/header.php';
     </div>
   <?php else: ?>
 
-    <form method="get" style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
-      <h2 style="margin:0 0 6px;font-size:17px">Определить ТО по VIN и пробегу</h2>
+        <form method="get" style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:6px">
+        <h2 style="margin:0;font-size:17px">Определить ТО по VIN и пробегу</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="sync_to_matrix.php"
+             style="padding:8px 14px;border-radius:9px;background:#eff6ff;color:#1d4ed8;text-decoration:none;font-weight:600;font-size:13px;white-space:nowrap">
+            📥 Загрузить матрицы
+          </a>
+          <a href="to_matrix_list.php"
+             style="padding:8px 14px;border-radius:9px;background:#f1f5f9;color:#334155;text-decoration:none;font-weight:600;font-size:13px;white-space:nowrap">
+            📊 Все матрицы (<?= count($matrices) ?>)
+          </a>
+        </div>
+      </div>
       <p style="margin:0 0 16px;color:#64748b;font-size:13.5px">
         Введите VIN и нажмите «Запросить 1С» — комплектация подставится автоматически. Или выберите вручную.
       </p>
