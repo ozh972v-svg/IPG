@@ -12,18 +12,45 @@ $db = get_db();
 
 $matrices = [];
 try {
-    $matrices = $db->query("SELECT * FROM to_matrices ORDER BY complectation")->fetchAll(PDO::FETCH_ASSOC);
+    $matrices = $db->query("SELECT * FROM to_matrices ORDER BY model, complectation")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
 
 // --- Параметры ---
+$vin           = strtoupper(trim((string)($_GET['vin'] ?? '')));
 $complectation = trim((string)($_GET['c'] ?? ''));
 $toCode        = trim((string)($_GET['to'] ?? ''));
 
-// Параметры для расчёта
-$mileage      = (int)($_GET['mileage'] ?? 0);        // текущий пробег
-$lastMileage  = (int)($_GET['last_mileage'] ?? 0);   // пробег при последнем ТО
-$lastDate     = trim((string)($_GET['last_date'] ?? '')); // дата последнего ТО
-$lastToLabel  = trim((string)($_GET['last_to'] ?? ''));   // что было последним (для подсказки)
+$mileage      = (int)($_GET['mileage'] ?? 0);
+$lastMileage  = (int)($_GET['last_mileage'] ?? 0);
+$lastDate     = trim((string)($_GET['last_date'] ?? ''));
+$lastToLabel  = trim((string)($_GET['last_to'] ?? ''));
+
+/**
+ * Модель = символы 4-8 VIN. Пример: XTC549015S2617735 → 54901
+ */
+function extract_model_from_vin(string $vin): ?string
+{
+    $vin = strtoupper(trim($vin));
+    if (strlen($vin) < 8) return null;
+    $model = substr($vin, 3, 5);
+    if (!preg_match('/^[A-Z0-9]{5}$/', $model)) return null;
+    return $model;
+}
+
+$vinModel = $vin !== '' ? extract_model_from_vin($vin) : null;
+
+// Фильтр матриц по модели
+$filteredMatrices = $matrices;
+if ($vinModel) {
+    $filteredMatrices = array_values(array_filter($matrices, function ($m) use ($vinModel) {
+        $mm = $m['model'] ?? '';
+        if ($mm === '') return false;
+        // Точное совпадение или совпадение по первым 4 символам (54901 vs 5490)
+        return $mm === $vinModel
+            || substr($mm, 0, 4) === substr($vinModel, 0, 4);
+    }));
+    if (!$filteredMatrices) $filteredMatrices = $matrices; // нет матриц — показываем все
+}
 
 $matrix = null;
 $norms  = [];
@@ -70,15 +97,10 @@ $TO_LABELS = [
     'WASH' => 'Мойка а/м',
 ];
 
-/**
- * Расчёт рекомендаций: что наступило по пробегу и по сроку.
- * Возвращает массив ['code' => ['by_km'=>bool, 'by_time'=>bool, ...]]
- */
 function compute_recommendations(int $mileage, int $lastMileage, ?string $lastDate): array
 {
     $kmSince = max(0, $mileage - $lastMileage);
     $monthsSince = null;
-
     if ($lastDate !== null && $lastDate !== '') {
         try {
             $d = new DateTime($lastDate);
@@ -87,11 +109,8 @@ function compute_recommendations(int $mileage, int $lastMileage, ?string $lastDa
                 $diff = $d->diff($now);
                 $monthsSince = $diff->y * 12 + $diff->m;
             }
-        } catch (Throwable $e) {
-            $monthsSince = null;
-        }
+        } catch (Throwable $e) {}
     }
-
     $intervals = [
         'PTO' => ['km' => 120000, 'months' => 12],
         'TOD' => ['km' => 120000, 'months' => 12],
@@ -101,19 +120,15 @@ function compute_recommendations(int $mileage, int $lastMileage, ?string $lastDa
         'V3'  => ['km' => 0,      'months' => 36],
         'V4'  => ['km' => 0,      'months' => 48],
     ];
-
     $out = [];
     foreach ($intervals as $code => $rule) {
         $byKm   = $rule['km'] > 0 && $kmSince >= $rule['km'];
         $byTime = $monthsSince !== null && $monthsSince >= $rule['months'];
         if ($byKm || $byTime) {
             $out[$code] = [
-                'by_km'        => $byKm,
-                'by_time'      => $byTime,
-                'km_since'     => $kmSince,
-                'months_since' => $monthsSince,
-                'km_need'      => $rule['km'],
-                'months_need'  => $rule['months'],
+                'by_km' => $byKm, 'by_time' => $byTime,
+                'km_since' => $kmSince, 'months_since' => $monthsSince,
+                'km_need' => $rule['km'], 'months_need' => $rule['months'],
             ];
         }
     }
@@ -158,25 +173,52 @@ include __DIR__ . '/header.php';
     </div>
   <?php else: ?>
 
-    <!-- ======= ФОРМА 1: Определить ТО ======= -->
     <form method="get" style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
-      <h2 style="margin:0 0 6px;font-size:17px">Определить ТО по пробегу</h2>
+      <h2 style="margin:0 0 6px;font-size:17px">Определить ТО по VIN и пробегу</h2>
       <p style="margin:0 0 16px;color:#64748b;font-size:13.5px">
         Введите что известно — программа подскажет, какое ТО пора делать.
       </p>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
         <div>
+          <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">VIN (опц.)</label>
+          <input type="text" name="vin" value="<?= e($vin) ?>" maxlength="20"
+                 placeholder="XTC549015S2617735" autocomplete="off" spellcheck="false"
+                 style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase">
+          <?php if ($vin !== ''): ?>
+            <?php if ($vinModel): ?>
+              <div style="margin-top:6px;font-size:12.5px;color:#166534">
+                ✓ модель <b><?= e($vinModel) ?></b> · найдено матриц: <b><?= count($filteredMatrices) ?></b>
+              </div>
+            <?php else: ?>
+              <div style="margin-top:6px;font-size:12.5px;color:#b91c1c">
+                ✗ не удалось определить модель (VIN короче 8 символов?)
+              </div>
+            <?php endif; ?>
+          <?php endif; ?>
+        </div>
+
+        <div>
           <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">Комплектация *</label>
           <select name="c" required
                   style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px">
             <option value="">— выберите —</option>
-            <?php foreach ($matrices as $m): ?>
+            <?php foreach ($filteredMatrices as $m): ?>
               <option value="<?= e($m['complectation']) ?>"
                 <?= $m['complectation'] === $complectation ? 'selected' : '' ?>>
-                <?= e($m['complectation']) ?>
+                <?= e($m['complectation']) ?><?= $m['model'] ? ' (' . e($m['model']) . ')' : '' ?>
               </option>
             <?php endforeach; ?>
+            <?php if ($filteredMatrices !== $matrices): ?>
+              <optgroup label="— другие модели —">
+                <?php foreach ($matrices as $m): if (in_array($m, $filteredMatrices)) continue; ?>
+                  <option value="<?= e($m['complectation']) ?>"
+                    <?= $m['complectation'] === $complectation ? 'selected' : '' ?>>
+                    <?= e($m['complectation']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </optgroup>
+            <?php endif; ?>
           </select>
         </div>
 
@@ -198,8 +240,7 @@ include __DIR__ . '/header.php';
 
         <div>
           <label style="display:block;font-size:12.5px;color:#64748b;margin-bottom:5px">Дата последнего ТО</label>
-          <input type="date" name="last_date"
-                 value="<?= e($lastDate) ?>"
+          <input type="date" name="last_date" value="<?= e($lastDate) ?>"
                  style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px">
         </div>
 
@@ -230,7 +271,6 @@ include __DIR__ . '/header.php';
       </div>
     <?php endif; ?>
 
-    <!-- ======= РЕЗУЛЬТАТ: Рекомендации ======= -->
     <?php if ($matrix && $hasInput): ?>
       <div style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:baseline;margin-bottom:14px">
@@ -276,7 +316,7 @@ include __DIR__ . '/header.php';
                     • <span style="color:#94a3b8">норматив не задан в матрице</span>
                   <?php endif; ?>
                 </div>
-                <a href="?c=<?= urlencode($complectation) ?>&to=<?= urlencode($code) ?>&mileage=<?= $mileage ?>&last_mileage=<?= $lastMileage ?>&last_date=<?= urlencode($lastDate) ?>"
+                <a href="?vin=<?= urlencode($vin) ?>&c=<?= urlencode($complectation) ?>&to=<?= urlencode($code) ?>&mileage=<?= $mileage ?>&last_mileage=<?= $lastMileage ?>&last_date=<?= urlencode($lastDate) ?>"
                    style="display:inline-block;margin-top:12px;padding:8px 14px;border-radius:9px;background:#ea580c;color:#fff;text-decoration:none;font-weight:600;font-size:13px">
                   Открыть карточку →
                 </a>
@@ -287,7 +327,7 @@ include __DIR__ . '/header.php';
           <?php if ($lastToLabel === ''): ?>
             <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:rgba(254,249,195,0.7);font-size:13px;color:#713f12">
               💡 Если это <b>не первое</b> ТО — откройте дополнительно <b>А2</b> (2-е ПТО), <b>А3</b> (3-е ПТО)
-              или <b>В2/В3/В4</b> (если это 2-й/3-й/4-й годовой визит) из списка ниже.
+              или <b>В2/В3/В4</b> (если это 2-й/3-й/4-й годовой визит).
             </div>
           <?php elseif ($lastToLabel === 'PTO'): ?>
             <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:rgba(254,249,195,0.7);font-size:13px;color:#713f12">
@@ -298,19 +338,19 @@ include __DIR__ . '/header.php';
       </div>
     <?php endif; ?>
 
-    <!-- ======= РУЧНОЙ ВЫБОР ======= -->
     <?php if ($matrix && !$toCode): ?>
       <div style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:20px">
         <h2 style="margin:0 0 6px;font-size:17px">Или выберите ТО вручную</h2>
         <p style="margin:0 0 16px;color:#64748b;font-size:13.5px">
-          Справочник нормо-часов по видам ТО для комплектации <b><?= e($matrix['complectation']) ?></b>.
+          Комплектация <b><?= e($matrix['complectation']) ?></b>
+          <?php if ($matrix['model']): ?>· модель <b><?= e($matrix['model']) ?></b><?php endif; ?>
         </p>
         <?php if (!$norms): ?>
           <p style="color:#64748b">Нормы для этой матрицы не найдены.</p>
         <?php else: ?>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
             <?php foreach ($TO_LABELS as $code => $lbl): if (!isset($norms[$code])) continue; ?>
-              <a href="?c=<?= urlencode($complectation) ?>&to=<?= urlencode($code) ?>"
+              <a href="?vin=<?= urlencode($vin) ?>&c=<?= urlencode($complectation) ?>&to=<?= urlencode($code) ?>"
                  style="display:block;padding:14px 16px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;text-decoration:none;color:#0f172a">
                 <div style="font-size:12.5px;color:#64748b"><?= e($lbl) ?></div>
                 <div style="font-size:20px;font-weight:700;margin-top:4px">
@@ -323,12 +363,14 @@ include __DIR__ . '/header.php';
       </div>
     <?php endif; ?>
 
-    <!-- ======= КАРТОЧКА ТО ======= -->
     <?php if ($matrix && $toCode !== ''): ?>
       <?php $label = $TO_LABELS[$toCode] ?? $toCode; ?>
 
       <div style="background:rgba(255,255,255,0.85);padding:22px 26px;border-radius:18px;margin-bottom:18px">
-        <div style="font-size:13px;color:#64748b;margin-bottom:2px"><?= e($matrix['complectation']) ?></div>
+        <div style="font-size:13px;color:#64748b;margin-bottom:2px">
+          <?= e($matrix['complectation']) ?>
+          <?php if ($vin): ?> · VIN <b><?= e($vin) ?></b><?php endif; ?>
+        </div>
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px;align-items:center">
           <div style="font-size:22px;font-weight:700"><?= e($label) ?></div>
           <?php if (isset($norms[$toCode])): ?>
@@ -381,7 +423,7 @@ include __DIR__ . '/header.php';
       <?php endif; ?>
 
       <div style="margin-top:16px">
-        <a href="?c=<?= urlencode($complectation) ?>"
+        <a href="?vin=<?= urlencode($vin) ?>&c=<?= urlencode($complectation) ?>"
            style="display:inline-block;padding:9px 16px;border-radius:10px;background:#f1f5f9;color:#0f172a;text-decoration:none;font-weight:600;font-size:13.5px">
           ← К списку ТО
         </a>
