@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS to_items (
     quantities  JSONB NOT NULL DEFAULT '{}'::jsonb
 )");
 
+// ============ ОЧИСТКА БАЗЫ ============
+$cleared = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'clear_all') {
+    $db->exec("TRUNCATE to_matrices RESTART IDENTITY CASCADE");
+    $cleared = 'База матриц очищена';
+}
+
 function norm(string $s): string
 {
     $s = str_replace(["\xC2\xA0", "\xE2\x80\xAF"], ' ', $s);
@@ -49,89 +56,115 @@ function norm(string $s): string
     return mb_strtolower(trim($s), 'UTF-8');
 }
 
-/**
- * Распознаёт вид ТО по заголовку колонки. Поддерживает старые и новые обозначения.
- */
 function to_label_to_code(string $label): ?string
 {
     $l = norm($label);
     if ($l === '') return null;
 
-    // --- Точные совпадения ---
     $exact = [
-        'мойка' => 'WASH',
-        'мойка а/м' => 'WASH',
+        'мойка' => 'WASH', 'мойка а/м' => 'WASH',
         'в' => 'V', 'в2' => 'V2', 'в3' => 'V3', 'в4' => 'V4',
         'а2' => 'A2', 'а3' => 'A3',
-        'то' => 'TO',
-        'сто' => 'STO',
-        'тобм' => 'TOBM',
-        '2тобм' => '2TOBM',
-        '2тобмг' => '2TOBMG',
+        'то' => 'TO', 'сто' => 'STO',
+        'тобм' => 'TOBM', '2тобм' => '2TOBM', '2тобмг' => '2TOBMG',
         'тод' => 'TOD', '3тод' => 'ZTOD',
         'ток' => 'TOK', 'том' => 'TOM',
     ];
     if (isset($exact[$l])) return $exact[$l];
 
-    // --- Специфичные ---
     if (mb_strpos($l, 'предварительно-заключительные') !== false) return 'PZ';
     if (mb_strpos($l, 'периодическое техническое')      !== false) return 'PTO';
-
-    // ТО-2500 (старые КАМАЗы)
-    if (preg_match('/\bто[-\s]?2500\b/u', $l)) return 'TO2500';
-
-    // 2ТОбмг / 2ТОбм / ТОбм  (порядок важен: специфичные раньше)
-    if (mb_strpos($l, '2тобмг') !== false) return '2TOBMG';
-    if (mb_strpos($l, '2тобм')  !== false) return '2TOBM';
-    if (preg_match('/(^|[^0-9a-zа-я])тобм/u', $l)) return 'TOBM';
-
-    // 3ТОд / ТОд
-    if (mb_strpos($l, '3тод') !== false) return 'ZTOD';
-    if (preg_match('/(^|[^0-9a-zа-я])тод/u', $l)) return 'TOD';
-
-    // ТОк / ТОм
-    if (preg_match('/(^|[^0-9a-zа-я])ток/u', $l)) return 'TOK';
-    if (preg_match('/(^|[^0-9a-zа-я])том/u', $l)) return 'TOM';
-
-    // А2 / А3 в разных формулировках
-    if (preg_match('/\(а2\)/u', $l)) return 'A2';
-    if (preg_match('/\(а3\)/u', $l)) return 'A3';
-    if (preg_match('/\b2\s*то\b/u', $l)) return 'A2';
-    if (preg_match('/\b3\s*то\b/u', $l)) return 'A3';
-
-    // В / В2 / В3 / В4 в формулировках
-    if (mb_strpos($l, '4 года') !== false) return 'V4';
-    if (mb_strpos($l, '3 года') !== false) return 'V3';
-    if (mb_strpos($l, '2 года') !== false) return 'V2';
-    if (mb_strpos($l, 'раз в год') !== false) return 'V';
-
+    if (preg_match('/\bто[-\s]?2500\b/u', $l))                    return 'TO2500';
+    if (mb_strpos($l, '2тобмг') !== false)                        return '2TOBMG';
+    if (mb_strpos($l, '2тобм')  !== false)                        return '2TOBM';
+    if (preg_match('/(^|[^0-9a-zа-я])тобм/u', $l))                return 'TOBM';
+    if (mb_strpos($l, '3тод') !== false)                          return 'ZTOD';
+    if (preg_match('/(^|[^0-9a-zа-я])тод/u', $l))                 return 'TOD';
+    if (preg_match('/(^|[^0-9a-zа-я])ток/u', $l))                 return 'TOK';
+    if (preg_match('/(^|[^0-9a-zа-я])том/u', $l))                 return 'TOM';
+    if (preg_match('/\(а2\)/u', $l))                              return 'A2';
+    if (preg_match('/\(а3\)/u', $l))                              return 'A3';
+    if (preg_match('/\b2\s*то\b/u', $l))                          return 'A2';
+    if (preg_match('/\b3\s*то\b/u', $l))                          return 'A3';
+    if (mb_strpos($l, '4 года') !== false)                        return 'V4';
+    if (mb_strpos($l, '3 года') !== false)                        return 'V3';
+    if (mb_strpos($l, '2 года') !== false)                        return 'V2';
+    if (mb_strpos($l, 'раз в год') !== false)                     return 'V';
     return null;
 }
 
-/** Извлекает модель из complectation: 54901-0070004-CA → 54901 */
 function extract_model(string $c): ?string
 {
     if (preg_match('/([0-9]{5})/', $c, $m)) return $m[1];
     return null;
 }
 
-/** Определяет complectation из заголовка листа/A1 */
-function detect_complectation(string $sheetName, string $a1): array
+/**
+ * Разбирает строку со списком кодов: "54902-760-В5, 762-В5, 768-В5"
+ * → ["54902-760-В5", "54902-762-В5", "54902-768-В5"]
+ */
+function parse_code_list(string $list): array
 {
-    // 1) Пробуем найти код вида 54901-0070004-CA в A1
-    if (preg_match('/КАМАЗ\s+([0-9A-ZА-Я][0-9A-ZА-Я\-]{4,40})/u', $a1, $m)) {
-        $code = trim($m[1], '-');
-        if (preg_match('/[0-9]/', $code)) {
-            return ['complectation' => $code, 'model' => extract_model($code)];
+    $parts = preg_split('/\s*,\s*/u', $list);
+    $codes = [];
+    $model = null;
+
+    foreach ($parts as $part) {
+        $part = trim($part);
+        if ($part === '') continue;
+
+        // Полный код: 5 цифр + дефис + что-то
+        if (preg_match('/^([0-9]{5})([-0-9A-ZА-Я]+)/u', $part, $m)) {
+            $model = $m[1];
+            $codes[] = $m[1] . $m[2];
+        }
+        // Короткий суффикс: "762-B5" или "0070014-CA"
+        elseif (preg_match('/^([0-9]{3,6}[-0-9A-ZА-Я]+)/u', $part, $m)) {
+            $suffix = $m[0];
+            if ($model && strpos($suffix, $model) !== 0) {
+                $codes[] = $model . '-' . $suffix;
+            } else {
+                $codes[] = $suffix;
+            }
         }
     }
-    // 2) Код прямо в A1 без "КАМАЗ"
-    if (preg_match('/([0-9]{5}-[0-9A-ZА-Я\-]+)/u', $a1, $m)) {
-        return ['complectation' => $m[1], 'model' => extract_model($m[1])];
+    return $codes;
+}
+
+/**
+ * Определяет список комплектаций для листа.
+ * @return string[]
+ */
+function detect_complectations(string $sheetName, string $a1): array
+{
+    $codes = [];
+
+    // 1) A1 содержит "КАМАЗ <list>"
+    if ($a1 !== '' && preg_match('/КАМАЗ\s+(.+)$/u', $a1, $m)) {
+        $list = trim($m[1]);
+        // Обрезаем описательные хвосты
+        $list = preg_replace('/(\s+семейств\w+|\s+с\s+дв\.).*$/u', '', $list);
+        $codes = parse_code_list($list);
     }
-    // 3) Fallback: имя листа
-    $c = trim($sheetName);
-    return ['complectation' => $c, 'model' => extract_model($c)];
+
+    // 2) Имя листа содержит "КАМАЗ <list>"
+    if (empty($codes) && preg_match('/КАМАЗ\s+(.+)$/u', $sheetName, $m)) {
+        $codes = parse_code_list(trim($m[1]));
+    }
+
+    // 3) Разбираем имя листа как список
+    if (empty($codes)) {
+        $sheetClean = preg_replace('/^\s*ТО[-\s]*/u', '', trim($sheetName));
+        $codes = parse_code_list($sheetClean);
+    }
+
+    // 4) Fallback — имя листа как есть
+    if (empty($codes)) {
+        $s = trim($sheetName);
+        if ($s !== '') $codes = [$s];
+    }
+
+    return array_values(array_unique(array_filter($codes)));
 }
 
 $flash = null;
@@ -151,13 +184,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
             $a1 = trim((string)($rows[1]['A'] ?? ''));
             $dbg['a1'] = $a1;
 
-            $detected = detect_complectation($sheetName, $a1);
-            $complectation = $detected['complectation'];
-            $model = $detected['model'];
-            $dbg['complectation'] = $complectation;
-            $dbg['model'] = $model;
+            $complectations = detect_complectations($sheetName, $a1);
+            $dbg['complectations'] = $complectations;
+            if (empty($complectations)) {
+                $dbg['error'] = 'не определены комплектации';
+                $debug[] = $dbg;
+                continue;
+            }
 
-            // --- Ищем ключевые строки в ЛЮБОЙ колонке, в первых 15 строках ---
+            // --- Ищем ключевые строки в первых 15 строках ---
             $headerRow = null; $normRow = null; $dataHeaderRow = null;
             foreach ($rows as $num => $cells) {
                 if ($num > 15) break;
@@ -173,12 +208,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
             $dbg['norm_row'] = $normRow;
             $dbg['data_header_row'] = $dataHeaderRow;
             if (!$headerRow || !$dataHeaderRow) {
-                $dbg['error'] = 'не найдены заголовки (нужны строки "Наименование показателя" и "№ п/п")';
+                $dbg['error'] = 'не найдены заголовки';
                 $debug[] = $dbg;
                 continue;
             }
 
-            // --- Карта колонок ТО (в строке "Наименование показателя") ---
+            // --- Карта колонок ТО ---
             $colToCode = [];
             foreach (($rows[$headerRow] ?? []) as $col => $label) {
                 if (in_array($col, ['A','B','C','D'])) continue;
@@ -186,12 +221,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                 if ($code) $colToCode[$col] = $code;
             }
 
-            // --- Fallback: если не распознали ни одну колонку, но в A1/имени листа есть "ТО-NNNN" ---
+            // Fallback для одного ТО типа (ТО-2500)
             if (empty($colToCode)) {
                 $lookup = $a1 . ' ' . $sheetName;
                 if (preg_match('/ТО[-\s]?(\d+)/ui', $lookup, $mm)) {
                     $code = 'TO' . $mm[1];
-                    // Первая колонка после D, у которой есть значение в dataHeaderRow
                     foreach (($rows[$dataHeaderRow] ?? []) as $col => $v) {
                         if (in_array($col, ['A','B','C','D'])) continue;
                         if (trim((string)$v) !== '') {
@@ -199,36 +233,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                             break;
                         }
                     }
-                    $dbg['fallback_code'] = $code;
                 }
             }
 
             $dbg['col_map'] = $colToCode;
-            if (!$colToCode) {
-                $dbg['error'] = 'не распознаны колонки ТО';
-                $debug[] = $dbg;
-                continue;
-            }
+            if (!$colToCode) { $dbg['error'] = 'не распознаны колонки ТО'; $debug[] = $dbg; continue; }
 
-            // --- Нормо-часы ---
+            // --- Нормы ---
             $norms = [];
             if ($normRow) {
                 foreach ($colToCode as $col => $code) {
                     $val = str_replace(',', '.', trim((string)($rows[$normRow][$col] ?? '')));
-                    if ($val !== '' && is_numeric($val)) {
-                        $norms[$code] = (float)$val;
-                    }
+                    if ($val !== '' && is_numeric($val)) $norms[$code] = (float)$val;
                 }
             }
-            $dbg['norms'] = $norms;
 
-            // --- Данные: начинаем с первой строки после dataHeaderRow, где A — число ---
+            // --- Данные ---
             $items = [];
             foreach ($rows as $num => $cells) {
                 if ($num <= $dataHeaderRow) continue;
                 $a = trim((string)($cells['A'] ?? ''));
                 if ($a === '' || !is_numeric($a)) continue;
-
                 $name    = trim((string)($cells['B'] ?? ''));
                 $article = trim((string)($cells['C'] ?? ''));
                 $unit    = trim((string)($cells['D'] ?? ''));
@@ -243,63 +268,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                     }
                 }
                 $items[] = [
-                    'row_num' => (int)$a,
-                    'name' => $name,
-                    'article' => $article,
-                    'unit' => $unit,
-                    'quantities' => $qty,
+                    'row_num' => (int)$a, 'name' => $name,
+                    'article' => $article, 'unit' => $unit, 'quantities' => $qty,
                 ];
             }
-            $dbg['items_count'] = count($items);
 
-            // --- Сохранение ---
-            $db->beginTransaction();
-            try {
-                $st = $db->prepare("
-                    INSERT INTO to_matrices (complectation, model, title, source_file)
-                    VALUES (:c, :m, :t, :f)
-                    ON CONFLICT (complectation) DO UPDATE
-                      SET model = EXCLUDED.model,
-                          title = EXCLUDED.title,
-                          source_file = EXCLUDED.source_file,
-                          imported_at = NOW()
-                    RETURNING id
-                ");
-                $st->execute([':c' => $complectation, ':m' => $model, ':t' => $a1, ':f' => $fileName]);
-                $matrixId = (int)$st->fetchColumn();
+            // --- Сохраняем ОДНУ матрицу на КАЖДУЮ комплектацию ---
+            $savedCount = 0;
+            foreach ($complectations as $c) {
+                $model = extract_model($c);
+                $db->beginTransaction();
+                try {
+                    $st = $db->prepare("
+                        INSERT INTO to_matrices (complectation, model, title, source_file)
+                        VALUES (:c, :m, :t, :f)
+                        ON CONFLICT (complectation) DO UPDATE
+                          SET model = EXCLUDED.model,
+                              title = EXCLUDED.title,
+                              source_file = EXCLUDED.source_file,
+                              imported_at = NOW()
+                        RETURNING id
+                    ");
+                    $st->execute([':c' => $c, ':m' => $model, ':t' => $a1, ':f' => $fileName]);
+                    $matrixId = (int)$st->fetchColumn();
 
-                $db->prepare("DELETE FROM to_norms WHERE matrix_id = ?")->execute([$matrixId]);
-                $db->prepare("DELETE FROM to_items WHERE matrix_id = ?")->execute([$matrixId]);
+                    $db->prepare("DELETE FROM to_norms WHERE matrix_id = ?")->execute([$matrixId]);
+                    $db->prepare("DELETE FROM to_items WHERE matrix_id = ?")->execute([$matrixId]);
 
-                $stN = $db->prepare("INSERT INTO to_norms (matrix_id, to_code, norm_hours) VALUES (?,?,?)");
-                foreach ($norms as $code => $h) $stN->execute([$matrixId, $code, $h]);
+                    $stN = $db->prepare("INSERT INTO to_norms (matrix_id, to_code, norm_hours) VALUES (?,?,?)");
+                    foreach ($norms as $code => $h) $stN->execute([$matrixId, $code, $h]);
 
-                $stI = $db->prepare("
-                    INSERT INTO to_items (matrix_id, row_num, name, article, unit, quantities)
-                    VALUES (?,?,?,?,?,?::jsonb)
-                ");
-                foreach ($items as $it) {
-                    $stI->execute([
-                        $matrixId, $it['row_num'], $it['name'], $it['article'], $it['unit'],
-                        json_encode($it['quantities'], JSON_UNESCAPED_UNICODE),
-                    ]);
+                    $stI = $db->prepare("
+                        INSERT INTO to_items (matrix_id, row_num, name, article, unit, quantities)
+                        VALUES (?,?,?,?,?,?::jsonb)
+                    ");
+                    foreach ($items as $it) {
+                        $stI->execute([
+                            $matrixId, $it['row_num'], $it['name'],
+                            $it['article'], $it['unit'],
+                            json_encode($it['quantities'], JSON_UNESCAPED_UNICODE),
+                        ]);
+                    }
+                    $db->commit();
+                    $savedCount++;
+                    $report[] = [
+                        'sheet' => $sheetName, 'complectation' => $c,
+                        'model' => $model, 'items' => count($items), 'norms' => count($norms),
+                    ];
+                } catch (Throwable $e) {
+                    $db->rollBack();
+                    $dbg['error_' . $c] = 'БД: ' . $e->getMessage();
                 }
-                $db->commit();
-                $dbg['saved'] = true;
-                $report[] = [
-                    'sheet' => $sheetName,
-                    'complectation' => $complectation,
-                    'model' => $model,
-                    'items' => count($items),
-                    'norms' => count($norms),
-                ];
-            } catch (Throwable $e) {
-                $db->rollBack();
-                $dbg['error'] = 'БД: ' . $e->getMessage();
             }
+            $dbg['saved_matrices'] = $savedCount;
             $debug[] = $dbg;
         }
-        $flash = 'Импорт завершён. Листов: ' . count($reader->sheetNames()) . ', сохранено матриц: ' . count($report);
+        $flash = 'Импорт завершён. Сохранено матриц: ' . count($report);
     } catch (Throwable $e) {
         $flash = 'Ошибка: ' . $e->getMessage();
     }
@@ -317,6 +341,12 @@ include __DIR__ . '/header.php';
 
 <div class="container" style="max-width:1100px;margin:0 auto;padding:24px">
 
+  <?php if ($cleared): ?>
+    <div style="margin-bottom:18px;padding:14px 18px;border-radius:12px;background:rgba(254,226,226,0.85);color:#991b1b">
+      🗑 <?= e($cleared) ?>
+    </div>
+  <?php endif; ?>
+
   <?php if ($flash): ?>
     <div style="margin-bottom:18px;padding:14px 18px;border-radius:12px;background:rgba(219,234,254,0.85)">
       <?= e($flash) ?>
@@ -327,14 +357,30 @@ include __DIR__ . '/header.php';
         style="background:rgba(255,255,255,0.8);padding:22px 24px;border-radius:18px;margin-bottom:22px">
     <h2 style="margin:0 0 10px;font-size:18px">Загрузить матрицы ТО (XLSX)</h2>
     <p style="margin:0 0 14px;color:#64748b;font-size:14px">
-      Один файл — все листы сразу. Каждый лист = одна комплектация. Если комплектация уже есть — перезапишется.
-      Поддерживаются разные структуры: <i>54901-0070004-CA</i>, <i>65115-48 самосвал</i>, <i>ТО-2500 63501</i>.
+      Один лист может содержать несколько комплектаций через запятую (например, <i>54902-760-В5, 762-В5, 768-В5</i>) — будут созданы отдельные матрицы. Повторный импорт той же комплектации перезаписывает её.
     </p>
     <input type="file" name="xlsx" accept=".xlsx" required>
     <button type="submit"
             style="margin-left:10px;padding:10px 18px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer">
       Импортировать
     </button>
+  </form>
+
+  <form method="post" onsubmit="return confirm('Удалить ВСЕ матрицы из базы? Это действие необратимо. Потребуется заново импортировать все XLSX-файлы.');"
+        style="background:rgba(254,226,226,0.5);padding:16px 22px;border-radius:16px;margin-bottom:22px;border:1px solid rgba(239,68,68,0.3)">
+    <input type="hidden" name="action" value="clear_all">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:600;font-size:14.5px;color:#991b1b">⚠️ Полная очистка базы матриц</div>
+        <div style="font-size:13px;color:#7f1d1d;margin-top:2px">
+          Удалит все матрицы, нормы и строки. Используйте, если надо переимпортировать всё заново.
+        </div>
+      </div>
+      <button type="submit"
+              style="padding:10px 18px;border:none;border-radius:10px;background:#dc2626;color:#fff;font-weight:600;cursor:pointer;white-space:nowrap">
+        🗑 Очистить базу
+      </button>
+    </div>
   </form>
 
   <?php if ($debug): ?>
@@ -346,12 +392,12 @@ include __DIR__ . '/header.php';
 
   <?php if ($report): ?>
     <div style="background:rgba(220,252,231,0.7);padding:18px 22px;border-radius:16px;margin-bottom:22px">
-      <h3 style="margin:0 0 10px;font-size:16px">✅ Сохранено</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <h3 style="margin:0 0 10px;font-size:16px">✅ Сохранено (<?= count($report) ?>)</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13.5px">
         <tr style="text-align:left;color:#64748b"><th>Лист</th><th>Комплектация</th><th>Модель</th><th>Строк</th><th>Норм</th></tr>
         <?php foreach ($report as $r): ?>
           <tr>
-            <td><?= e($r['sheet']) ?></td>
+            <td style="font-size:12.5px;color:#64748b"><?= e($r['sheet']) ?></td>
             <td><b><?= e($r['complectation']) ?></b></td>
             <td><?= e($r['model'] ?? '—') ?></td>
             <td><?= (int)$r['items'] ?></td>
