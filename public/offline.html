@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Нет сети — IPG</title>
+<meta name="theme-color" content="#0b1220">
+<link rel="stylesheet" href="/app.css">
+<style>
+  .offline-wrap{
+    min-height:100dvh;display:flex;align-items:center;justify-content:center;
+    padding:24px;text-align:center;
+  }
+  .offline-card{
+    max-width:420px;padding:28px 24px;border-radius:20px;
+    background:rgba(255,255,255,0.06);
+    border:1px solid rgba(255,255,255,0.12);
+    backdrop-filter:blur(14px);
+  }
+  .offline-card h1{margin:0 0 8px;font-size:22px}
+  .offline-card p{margin:0 0 18px;opacity:.8;line-height:1.5}
+  .offline-card a.btn{
+    display:inline-block;padding:12px 20px;border-radius:12px;
+    background:#2563eb;color:#fff;text-decoration:none;font-weight:600;
+  }
+  .offline-card a.btn:hover{background:#1d4ed8}
+</style>
+</head>
+<body>
+  <div class="offline-wrap">
+    <div class="offline-card">
+      <h1>Нет подключения</h1>
+      <p>Похоже, пропала сеть. Справочники и фото доступны только онлайн.</p>
+      <a class="btn" href="/index.html">Повторить</a>
+    </div>
+  </div>
+</body>
+</html>
