@@ -423,12 +423,31 @@ include __DIR__ . '/header.php';
 </div>
 
 <script>
+<script>
 (function() {
   var btn    = document.getElementById('vinLookupBtn');
   var input  = document.getElementById('vinInput');
   var status = document.getElementById('vinStatus');
   var select = document.getElementById('complectationSelect');
   if (!btn || !input || !status || !select) return;
+
+  // Нормализация кода для сравнения
+  function normCode(s) {
+    return String(s || '')
+      .replace(/[\u00A0\u2009\u202F]/g, ' ')  // NBSP → пробел
+      .replace(/[\u2010-\u2015\u2212]/g, '-') // разные дефисы → обычный
+      .replace(/\s+/g, '')                     // все пробелы прочь
+      .toUpperCase();
+  }
+
+  function findByNormalized(needle) {
+    var n = normCode(needle);
+    if (!n) return -1;
+    for (var i = 0; i < select.options.length; i++) {
+      if (normCode(select.options[i].value) === n) return i;
+    }
+    return -1;
+  }
 
   btn.addEventListener('click', function() {
     var vin = (input.value || '').trim().toUpperCase();
@@ -458,29 +477,26 @@ include __DIR__ . '/header.php';
         var carLine = '';
         if (car.ShassisModel) carLine = ' · модель: ' + escapeHtml(car.ShassisModel);
 
-        if (data.exact_match) {
-          // Точное совпадение — подставляем в select
-          var found = false;
-          for (var i = 0; i < select.options.length; i++) {
-            if (select.options[i].value === complectation) {
-              select.selectedIndex = i;
-              found = true;
-              break;
-            }
-          }
+        // --- Точное совпадение: подставляем в select ---
+        var idx = findByNormalized(complectation);
+        if (idx >= 0) {
+          select.selectedIndex = idx;
           status.innerHTML =
             '<span style="color:#166534">✅ Комплектация из 1С: <b>' + escapeHtml(complectation) + '</b>' + carLine + '</span>' +
-            (found ? '<br><span style="color:#64748b">подставлено в список</span>' : '');
-        } else if (data.matrix_matches && data.matrix_matches.length > 0) {
-          // Точной нет, но по модели есть матрицы
+            '<br><span style="color:#64748b">подставлено в список: <b>' + escapeHtml(select.options[idx].value) + '</b></span>';
+          return;
+        }
+
+        // --- Точной нет, но по модели есть варианты ---
+        if (data.matrix_matches && data.matrix_matches.length > 0) {
           var list = data.matrix_matches.map(function(m) { return m.complectation; }).join(', ');
           status.innerHTML =
             '<span style="color:#92400e">⚠️ 1С отдал: <b>' + escapeHtml(complectation) + '</b>' + carLine + '</span>' +
-            '<br><span style="color:#64748b">Такой матрицы в базе нет. По модели <b>' + escapeHtml(model) + '</b> доступны: ' + escapeHtml(list) + '</span>';
+            '<br><span style="color:#64748b">Такой матрицы нет. По модели <b>' + escapeHtml(model) + '</b>: ' + escapeHtml(list) + '</span>';
         } else {
           status.innerHTML =
             '<span style="color:#92400e">⚠️ 1С отдал: <b>' + escapeHtml(complectation || '—') + '</b>' + carLine + '</span>' +
-            '<br><span style="color:#64748b">Матрицы для этой комплектации в базе нет. Выберите вручную из списка ниже.</span>';
+            '<br><span style="color:#64748b">Матрицы для этой комплектации нет. Выберите вручную.</span>';
         }
       })
       .catch(function(err) {
@@ -490,7 +506,6 @@ include __DIR__ . '/header.php';
       });
   });
 
-  // Если пользователь меняет VIN — очищаем статус
   input.addEventListener('input', function() {
     status.innerHTML = '';
   });
@@ -501,6 +516,7 @@ include __DIR__ . '/header.php';
     return d.innerHTML;
   }
 })();
+</script>
 </script>
 
 </body>
