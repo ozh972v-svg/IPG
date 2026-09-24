@@ -9,7 +9,6 @@ $pageSubtitle = 'КАМАЗ · XLSX';
 $backLink     = 'index.html';
 $backLabel    = 'На рабочее место';
 
-// Автосоздание таблиц
 $db = get_db();
 $db->exec("
 CREATE TABLE IF NOT EXISTS to_matrices (
@@ -39,12 +38,18 @@ CREATE TABLE IF NOT EXISTS to_items (
     quantities  JSONB NOT NULL DEFAULT '{}'::jsonb
 )");
 
-/**
- * "1 раз в 4 года (В4)" → V4, "Периодическое техническое обслуживание (ПТО)" → PTO, и т.д.
- */
+/** Нормализация строки: NBSP → пробел, множественные пробелы → один, trim, lowercase */
+function norm(string $s): string
+{
+    $s = str_replace(["\xC2\xA0", "\xE2\x80\xAF"], ' ', $s); // NBSP, узкий NBSP
+    $s = preg_replace('/\s+/u', ' ', $s);
+    return mb_strtolower(trim($s), 'UTF-8');
+}
+
+/** "1 раз в 4 года (В4)" → V4, "Периодическое техническое обслуживание (ПТО)" → PTO, и т.д. */
 function to_label_to_code(string $label): ?string
 {
-    $l = mb_strtolower(trim($label), 'UTF-8');
+    $l = norm($label);
     if ($l === '') return null;
 
     if (mb_strpos($l, 'предварительно-заключительные') !== false) return 'PZ';
@@ -65,6 +70,7 @@ function to_label_to_code(string $label): ?string
 
 $flash = null;
 $report = [];
+$debug = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])) {
     try {
@@ -73,28 +79,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
 
         foreach ($reader->sheetNames() as $sheetName) {
             $rows = $reader->readSheet($sheetName);
-            if (!$rows) continue;
+            $dbg = ['sheet' => $sheetName, 'row_count' => count($rows)];
+
+            if (!$rows) {
+                $dbg['error'] = 'пустой лист';
+                $debug[] = $dbg;
+                continue;
+            }
 
             // Заголовок в строке 1 — извлекаем комплектацию
             $title = trim($rows[1]['A'] ?? '');
+            $dbg['title'] = $title;
+
             $complectation = null;
-            if (preg_match('/КАМАЗ\s+([A-Z0-9\-]+)/u', $title, $m)) {
+            if (preg_match('/КАМАЗ\s+([A-ZА-Я0-9\-]+)/u', $title, $m)) {
                 $complectation = $m[1];
-            } else {
-                // fallback — из имени листа
+            }
+            if (!$complectation) {
                 $complectation = preg_replace('/^ТО\s+/u', '', $sheetName);
             }
-            if (!$complectation) continue;
+            $dbg['complectation'] = $complectation;
 
-            // Найти строку-заголовок ТО и строку норм
+            if (!$complectation) {
+                $dbg['error'] = 'не определена комплектация';
+                $debug[] = $dbg;
+                continue;
+            }
+
+            // Найти ключевые строки — сравнение через нормализацию
             $headerRow = null; $normRow = null; $dataHeaderRow = null;
             foreach ($rows as $num => $cells) {
-                $a = trim($cells['A'] ?? '');
-                if ($a === 'Наименование показателя' && $headerRow === null) $headerRow = $num;
-                if ($a === 'Нормативная трудоёмкость') $normRow = $num;
-                if ($a === '№ п/п') $dataHeaderRow = $num;
+                $a = norm((string)($cells['A'] ?? ''));
+                if ($a === '') continue;
+                if ($headerRow === null && mb_strpos($a, 'наименование показателя') !== false) $headerRow = $num;
+                if ($normRow === null && mb_strpos($a, 'нормативная трудоёмкость') !== false) $normRow = $num;
+                if ($dataHeaderRow === null && mb_strpos($a, 'п/п') !== false) $dataHeaderRow = $num;
             }
-            if (!$headerRow || !$dataHeaderRow) continue;
+            $dbg['header_row'] = $headerRow;
+            $dbg['norm_row'] = $normRow;
+            $dbg['data_header_row'] = $dataHeaderRow;
+
+            if (!$headerRow || !$dataHeaderRow) {
+                $dbg['error'] = 'не найдены заголовки';
+                $debug[] = $dbg;
+                continue;
+            }
 
             // Карта колонок → код ТО
             $colToCode = [];
@@ -103,32 +132,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                 $code = to_label_to_code((string)$label);
                 if ($code) $colToCode[$col] = $code;
             }
-            if (!$colToCode) continue;
+            $dbg['col_map'] = $colToCode;
+
+            if (!$colToCode) {
+                $dbg['error'] = 'не распознаны колонки ТО';
+                $debug[] = $dbg;
+                continue;
+            }
 
             // Нормо-часы
             $norms = [];
             if ($normRow) {
                 foreach ($colToCode as $col => $code) {
-                    $val = $rows[$normRow][$col] ?? '';
-                    $val = str_replace(',', '.', trim((string)$val));
+                    $val = str_replace(',', '.', trim((string)($rows[$normRow][$col] ?? '')));
                     if ($val !== '' && is_numeric($val)) {
                         $norms[$code] = (float)$val;
                     }
                 }
             }
+            $dbg['norms'] = $norms;
 
-            // Данные (строки с № п/п после dataHeaderRow + 1 «к-во»)
+            // Данные
             $items = [];
-            $skippedQtyRow = false;
             foreach ($rows as $num => $cells) {
                 if ($num <= $dataHeaderRow) continue;
                 $a = trim($cells['A'] ?? '');
-
-                // Первая строка после шапки — "к-во" (в колонке E). Пропускаем её.
-                if (!$skippedQtyRow && $a === '') {
-                    $skippedQtyRow = true;
-                    continue;
-                }
                 if (!is_numeric($a)) continue;
 
                 $name    = trim((string)($cells['B'] ?? ''));
@@ -152,11 +180,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                     'quantities' => $qty,
                 ];
             }
+            $dbg['items_count'] = count($items);
 
-            // Записать в БД (транзакция на матрицу)
+            // Записать в БД
             $db->beginTransaction();
             try {
-                // Upsert матрицы
                 $st = $db->prepare("
                     INSERT INTO to_matrices (complectation, title, source_file)
                     VALUES (:c, :t, :f)
@@ -169,17 +197,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                 $st->execute([':c' => $complectation, ':t' => $title, ':f' => $fileName]);
                 $matrixId = (int)$st->fetchColumn();
 
-                // Чистим старое
                 $db->prepare("DELETE FROM to_norms WHERE matrix_id = ?")->execute([$matrixId]);
                 $db->prepare("DELETE FROM to_items WHERE matrix_id = ?")->execute([$matrixId]);
 
-                // Нормы
                 $stN = $db->prepare("INSERT INTO to_norms (matrix_id, to_code, norm_hours) VALUES (?,?,?)");
                 foreach ($norms as $code => $h) {
                     $stN->execute([$matrixId, $code, $h]);
                 }
 
-                // Строки
                 $stI = $db->prepare("
                     INSERT INTO to_items (matrix_id, row_num, name, article, unit, quantities)
                     VALUES (?,?,?,?,?,?::jsonb)
@@ -196,6 +221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                 }
                 $db->commit();
 
+                $dbg['saved'] = true;
                 $report[] = [
                     'sheet'         => $sheetName,
                     'complectation' => $complectation,
@@ -204,16 +230,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_FILES['xlsx']['tmp_name'])
                 ];
             } catch (Throwable $e) {
                 $db->rollBack();
-                $report[] = ['sheet' => $sheetName, 'error' => $e->getMessage()];
+                $dbg['error'] = 'БД: ' . $e->getMessage();
             }
+            $debug[] = $dbg;
         }
-        $flash = 'Импорт завершён. Обработано листов: ' . count($report);
+        $flash = 'Импорт завершён. Листов в файле: ' . count($reader->sheetNames())
+               . ', сохранено матриц: ' . count($report);
     } catch (Throwable $e) {
         $flash = 'Ошибка: ' . $e->getMessage();
     }
 }
 
-// Текущий список матриц
 $matrices = $db->query("
     SELECT m.*,
            (SELECT COUNT(*) FROM to_items WHERE matrix_id = m.id) AS items_count
@@ -228,7 +255,7 @@ include __DIR__ . '/header.php';
 <div class="container" style="max-width:1100px;margin:0 auto;padding:24px">
 
   <?php if ($flash): ?>
-    <div class="flash" style="margin-bottom:18px;padding:14px 18px;border-radius:12px;background:rgba(219,234,254,0.85)">
+    <div style="margin-bottom:18px;padding:14px 18px;border-radius:12px;background:rgba(219,234,254,0.85)">
       <?= e($flash) ?>
     </div>
   <?php endif; ?>
@@ -247,21 +274,25 @@ include __DIR__ . '/header.php';
     </button>
   </form>
 
+  <?php if ($debug): ?>
+    <div style="background:rgba(255,255,255,0.8);padding:18px 22px;border-radius:16px;margin-bottom:22px">
+      <h3 style="margin:0 0 10px;font-size:16px">🔍 Диагностика по листам</h3>
+      <pre style="background:#0b1220;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto;font-size:12px"><?= e(print_r($debug, true)) ?></pre>
+    </div>
+  <?php endif; ?>
+
   <?php if ($report): ?>
     <div style="background:rgba(255,255,255,0.8);padding:18px 22px;border-radius:16px;margin-bottom:22px">
-      <h3 style="margin:0 0 10px;font-size:16px">Отчёт по листам</h3>
+      <h3 style="margin:0 0 10px;font-size:16px">✅ Сохранено</h3>
       <table style="width:100%;border-collapse:collapse;font-size:14px">
         <tr style="text-align:left;color:#64748b"><th>Лист</th><th>Комплектация</th><th>Строк</th><th>Норм</th></tr>
         <?php foreach ($report as $r): ?>
           <tr>
-            <td><?= e($r['sheet'] ?? '') ?></td>
-            <td><?= e($r['complectation'] ?? '') ?></td>
-            <td><?= isset($r['items']) ? (int)$r['items'] : '—' ?></td>
-            <td><?= isset($r['norms']) ? (int)$r['norms'] : '—' ?></td>
+            <td><?= e($r['sheet']) ?></td>
+            <td><?= e($r['complectation']) ?></td>
+            <td><?= (int)$r['items'] ?></td>
+            <td><?= (int)$r['norms'] ?></td>
           </tr>
-          <?php if (!empty($r['error'])): ?>
-            <tr><td colspan="4" style="color:#b91c1c">Ошибка: <?= e($r['error']) ?></td></tr>
-          <?php endif; ?>
         <?php endforeach; ?>
       </table>
     </div>
