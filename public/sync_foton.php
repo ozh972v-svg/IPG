@@ -222,6 +222,7 @@ try {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Загрузка справочника ФОТОН</title>
 <link rel="stylesheet" href="app.css">
+<?php include __DIR__ . '/pwa.php'; ?>
 <style>
   body { padding: 24px 18px; }
   .container { max-width: 900px; }
